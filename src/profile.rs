@@ -89,9 +89,16 @@ pub struct Counters {
     pub halts: u32,
     /// How many `exec` calls those M-cycles arrived in — the batching factor.
     pub halt_batches: u32,
-    /// Why a halted M-cycle could not be batched: [dma, serial, pending irq,
-    /// no ppu horizon, timer, ok].
-    pub idle_reason: [u32; 6],
+    /// Why a halted batch ended where it did: the first four are refusals
+    /// (dma, serial, pending irq, no ppu horizon) and the last four are which
+    /// horizon actually bound it (timer, ppu, apu, cap).
+    ///
+    /// **The last one earns its place.** While the PPU stopped at every mode
+    /// boundary it was always the binding term and `IDLE_BATCH_MAX` never
+    /// bound anything, so a two-way [timer, ppu] split was the whole truth.
+    /// It is not any more, and a split that cannot express "the cap" reports
+    /// the cap's work as the PPU's.
+    pub idle_reason: [u32; 8],
 }
 
 struct State {
@@ -116,7 +123,7 @@ static mut STATE: State = State {
         scanlines: 0,
         halts: 0,
         halt_batches: 0,
-        idle_reason: [0; 6],
+        idle_reason: [0; 8],
     },
 };
 

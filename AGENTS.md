@@ -13773,6 +13773,117 @@ Recorded because each cost a run. Full detail: [`tools/blackout/README.md`](tool
   cmake on this box but `python3 -m pip install --user cmake` supplies one. Not in CI, the same
   rule `tools/sameboy-oracle/` and `tools/bgb-interop/` follow.
 
+## THE IDLE HORIZON WAS STOPPING AT EDGES NO INTERRUPT COULD BE TAKEN AT
+
+**Full record: [`docs/measured/against-the-field.md`](docs/measured/against-the-field.md)
+§6.** Measured interleaved on one P-core against PyBoy in the same session, hashes pinned
+throughout: **standard/accurate 0.0430 → 0.0382 ms/frame, standard/fast 0.0331 → 0.0263**,
+and the whole 6,315-row `make test-external` gate byte-identical.
+
+- **`Gpu::idle_dots` stopped at every PPU mode boundary, and a halted CPU cannot see one.**
+  All such a CPU observes is `IE & IF`, and the PPU writes exactly two of those bits: VBlank,
+  and STAT. A mode edge is therefore only worth stopping on if a STAT interrupt could
+  actually be *taken* there — a source selected in `STAT` **and** bit 1 of `IE` set.
+  **Measured over 7,168 frames of Pokémon Blue: no STAT source is selected in a single
+  frame, and `IE` masks STAT off in 7,150 of them.** The batch went **38.0 → 505.5
+  M-cycles** (320 batches a frame → 24), and the halt path from ~54 % of the frame to ~0.5 %.
+- **`Gpu::defer_dots` is NOT the same question and must keep the narrow bound.** It asks when
+  the PPU must be brought current for a *running* CPU, which includes everything a mode
+  change carries whether or not an interrupt is enabled — `updated`, `hblanking`, and the
+  fold of `gpu.interrupt` into `IF`. `next_mode_edge()` is shared; only the halted caller
+  widens. Conflating the two is the way to lose 210 Gambatte rows.
+- **The VBlank entry bounds the batch even when `IE` masks VBlank off**, because
+  `change_mode(1)` also sets `updated`, which is what ends `Gameboy::frame`. Batching past it
+  would move the frame boundary and every save state taken on one.
+- **`IDLE_BATCH_MAX` was 64 and the note beside it said the cap never bound anything.** True,
+  and true only because the PPU bound it first — the batch landed straight on it. It is
+  **512**, swept with hashes pinned (64 → 0.0412, 128 → 0.0403, 256 → 0.0401, **512 →
+  0.0396**, 1024 → 0.0397, 4096 → 0.0395) and flat past there.
+- **The APU is now a horizon in `idle_mcycles`, which is what makes raising the cap safe
+  rather than lucky.** `Sound::do_cycle` crosses at most one output boundary per call;
+  `compute_run_horizon` had always bounded by `apu_budget` and this had not, getting away with
+  it only because the old cap was far below an output period.
+- **`--breakdown`'s idle-reason counter could not express "the cap"** and reported the cap's
+  work as the PPU's. It is `[dma serial irq no-ppu-horizon | timer ppu apu cap]` now, and it
+  reads `cap 93014, ppu 3251, timer 0, apu 0`.
+- **An OAM DMA keeps the narrow bound deliberately** — the transfer moves a byte per M-cycle
+  and the PPU's object scan reads OAM through the bus it drives, so widening is a rendering
+  question this horizon has no business answering.
+
+### `bus_tick`'s condition was two loads, one of them from the `Gpu`
+
+`MemoryManagementUnit::bus_hook_inputs` (`per_access_bus || ppu_on_bus`) and `ppu_on_bus`
+(`ppu_ticks_with_the_bus || the per-dot engine`) fold what were three tests and a call into
+`bus_tick_enabled && bus_hook_inputs`. The second half used to reach into the `Gpu` — a
+structure holding a framebuffer and two tilemaps — on **every bus access**, for one byte, to
+answer "no" for the whole of a `standard` run. Paired interleaved A/B: **+12.0 % accurate,
++3.5 % fast**, hashes identical.
+
+- **DO NOT FOLD `bus_tick_enabled` INTO THE MIRROR.** It was, and it broke seven
+  `mmu::dma_conflict_tests` silently: that field is the "a CPU instruction is running"
+  toggle, and it is assigned **directly** — by `load_state`, and by the `dma_conflict_tests`
+  helper that stands in for a running instruction. A mirror of it is a stale value waiting to
+  happen, and a stale one switches the per-access bus off with no other symptom. Read it live;
+  the two fields are adjacent.
+- `mmu::ppu_on_bus_tests` pins the mirror against a live picture-mode switch and against
+  interrupt dispatch in both engines, because a mirror that can go stale is the whole hazard.
+- **`Gameboy::set_render_mode` routes through the MMU now** so the mirror cannot drift. The
+  only other writer was in `#[cfg(test)]`.
+
+### MEASURED NEGATIVE, and it was already in this file: test-before-store on the hot flags
+
+Gating `check_and_reset_gpu_updated` and `Gpu::clear_hblank_latch` on the event instead of
+storing unconditionally measured **6 % slower** and was reverted. §15 already recorded the
+same experiment at 2.7 % slower. **Check §15 and §17's negative lists before re-deriving
+one** — the store buffer absorbs an unconditional write and the branch does not.
+
+### PGO AND `target-cpu=native` RE-VERIFIED, BOTH STILL NOT WORTH ADOPTING
+
+Asked directly ("if PGO is worth 10 % and nobody turned it on, that is a real answer"), so it
+was run rather than quoted. Interleaved, one core, hashes identical: `o3` (thin) 0.0518,
+**`o3-fat` 0.0493 (+5.1 %, the shipping default)**, `o3-fat-native` 0.0496 (**1 % slower than
+fat**), `o3-thin-pgo` 0.0516 — **+0.4 % against its fair comparator and 5.5 % worse than the
+fat LTO it cannot combine with on rustc 1.83**. Unchanged conclusion, freshly measured.
+
+### THE PUBLISHED PYBOY FIGURE WAS FLATTERING US BY 17 %, AND IT WAS OUR HARNESS
+
+`tools/perf/pyboy-bench.py` timed `tick(1, False)` in a **Python `for` loop**, charging PyBoy
+7,168 Python-level calls that `core_bench` — a Rust loop over `Gameboy::frame()` — never
+pays. The identical work in one `tick(7168, False)` is **0.0157-0.0159 ms/frame against
+0.0189-0.0192**. So the real target is **~0.0158, not 0.0190**, and every "× behind" figure
+in `against-the-field.md` before 2026-09-08 understates the gap by 17 %. It prints both now
+and says which to quote. **A comparison whose two sides pay different harness overheads is
+not a comparison** — check that before publishing a cross-emulator number.
+
+### TWO MODE AXES, AND A NUMBER WITHOUT BOTH IS THE FAILURE
+
+The **picture engine** (`standard`/`identical`, what a frame looks like) and the **timing
+core** (`accurate`/`fast`, `SpeedFlags`, what the CPU's neighbours may skip) are independent,
+and the captain's instruction is that it must be impossible to be in fast mode and not know
+it.
+
+- **`core_bench` reports both, in the human output and in the JSON (`picture`, `timing`,
+  `cycle_accurate`), taken from the machine that ran and not from the flags requested.**
+  `identical` refuses every speed flag, so a run given `--speed-mode` under it is an
+  *accurate* run; printing the request would label a figure with a mode it was not measured
+  in. Fast mode prints `*** FAST — NOT CYCLE-ACCURATE ***`.
+- **`examples/support/suite_baseline.rs::gate` REFUSES to score any suite with `$GB_SPEED`
+  set** (exit 2), because that variable is inherited by every process started from a shell
+  that exported it, and a conformance row measured on a shortcut machine is a claim about a
+  machine nobody will read it as describing. The picture axis already had a header a reader
+  can check; this axis has no second baseline it could legitimately belong to, so it is a hard
+  refusal rather than a warning a CI log would bury. Teeth: `GB_SPEED=speed mooneye_scout
+  --baseline …` refuses; without it, 103/103.
+- **`tools/perf/field.sh`** runs the whole matrix interleaved against PyBoy in one session and
+  prints the `identical`+fast cell as **REFUSED by design**.
+
+### `core_bench` NEVER READ `$GB_SPEED` — `--speed-mode` is the flag
+
+`SpeedFlags::from_env` is called by the frontends and the scenario runner, not by this bench.
+Passing the env var to it sets nothing and reads as "the flag buys nothing", which is how a
+stale row gets published. `against-the-field.md`'s old `GB_SPEED=speed` row label was
+misleading for that reason.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

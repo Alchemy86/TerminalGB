@@ -224,6 +224,14 @@ fn parse() -> Args {
 
 /// One worker's result: how long it took, and what it computed.
 struct Run {
+    /// **What the machine actually ran as**, not what was asked for.
+    ///
+    /// `identical` refuses every speed flag, so a run given `--speed-mode`
+    /// under it is an *accurate* run — printing the request rather than the
+    /// outcome would be a number labelled with a mode it was not measured in,
+    /// which is the one thing a two-axis machine must never publish.
+    picture: &'static str,
+    timing: String,
     /// Wall clock over the timed section.
     seconds: f64,
     /// CPU time over the same section, where the kernel offers it — see
@@ -253,6 +261,11 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
     }
     gb.set_render_pixels(!a.no_pixels);
     apply_speed(&mut gb, &a.speed);
+    let picture = match gb.render_mode() {
+        terminalgb::ppu::RenderMode::Accurate => "identical",
+        terminalgb::ppu::RenderMode::Fast => "standard",
+    };
+    let timing = gb.speed_flags().spec();
 
     for _ in 0..a.warmup {
         gb.frame();
@@ -302,6 +315,8 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
     }
 
     Run {
+        picture,
+        timing,
         seconds,
         cpu_seconds,
         frame_hash: fnv1a(gb.image()),
@@ -472,7 +487,7 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
     println!(
         "halted {} M-cycles a frame in {} batches ({:.1} each); \
          could not batch because [dma {} serial {} irq {} no-ppu-horizon {}], \
-         bounded by [timer {} ppu {}]",
+         bounded by [timer {} ppu {} apu {} cap {}]",
         base_counters.halts / a.frames.max(1),
         base_counters.halt_batches / a.frames.max(1),
         base_counters.halts as f64 / base_counters.halt_batches.max(1) as f64,
@@ -482,6 +497,8 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
         base_counters.idle_reason[3],
         base_counters.idle_reason[4],
         base_counters.idle_reason[5],
+        base_counters.idle_reason[6],
+        base_counters.idle_reason[7],
     );
     println!("A row whose instr/frame differs from the baseline's is NOT an A/B.");
     println!(
@@ -560,6 +577,9 @@ fn main() {
     let mut on_cpu_clock = false;
     let mut frame_hash = 0u64;
     let mut wram_hash = 0u64;
+    // The modes the machine actually ran as — see `Run::picture`.
+    let mut picture = "?";
+    let mut timing = String::from("?");
     let mut hashes_agree = true;
 
     for _ in 0..a.repeat {
@@ -622,6 +642,8 @@ fn main() {
         // favour.
         let sps = (a.workers as f64) * (a.frames as f64) / wall;
 
+        picture = results[0].picture;
+        timing = results[0].timing.clone();
         for r in &results {
             if frame_hash == 0 {
                 frame_hash = r.frame_hash;
@@ -643,6 +665,9 @@ fn main() {
 
     let per_core_fps = 1e3 / best_ms;
     let realtime = per_core_fps / DMG_HZ;
+    // Every worker builds the same machine, so worker 0's effective modes are
+    // the run's.
+    let cycle_accurate = timing == "none";
 
     if a.json {
         println!(
@@ -650,6 +675,7 @@ fn main() {
              \"x_realtime\":{realtime:.1},\"aggregate_sps\":{best_sps:.0},\
              \"wall_ms_per_frame\":{best_wall_ms:.4},\"cpu_clock\":{on_cpu_clock},\
              \"workers\":{},\"frames\":{},\"no_pixels\":{},\"audio\":{},\"audio_out\":{},\
+             \"picture\":\"{picture}\",\"timing\":\"{timing}\",\"cycle_accurate\":{cycle_accurate},\
              \"frame_hash\":\"{frame_hash:#018x}\",\"wram_hash\":\"{wram_hash:#018x}\",\
              \"deterministic\":{hashes_agree}}}",
             a.workers, a.frames, a.no_pixels, a.audio, a.audio_out
@@ -663,6 +689,17 @@ fn main() {
             "workers        {}   frames/worker {}   best of {}",
             a.workers, a.frames, a.repeat
         );
+        // **Both mode axes, every run, from the machine that ran.** A
+        // millisecond figure from this program is meaningless without them and
+        // they are not recoverable from a flag somebody typed hours ago — see
+        // `docs/modes.md` and `docs/picture-modes.md`.
+        println!("picture        {picture}   (what a frame looks like)");
+        if cycle_accurate {
+            println!("timing         accurate   (cycle-accurate: peripherals stepped per bus access)");
+        } else {
+            println!("timing         *** FAST — NOT CYCLE-ACCURATE *** shortcuts: {timing}");
+            println!("               conformance measured in this mode is NOT the accurate machine's.");
+        }
         println!("pixels         {}", if a.no_pixels { "off" } else { "on" });
         println!(
             "apu            {}",

@@ -95,6 +95,38 @@ fn engine_note(path: &Path) -> String {
     )
 }
 
+/// **A conformance score may not be measured on a shortcut machine.**
+///
+/// There are two mode axes and they are independent: the *picture* engine,
+/// which `engine_note` already stamps into every baseline, and the *timing*
+/// core (`docs/modes.md`). A speed flag is opt-in and off by default, but
+/// `$GB_SPEED` is an environment variable — one exported in a shell hours
+/// earlier reaches every process started from it, this gate included, and a
+/// suite row measured that way is a claim about a machine that is not the one
+/// the row will be read as describing.
+///
+/// That is the dishonesty this whole switch could enable: a fast-mode
+/// throughput figure quoted beside an accurate-mode conformance score. The
+/// picture axis is protected by a header a reader can check; this axis is
+/// protected by refusing to run at all, because unlike the picture mode there
+/// is no second baseline it could legitimately belong to.
+///
+/// `identical` refuses every flag on its own (`Gameboy::set_speed_flags`), so
+/// this is the guard for the `standard` half — and it is a hard exit rather
+/// than a warning, since a warning on stderr is exactly what a CI log buries.
+fn refuse_a_shortcut_machine(suite: &str) {
+    let (flags, _bad) = terminalgb::speed::SpeedFlags::from_env();
+    if flags.any() {
+        eprintln!(
+            "{suite}: refusing to score conformance with $GB_SPEED set ({}).\n\
+             Speed flags are a throughput mode, not a machine anything may be\n\
+             judged on — see docs/modes.md. Unset GB_SPEED and re-run.",
+            flags.spec()
+        );
+        std::process::exit(2);
+    }
+}
+
 fn load(path: &Path) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -119,6 +151,7 @@ fn load(path: &Path) -> BTreeMap<String, String> {
 /// suite records *where its ROMs come from*, which is the one thing a reader of
 /// a checked-in expectation file cannot otherwise recover.
 pub fn gate(suite: &str, path: &Path, header: &str, rows: &[Row]) -> bool {
+    refuse_a_shortcut_machine(suite);
     if std::env::var("UPDATE_EXTERNAL_BASELINE").is_ok() {
         let mut s = engine_note(path);
         s.push_str(header);

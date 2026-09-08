@@ -184,6 +184,112 @@ peripheral that genuinely has to count is not overhead.
 So what is left of PyBoy's lead is the per-access tick itself, and the interpreter. That is a
 different execution model, not another pass.
 
+## 6. 2026-09-08 — the harness was flattering us, and the idle horizon was too narrow
+
+Two things moved on the same day and they go in opposite directions. Read them together or
+neither is true.
+
+### 6a. The PyBoy figure above is superseded, and the correction is against us
+
+Every PyBoy row before this section was produced by `tools/perf/pyboy-bench.py` timing
+`tick(1, False)` in a **Python `for` loop** — 7,168 Python-level calls that our side never
+pays, because `core_bench` runs `Gameboy::frame()` in a Rust loop with no binding in the way.
+The identical work in a single `tick(7168, False)`:
+
+| PyBoy 2.7.0, rendering and sound off | ms/frame | × real time |
+|---|---:|---:|
+| `loop` — `tick(1)` ×7168, **what §2 and §4 quoted** | 0.0189–0.0192 | 869–886× |
+| **`batch` — `tick(7168)`, the emulator core** | **0.0157–0.0159** | **1053–1064×** |
+
+**17 % of the published PyBoy figure was our harness's Python overhead**, so every "× behind"
+in §2 and §4 understates the gap by that much. The bench prints both now and says which to
+quote; `loop` is what a Python consumer stepping frame by frame experiences, `batch` is the
+core, and the core is what this page compares. **The target is 0.0158, not 0.0190.**
+
+### 6b. The idle batch was stopping at edges no interrupt could be taken at
+
+`Gpu::idle_dots` returned the distance to the next PPU **mode boundary**. A halted CPU cannot
+observe one: all it observes is `IE & IF`, and the PPU writes exactly two of those bits —
+VBlank, and STAT. So a mode edge is only worth stopping on when a STAT interrupt could
+actually be *taken* there: a source selected in `STAT` **and** bit 1 of `IE` set.
+
+Measured over 7,168 frames of Pokémon Blue: **no STAT source is selected in a single frame,
+and `IE` masks STAT off in 7,150 of them.** Every one of those stops — three or four a
+scanline — was for an edge that could raise nothing, and it was the binding constraint:
+`--breakdown` reported the PPU bounding the batch 1,281,189 times and the timer bounding it
+none. The batch went **38.0 → 505.5 M-cycles** (320 batches a frame → 24) and the halt path
+from about 54 % of a frame to about 0.5 %.
+
+With it: `IDLE_BATCH_MAX` 64 → 512 (swept, flat past 512), the APU made a horizon in
+`idle_mcycles` so that raising the cap is safe rather than lucky, and `bus_tick`'s condition
+folded out of the `Gpu` struct into one flag beside the live enable.
+
+### 6c. Where that leaves the matrix
+
+**Both axes, because a figure without both is meaningless** — the *picture engine* is what a
+frame looks like, the *timing core* is what the CPU's neighbours may skip
+([`docs/picture-modes.md`](../picture-modes.md), [`docs/modes.md`](../modes.md)). Interleaved
+on one P-core in one session with `tools/perf/field.sh`, load 2.6, frame and WRAM hashes
+pinned:
+
+| picture | timing | before | after | × real time | vs PyBoy 0.0158 |
+|---|---|---:|---:|---:|---:|
+| PyBoy 2.7.0 (not cycle-accurate) | — | — | 0.0158 | 1060× | — |
+| **standard** | **accurate (default)** | 0.0430 | **0.0382** | 438× | 2.42× behind |
+| **standard** | **fast** (`--speed-mode`) | 0.0331 | **0.0263** | 573× | 1.65× behind |
+| **identical** | **accurate (default)** | 0.3489 | **0.3375** | 50× | 21.4× behind |
+| identical | fast | — | **refused by design** | — | — |
+
+The accurate default is **11 % faster** and the fast mode **20 %**; `identical` gains 3 %.
+Paired interleaved A/B of the bus-hook change alone, which is the trustworthy form: **+12.0 %
+accurate, +3.5 % fast**.
+
+**Nothing the cartridge can see moved.** Frame and WRAM hashes are identical on both picture
+engines, and `make test-external` matches **all 6,315 rows of all 18 suites** — Mealybug
+79/79, Gambatte 5,320/5,320, Mooneye 103/103 + 8/8, SameSuite 76/76.
+
+### 6d. Mealybug belongs to a cell of that table, not to the emulator
+
+We score <!--score:mealybug_accurate-->29 / 79<!--/score--> pixel-exact on the per-dot engine
+where PyBoy scores 0 on the shootout's 24 published rows, and **that claim belongs to
+`identical` + `accurate` and to nothing else**. A fast-mode throughput figure quoted beside it
+would be a sentence about two different machines.
+
+That is now structural rather than a convention:
+
+* `identical` **refuses every speed flag** (`Gameboy::set_speed_flags`), so the fast cell of
+  the per-dot row does not exist to be measured.
+* `examples/support/suite_baseline.rs::gate` **exits 2 rather than score any suite with
+  `$GB_SPEED` set.** That variable is inherited by every process started from a shell that
+  exported it. The picture axis is protected by a header a reader can check; this axis has no
+  second baseline a row could legitimately belong to, so it is a refusal and not a warning a
+  CI log would bury.
+* `core_bench` prints the picture engine and the timing core it **actually ran as** — not what
+  was asked for, since `identical` refuses flags — in the human output and in the JSON
+  (`picture`, `timing`, `cycle_accurate`), and shouts `*** FAST — NOT CYCLE-ACCURATE ***`.
+
+### 6e. What is left, honestly
+
+**The remaining accurate-mode gap is the per-access tick, and the profile now says so with a
+number rather than an argument.** `bus_tick` is 28.7 % of a headless accurate frame and
+`MemoryManagementUnit::do_cycle` 16.1 % — **44.8 % together, and that is precisely the
+per-access peripheral work PyBoy does not do.** 0.0382 × (1 − 0.448) = 0.0211, which is the
+same neighbourhood as PyBoy's 0.0158 once its own horizon bookkeeping is allowed for. So
+closing it in the *default* mode means giving up what `mem_timing` and fourteen Mooneye
+instruction-timing tests measure.
+
+In **fast** mode the profile is a different shape: `Cpu::operation` 44.9 %, `fetch`/`get_byte`
+17.6 %, `bus_tick` 11 %. What is left there is **the interpreter**, at roughly 66 host cycles
+an emulated instruction against PyBoy's ~39, and §17 of [`docs/throughput.md`](../throughput.md)
+has already measured the standard remedies — flag packing, page tables, devirtualising the
+mapper, `target-cpu=native`, PGO — as neutral or negative. **Beating 0.0158 from there is a
+different execution model, not another pass.**
+
+Re-verified rather than quoted, because the question was asked directly: `o3-fat` (the
+shipping default) is **+5.1 %** over thin LTO; `-Ctarget-cpu=native` is **1 % slower** than
+it; PGO is **+0.4 %** against its fair comparator and **5.5 % worse** than the fat LTO it
+cannot combine with on rustc 1.83. None of the three is a lever nobody had pulled.
+
 ## 5. What this changes about the goal
 
 "As fast as possible, lossless in ways that matter" is the right framing, and it is better

@@ -938,7 +938,7 @@ impl Gameboy {
         // The per-dot engine is stepped per bus access and never deferred, so
         // hand the batched one what it is owed before the switch.
         self.cpu.memory.flush_for_observer();
-        self.cpu.memory.gpu.set_render_mode(mode);
+        self.cpu.memory.set_render_mode(mode);
         // The refusal in `set_speed_mode` must not be bypassable by ordering:
         // asking for speed mode and *then* for identical mode has to leave the
         // machine identical, not fast.

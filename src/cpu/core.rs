@@ -1738,7 +1738,7 @@ mod tests {
             let mut code = prologue.to_vec();
             code.extend_from_slice(tail);
             let mut cpu = Cpu::new(rom_running(&code), None);
-            cpu.memory.gpu.set_render_mode(mode);
+            cpu.memory.set_render_mode(mode);
             let mut dots = 0;
             let mut waiting = true;
             for _ in 0..200_000 {

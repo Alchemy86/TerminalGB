@@ -271,12 +271,24 @@ mod lcdc_commit_speed_tests {
 
 /// The most M-cycles [`MemoryManagementUnit::idle_mcycles`] will ever hand back.
 ///
-/// The PPU horizon is never longer than a mode-3 span (172 dots, 43 M-cycles)
-/// anyway, so this only bounds the cases where the PPU imposes nothing. It is
-/// deliberately no larger than a long instruction's reach so that nothing
-/// downstream — the APU's resampler above all — is ever handed a step it does
-/// not already see in ordinary play.
-const IDLE_BATCH_MAX: u32 = 64;
+/// **This used to be 64, and the note beside it said the cap never bound
+/// anything — which was true, and true only because the PPU bound it first.**
+/// Once [`Gpu::idle_dots`] stopped stopping at mode boundaries no interrupt
+/// could be taken at, the cap became the binding constraint immediately: the
+/// idle batch went from 38.0 M-cycles to 63.9, i.e. straight onto it.
+///
+/// 512 is measured, not chosen. Sweeping it on 7,168 frames of Pokémon Blue
+/// with the frame and WRAM hashes pinned: 64 → 0.0412 ms/frame, 128 → 0.0403,
+/// 256 → 0.0401, **512 → 0.0396**, 1024 → 0.0397, 4096 → 0.0395. It is flat
+/// past 512, so the extra reach buys nothing and every dot of it is a bigger
+/// step handed to something downstream.
+///
+/// What the old value was really protecting is the APU's resampler, and that
+/// is now a horizon in its own right in [`MemoryManagementUnit::idle_mcycles`]
+/// rather than a constant chosen to stay under one — so the cap is a backstop
+/// and no longer the thing keeping `Sound::do_cycle` to one output boundary a
+/// call.
+const IDLE_BATCH_MAX: u32 = 512;
 
 const WRAM_SIZE: usize = 0x8000;
 const ZRAM_SIZE: usize = 0x7F;
@@ -723,6 +735,36 @@ pub struct MemoryManagementUnit<'a> {
     /// always does. Set only for the five M-cycles of interrupt dispatch — see
     /// [`Self::set_ppu_bus_ticking`].
     ppu_ticks_with_the_bus: bool,
+    /// `ppu_ticks_with_the_bus || the PPU is the per-dot engine` — the whole
+    /// of [`Self::bus_tick_ppu`]'s condition, precomputed.
+    ///
+    /// **It exists because the second half was a load from the `Gpu`.** That
+    /// test runs on every bus access of every instruction and answers "no" for
+    /// the whole of a `standard` run, but `||` has to evaluate both sides, so
+    /// each access reached into a structure holding a framebuffer and two
+    /// tilemaps for one byte — a line the whole-scanline engine otherwise
+    /// never touches on this path. Both inputs change only outside the frame
+    /// loop (a render-mode switch) or side by side with the flag itself (an
+    /// interrupt dispatch), so keeping them folded costs nothing to maintain.
+    ppu_on_bus: bool,
+    /// `per_access_bus || ppu_on_bus` — whether anything is hooked to the bus
+    /// at all, precomputed, and the slow half of [`Self::bus_tick`]'s test.
+    ///
+    /// **In fast mode it is false, and that is the point.** With
+    /// `instruction-bus` on, every bus access still reached `bus_tick`, tested
+    /// two flags, called `bus_tick_ppu`, tested a third and returned — three
+    /// branches and a call, per access, to do nothing. The accurate machine
+    /// pays exactly what it paid before: the flag is true there, and the work
+    /// behind it is unchanged.
+    ///
+    /// **`bus_tick_enabled` is deliberately NOT folded in**, though it would
+    /// save a load. It is the "a CPU instruction is running" toggle: it moves
+    /// twice per instruction, it is assigned directly by `load_state`, and it
+    /// is assigned directly by the `dma_conflict_tests` helper that stands in
+    /// for a running instruction — so a mirror of it is a stale value waiting
+    /// to happen, and a stale one here silently switches the per-access bus
+    /// off. It is read live beside this; the two are adjacent fields.
+    bus_hook_inputs: bool,
     /// Set by the CPU immediately before a memory access that shares its
     /// M-cycle with a 16-bit increment/decrement — the DMG OAM-corruption bug
     /// treats that combination as its own pattern. Set and consumed inside a
@@ -818,12 +860,17 @@ impl<'a> MemoryManagementUnit<'a> {
             gpu_bus_ticked: 0,
             gpu_defer: 0,
             ppu_ticks_with_the_bus: false,
+            ppu_on_bus: false,
+            bus_hook_inputs: false,
             idu_share: false,
             fault: None,
             cart_rtc,
         };
         fill_random(&mut res.wram, 42);
         res.refresh_rom_windows();
+        // `Gpu::new` takes the picture engine from `$GB_PPU`, so the mirror
+        // cannot be a constant in the literal above.
+        res.refresh_ppu_on_bus(); // also seeds `bus_hook`
         Ok(res)
     }
 
@@ -1185,7 +1232,16 @@ impl<'a> MemoryManagementUnit<'a> {
     /// field docs. No-op unless a CPU instruction is currently executing.
     #[inline]
     fn bus_tick(&mut self) {
-        if self.bus_tick_enabled {
+        if self.bus_tick_enabled && self.bus_hook_inputs {
+            self.bus_tick_hooked();
+        }
+    }
+
+    /// [`Self::bus_tick`]'s body, entered only when something is actually
+    /// hooked to the bus — see [`Self::bus_hook`].
+    #[inline]
+    fn bus_tick_hooked(&mut self) {
+        {
             // Speed mode: the peripherals advance once per instruction instead
             // of once per access. Leaving `bus_ticked` at zero is the whole
             // mechanism — `do_cycle` then applies the instruction's full tick
@@ -1276,9 +1332,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// so speed mode can skip the peripherals without skipping this.
     #[inline]
     fn bus_tick_ppu(&mut self) {
-        if self.ppu_ticks_with_the_bus
-            || self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
-        {
+        if self.ppu_on_bus {
             // This hands the PPU dots directly, so anything the batched
             // engine is still owed has to go in first or the two arrive out
             // of order — 210 Gambatte rows say so.
@@ -1705,6 +1759,7 @@ impl<'a> MemoryManagementUnit<'a> {
         // per-access tick does exactly that. Asking for one gets both.
         self.flush_pending();
         self.per_access_bus = !(flags.instruction_bus || flags.horizon_batch);
+        self.refresh_bus_hook();
         self.horizon_batch = flags.horizon_batch;
         self.run_horizon = 0;
         if let Some(s) = self.sound.as_mut() {
@@ -1730,6 +1785,13 @@ impl<'a> MemoryManagementUnit<'a> {
         prev
     }
 
+    /// Re-derive [`Self::bus_hook_inputs`]. Every path that can move one of its
+    /// two inputs must call it — there are two, and they are both in this file.
+    #[inline]
+    fn refresh_bus_hook(&mut self) {
+        self.bus_hook_inputs = self.per_access_bus || self.ppu_on_bus;
+    }
+
     /// Make the **batched** PPU advance one M-cycle per bus tick, the way the
     /// per-dot one already does, and return the previous setting.
     ///
@@ -1751,7 +1813,26 @@ impl<'a> MemoryManagementUnit<'a> {
     pub(crate) fn set_ppu_bus_ticking(&mut self, on: bool) -> bool {
         let prev = self.ppu_ticks_with_the_bus;
         self.ppu_ticks_with_the_bus = on;
+        self.refresh_ppu_on_bus();
         prev
+    }
+
+    /// Re-derive [`Self::ppu_on_bus`]. Every path that can move either input
+    /// must call it — there are two, and both are in this file.
+    #[inline]
+    fn refresh_ppu_on_bus(&mut self) {
+        self.ppu_on_bus = self.ppu_ticks_with_the_bus
+            || self.gpu.render_mode() == crate::gpu::RenderMode::Accurate;
+        self.refresh_bus_hook();
+    }
+
+    /// Switch the picture engine, keeping [`Self::ppu_on_bus`] with it.
+    ///
+    /// The mode is a property of the host and not of the emulated machine, so
+    /// it is deliberately not serialised — see `docs/picture-modes.md`.
+    pub(crate) fn set_render_mode(&mut self, mode: crate::gpu::RenderMode) {
+        self.gpu.set_render_mode(mode);
+        self.refresh_ppu_on_bus();
     }
 
     /// Serialise the MMU and every device it owns. The APU is written as a
@@ -1936,7 +2017,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// thing that moves is *when the CPU looks at `IE & IF`*, so the horizon is
     /// simply "how far until any of them could set a bit":
     ///
-    /// * the PPU, [`Gpu::idle_dots`] — its next mode edge or line wrap;
+    /// * the PPU, [`Gpu::idle_dots`] — its next *observable* edge: the VBlank
+    ///   entry, or a mode boundary where an enabled STAT source could fire;
     /// * the timer, [`Timer::idle_mcycles`] — its next `TIMA` overflow;
     /// * and a flat refusal to batch at all if anything else is in flight: a
     ///   VRAM DMA, a link transfer in flight (which finishes on the timer's own
@@ -1977,7 +2059,19 @@ impl<'a> MemoryManagementUnit<'a> {
         // spent against it. Without the subtraction a halted CPU idles that
         // much too long and wakes late — Gambatte's
         // `halt/late_m0int_halt_m0stat_*` group counts it, 38 rows.
-        let dots = self.gpu.idle_dots().saturating_sub(self.gpu_owed);
+        // Bit 1 of `IE` is the whole of whether a STAT interrupt can reach a
+        // halted CPU, and therefore of whether the PPU's mode boundaries are
+        // worth stopping on — see [`Gpu::idle_dots`]. `IE` cannot move while
+        // the CPU is halted, so this is constant for the batch by construction.
+        // **An OAM DMA keeps the narrow bound, deliberately.** The transfer
+        // moves a byte per M-cycle and the PPU's object scan reads OAM through
+        // the bus it is driving ([`Gpu::oam_read`]), so the two interleave
+        // within a batch at whatever granularity the batch has. That is already
+        // coarse at `IDLE_BATCH_MAX` and widening it further is a rendering
+        // question this horizon has no business answering — one bool test buys
+        // the whole class out.
+        let stat_wakes = self.inte & 0x02 != 0 || self.oam_dma_busy;
+        let dots = self.gpu.idle_dots(stat_wakes).saturating_sub(self.gpu_owed);
         if dots == 0 {
             #[cfg(feature = "profile")]
             crate::profile::count_idle_reason(3);
@@ -1994,13 +2088,33 @@ impl<'a> MemoryManagementUnit<'a> {
             GbSpeed::Double => 2,
         };
         let t = self.timer.idle_mcycles();
+        // **The APU raises no interrupt and is a horizon all the same**, for
+        // the reason [`Self::flush_apu`] exists: it has to produce its sample
+        // on the cycle `do_output` would have, and `Sound::do_cycle` crosses at
+        // most one output boundary per call. `compute_run_horizon` has always
+        // bounded by it; this did not, and got away with it only because
+        // `IDLE_BATCH_MAX` was far below an output period. It is the bound that
+        // makes raising that cap safe rather than lucky, and it costs nothing
+        // when there is no sound chip — `apu_budget` is then `u32::MAX`.
+        let apu = self
+            .apu_budget
+            .saturating_sub(self.apu_pending)
+            .div_ceil(4)
+            .max(1);
+        let ppu = dots.div_ceil(dots_per_mcycle);
+        let n = ppu.min(t).min(apu);
+        // Attribute to whichever term actually bound, the cap included — see
+        // `profile::Counters::idle_reason`.
         #[cfg(feature = "profile")]
-        crate::profile::count_idle_reason(if t < dots.div_ceil(dots_per_mcycle) {
+        crate::profile::count_idle_reason(if n > IDLE_BATCH_MAX {
+            7
+        } else if n == t {
             4
-        } else {
+        } else if n == ppu {
             5
+        } else {
+            6
         });
-        let n = dots.div_ceil(dots_per_mcycle).min(t);
         n.clamp(1, IDLE_BATCH_MAX)
     }
 
@@ -4119,5 +4233,47 @@ mod dma_conflict_tests {
     fn a_debug_peek_is_not_a_bus_cycle() {
         let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
         assert_eq!(mem.debug_peek(0x0010), 0x20);
+    }
+}
+
+/// [`MemoryManagementUnit::ppu_on_bus`] is a mirror of two other fields, and a
+/// mirror that can go stale is a silent accuracy bug: the per-dot engine would
+/// stop being stepped per bus access, which is the whole of what it is.
+#[cfg(test)]
+mod ppu_on_bus_tests {
+    use super::*;
+    use crate::gpu::RenderMode;
+
+    /// A DMG machine with a blank 32 KiB cartridge — nothing here executes
+    /// anything, the flag under test is set by the host and not the guest.
+    fn mmu() -> MemoryManagementUnit<'static> {
+        MemoryManagementUnit::new(vec![0u8; 0x8000], None).unwrap()
+    }
+
+    #[test]
+    fn the_mirror_follows_a_live_picture_mode_switch() {
+        let mut mem = mmu();
+        mem.set_render_mode(RenderMode::Fast);
+        assert!(!mem.ppu_on_bus, "the batched engine is not stepped per access");
+        mem.set_render_mode(RenderMode::Accurate);
+        assert!(mem.ppu_on_bus, "the per-dot engine must be stepped per access");
+        mem.set_render_mode(RenderMode::Fast);
+        assert!(!mem.ppu_on_bus, "and back again");
+    }
+
+    #[test]
+    fn the_mirror_follows_interrupt_dispatch_in_either_mode() {
+        for mode in [RenderMode::Fast, RenderMode::Accurate] {
+            let mut mem = mmu();
+            mem.set_render_mode(mode);
+            let accurate = mode == RenderMode::Accurate;
+            mem.set_ppu_bus_ticking(true);
+            assert!(mem.ppu_on_bus, "dispatch steps the PPU with the bus in {mode:?}");
+            mem.set_ppu_bus_ticking(false);
+            assert_eq!(
+                mem.ppu_on_bus, accurate,
+                "leaving dispatch must not switch the per-dot engine off in {mode:?}"
+            );
+        }
     }
 }

@@ -1266,16 +1266,54 @@ impl Gpu {
         if self.render_mode != RenderMode::Fast || !self.lcd_on {
             return 0;
         }
-        self.idle_dots()
+        // **Deliberately the mode edge and not [`Gpu::idle_dots`], which is a
+        // weaker bound.** They answer different questions. `idle_dots` asks
+        // what a *halted* CPU can observe, and the answer is `IF` alone; this
+        // asks when the PPU has to be brought current for a *running* one, and
+        // that includes everything a mode change carries whether or not any
+        // interrupt is enabled — `updated`, `hblanking`, and the fold of
+        // `gpu.interrupt` into `IF`, which has to land on the instruction it
+        // would have landed on however the flags are set.
+        self.next_mode_edge()
     }
 
-    pub(crate) fn idle_dots(&self) -> u32 {
+    pub(crate) fn idle_dots(&self, stat_wakes: bool) -> u32 {
         if !self.lcd_on {
             return 0;
         }
         if self.render_mode == RenderMode::Accurate {
             return self.accurate_idle_dots();
         }
+        // **A halted CPU observes the PPU through `IF` and through nothing
+        // else**, and the PPU writes exactly two of its bits: VBlank, at the
+        // entry to line 144, and STAT. So a mode boundary is only worth
+        // stopping on if a STAT interrupt could actually be *taken* there, and
+        // two independent things have to be true for that: a source has to be
+        // selected in `STAT` — [`Gpu::refresh_stat_line`] is the only thing
+        // that raises the bit and it returns early on `!any_inte` — and bit 1
+        // of `IE` has to be set, which is `stat_wakes`.
+        //
+        // Neither holds in ordinary play. Measured over 7,168 frames of
+        // Pokémon Blue: **no STAT source is selected in a single frame**, and
+        // `IE` masks STAT off in 7,150 of them. Every one of those mode
+        // boundaries was a stop for an edge that could raise nothing, three or
+        // four times a scanline, and it was the binding constraint on the idle
+        // batch — `core_bench --breakdown` reports the PPU bounding it
+        // 1,281,189 times a frame's worth of batches and the timer bounding it
+        // none.
+        //
+        // When STAT *can* wake the CPU this is the same function it always
+        // was, which is why nothing that arms a STAT source — every Mealybug
+        // ROM, every Gambatte `miscmstatirq`/`lycEnable`/`m0enable` row — can
+        // tell the difference.
+        if !(stat_wakes && self.any_inte) {
+            return self.dots_to_vblank();
+        }
+        self.next_mode_edge()
+    }
+
+    /// Dots until the PPU's next mode boundary — the unconditional bound.
+    fn next_mode_edge(&self) -> u32 {
         let m = self.modeclock;
         let mut next = if m <= OAM_DOTS {
             OAM_DOTS + 1
@@ -1293,6 +1331,28 @@ impl Gpu {
             }
         }
         next.saturating_sub(m)
+    }
+
+    /// Dots until the **VBlank interrupt** is raised — the entry to line 144.
+    ///
+    /// This is the horizon a halted CPU has left once no mode boundary can
+    /// reach it, and it is a bound *even when `IE` masks VBlank off too*:
+    /// [`Gpu::change_mode`]'s mode-1 arm sets `updated` alongside the interrupt,
+    /// and `updated` is what ends [`Gameboy::frame`](crate::gameboy::Gameboy::frame).
+    /// Batching past it would move the frame boundary, and with it every save
+    /// state taken on one.
+    ///
+    /// The wrap is the case to get right: from inside VBlank the next entry is
+    /// the rest of this frame *plus* a whole visible field, because
+    /// `Gameboy::frame` returns at the VBlank it is called before, so lines
+    /// 144-153 are emulated at the head of the *following* call.
+    fn dots_to_vblank(&self) -> u32 {
+        let lines = if self.line < VBLANK_LINE {
+            u32::from(VBLANK_LINE - self.line)
+        } else {
+            u32::from(154 - self.line) + u32::from(VBLANK_LINE)
+        };
+        (lines * LINE_DOTS).saturating_sub(self.modeclock)
     }
 
     /// [`Gpu::idle_dots`] for the per-dot engine.
