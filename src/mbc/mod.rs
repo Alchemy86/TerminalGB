@@ -195,9 +195,14 @@ const HEADER_END: usize = 0x0150;
 /// switch. Pan Docs, cartridge header byte `0x0147`:
 /// <https://gbdev.io/pandocs/The_Cartridge_Header.html>
 pub fn get_mbc(
-    data: Vec<u8>,
+    data: impl Into<std::sync::Arc<[u8]>>,
     filepath: Option<path::PathBuf>,
 ) -> StrResult<Box<dyn MemoryBankController + 'static>> {
+    // **The ROM is immutable, so N machines may share one allocation.** A
+    // caller that already holds an `Arc<[u8]>` pays nothing here and nothing in
+    // the mapper either — the cartridge stops being per-instance memory. A
+    // `Vec` caller pays the one copy it has always paid.
+    let data: std::sync::Arc<[u8]> = data.into();
     // An embedder hands us arbitrary bytes. Indexing a short image would panic
     // — an abort under `panic = 'abort'` — so refuse it as an error instead.
     if data.len() < HEADER_END {

@@ -54,7 +54,7 @@ impl Cpu<'_> {
     /// `A=0x01 HL=0x014D`, and the undocumented CGB registers respond). Test
     /// ROMs that print their boot registers can tell, which is why nine
     /// Mooneye acceptance tests changed verdict when this was added.
-    pub fn new(data: Vec<u8>, file: Option<std::path::PathBuf>) -> Self {
+    pub fn new(data: impl Into<std::sync::Arc<[u8]>>, file: Option<std::path::PathBuf>) -> Self {
         Self::new_with_model(data, file, Model::Auto)
     }
 
@@ -66,7 +66,7 @@ impl Cpu<'_> {
     /// under `[profile.release] panic = 'abort'` a panic here takes the whole
     /// host process down.
     pub fn new_with_model(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<std::path::PathBuf>,
         model: Model,
     ) -> Self {
@@ -76,7 +76,7 @@ impl Cpu<'_> {
     /// [`Cpu::new_with_model`] without the panic: the cartridge is rejected
     /// with the reason instead.
     pub fn try_new_with_model(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<std::path::PathBuf>,
         model: Model,
     ) -> Result<Self, &'static str> {
@@ -87,7 +87,7 @@ impl Cpu<'_> {
     /// ([`crate::boot`]). Panics on an unmappable cartridge, like
     /// [`Cpu::new_with_model`].
     pub fn new_with_boot_rom(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<std::path::PathBuf>,
         model: Model,
         boot: Option<crate::boot::BootRom>,
@@ -102,12 +102,12 @@ impl Cpu<'_> {
     /// none (or one belonging to the other console) this is byte-for-byte the
     /// machine every baseline in this repository is measured on.
     pub fn try_new_with_boot_rom(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<std::path::PathBuf>,
         model: Model,
         boot: Option<crate::boot::BootRom>,
     ) -> Result<Self, &'static str> {
-        let memory = MemoryManagementUnit::new_with_boot_rom(data, file, model, boot)?;
+        let memory = MemoryManagementUnit::new_with_boot_rom(data.into(), file, model, boot)?;
         let registers = if memory.boot_rom_mapped() {
             Registers::at_reset()
         } else {

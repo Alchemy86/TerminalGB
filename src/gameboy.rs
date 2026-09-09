@@ -114,7 +114,10 @@ impl Gameboy {
     /// `$GB_MODEL` before falling back to the cartridge header. An embedder
     /// that wants a machine independent of the ambient environment should use
     /// [`Gameboy::new_with_model`] instead.
-    pub fn new(data: Vec<u8>, filepath: Option<std::path::PathBuf>) -> Gameboy {
+    pub fn new(
+        data: impl Into<std::sync::Arc<[u8]>>,
+        filepath: Option<std::path::PathBuf>,
+    ) -> Gameboy {
         // let rom = load_rom();
 
         let gb = Gameboy {
@@ -133,7 +136,7 @@ impl Gameboy {
     /// must be reproducible — a hardware build, a test rig, a library caller
     /// that cannot vouch for its process environment.
     pub fn new_with_model(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         filepath: Option<std::path::PathBuf>,
         model: crate::mode::Model,
     ) -> Gameboy {
@@ -153,7 +156,7 @@ impl Gameboy {
     /// hold a header, an unreadable `.sav`), because `[profile.release]` sets
     /// `panic = 'abort'`.
     pub fn try_new_with_model(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         filepath: Option<std::path::PathBuf>,
         model: crate::mode::Model,
     ) -> Result<Gameboy, &'static str> {
@@ -175,7 +178,7 @@ impl Gameboy {
     /// the real one. The frontend finds the file; see [`crate::boot`] for where
     /// it looks and why the core never does it itself.
     pub fn new_with_boot_rom(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         filepath: Option<std::path::PathBuf>,
         model: crate::mode::Model,
         boot: Option<crate::boot::BootRom>,

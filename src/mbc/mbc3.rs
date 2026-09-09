@@ -30,7 +30,13 @@ impl MBC3 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM (and RTC) live only in
     /// memory.
-    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC3> {
+    pub fn new(
+        data: impl Into<std::sync::Arc<[u8]>>,
+        file: Option<path::PathBuf>,
+    ) -> StrResult<MBC3> {
+        // Free when the caller already shares one; the single copy a
+        // `Vec` caller has always paid, when it does not.
+        let data: std::sync::Arc<[u8]> = data.into();
         let subtype = data[0x147];
         let rambanks = match subtype {
             0x10 | 0x12 | 0x13 => ram_banks(data[0x149]),
@@ -48,7 +54,7 @@ impl MBC3 {
     }
 
     fn build(
-        data: Vec<u8>,
+        data: std::sync::Arc<[u8]>,
         subtype: u8,
         rambanks: usize,
         ramsize: usize,
@@ -60,7 +66,7 @@ impl MBC3 {
         };
         let rombanks = rom_banks(data[0x148], data.len());
         let mut res = MBC3 {
-            rom: data.into(),
+            rom: data,
             ram: vec![0u8; ramsize],
             rombank: 1,
             rombanks,

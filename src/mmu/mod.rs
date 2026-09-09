@@ -802,7 +802,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// `gbmode`; keeping it in one place is what stops the DMG and CGB paths
     /// drifting apart.
     fn raw(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<path::PathBuf>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mmu_mbc = mbc::get_mbc(data, file)?;
@@ -881,7 +881,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// [`new_with_model`](Self::new_with_model) with [`Model::Dmg`] to force it
     /// anyway.
     pub fn new(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<path::PathBuf>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mut res = Self::raw(data, file)?;
@@ -896,7 +896,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// Boot a Game Boy Color. A cartridge that does not advertise CGB support
     /// gets the console's compatibility mode ([`GbMode::ColorAsClassic`]).
     pub fn new_cgb(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<path::PathBuf>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         Self::new_with_model(data, file, crate::mode::Model::Cgb)
@@ -905,7 +905,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// Boot the console named by `model`. [`Model::Auto`] picks from the
     /// cartridge header (and honours `$GB_MODEL`) — see [`Model::resolve`].
     pub fn new_with_model(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<path::PathBuf>,
         model: crate::mode::Model,
     ) -> StrResult<MemoryManagementUnit<'a>> {
@@ -926,7 +926,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// environment variable or a path (see the layering note in
     /// [`crate::boot`]).
     pub fn new_with_boot_rom(
-        data: Vec<u8>,
+        data: impl Into<std::sync::Arc<[u8]>>,
         file: Option<path::PathBuf>,
         model: crate::mode::Model,
         boot: Option<crate::boot::BootRom>,

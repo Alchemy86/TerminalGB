@@ -19,7 +19,13 @@ pub struct MBC0 {
 impl MBC0 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM lives only in memory.
-    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC0> {
+    pub fn new(
+        data: impl Into<std::sync::Arc<[u8]>>,
+        file: Option<path::PathBuf>,
+    ) -> StrResult<MBC0> {
+        // Free when the caller already shares one; the single copy a
+        // `Vec` caller has always paid, when it does not.
+        let data: std::sync::Arc<[u8]> = data.into();
         let rambanks = match data[0x147] {
             0x08 | 0x09 => ram_banks(data[0x149]),
             _ => 0,
@@ -29,7 +35,7 @@ impl MBC0 {
             _ => Battery::none(),
         };
         let mut res = MBC0 {
-            rom: data.into(),
+            rom: data,
             ram: vec![0u8; rambanks * 0x2000],
             battery,
         };

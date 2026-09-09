@@ -73,7 +73,13 @@ fn is_multicart(data: &[u8]) -> bool {
 impl MBC1 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM lives only in memory.
-    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC1> {
+    pub fn new(
+        data: impl Into<std::sync::Arc<[u8]>>,
+        file: Option<path::PathBuf>,
+    ) -> StrResult<MBC1> {
+        // Free when the caller already shares one; the single copy a
+        // `Vec` caller has always paid, when it does not.
+        let data: std::sync::Arc<[u8]> = data.into();
         let rambanks = match data[0x147] {
             0x02 | 0x03 => ram_banks(data[0x149]),
             _ => 0,
@@ -85,7 +91,7 @@ impl MBC1 {
         MBC1::build(data, rambanks, battery)
     }
 
-    fn build(data: Vec<u8>, rambanks: usize, battery: Battery) -> StrResult<MBC1> {
+    fn build(data: std::sync::Arc<[u8]>, rambanks: usize, battery: Battery) -> StrResult<MBC1> {
         let ramsize = rambanks * 0x2000;
         let multicart = is_multicart(&data);
         // An MBC1M is 1 MiB by construction, so trust that over `0x148` — a
@@ -97,7 +103,7 @@ impl MBC1 {
         };
 
         let mut res = MBC1 {
-            rom: data.into(),
+            rom: data,
             ram: vec![0u8; ramsize],
             ram_on: false,
             banking_mode: 0,

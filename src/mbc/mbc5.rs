@@ -21,7 +21,13 @@ pub struct MBC5 {
 impl MBC5 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM lives only in memory.
-    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC5> {
+    pub fn new(
+        data: impl Into<std::sync::Arc<[u8]>>,
+        file: Option<path::PathBuf>,
+    ) -> StrResult<MBC5> {
+        // Free when the caller already shares one; the single copy a
+        // `Vec` caller has always paid, when it does not.
+        let data: std::sync::Arc<[u8]> = data.into();
         let subtype = data[0x147];
         let rambanks = match subtype {
             0x1A | 0x1B | 0x1D | 0x1E => ram_banks(data[0x149]),
@@ -35,7 +41,7 @@ impl MBC5 {
         let rombanks = rom_banks(data[0x148], data.len());
 
         let mut res = MBC5 {
-            rom: data.into(),
+            rom: data,
             ram: vec![0u8; ramsize],
             rombank: 1,
             rambank: 0,

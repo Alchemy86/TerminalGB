@@ -280,13 +280,14 @@ struct Run {
     startup_seconds: f64,
 }
 
-fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Run {
+fn one_worker(rom: &Arc<[u8]>, state: Option<&[u8]>, a: &Args, start: &Barrier) -> Run {
     // **Startup is timed from here to the first drawn frame**, because that is
     // what a swarm pays per machine before any of them has played anything.
     let boot = Instant::now();
     // `None` for the save path: a benchmark must never write a `.sav` beside
     // somebody's cartridge (`src/mbc/battery.rs`).
-    let mut gb = Gameboy::new(rom.to_vec(), None);
+    // `Arc::clone`, not `to_vec`: a refcount bump instead of a megabyte.
+    let mut gb = Gameboy::new(Arc::clone(rom), None);
     // **A collector's machine has an APU and a bare `Gameboy` does not.** With
     // `sound` at `None` the chip is absent rather than quiet, which a cartridge
     // can tell (`sound::SilentPlayer`), so every scenario, longplay and swarm
@@ -612,7 +613,11 @@ fn main() {
         return;
     }
 
-    let rom = Arc::new(rom);
+    // **One ROM allocation for the whole fan-out.** The cartridge is
+    // immutable, so every machine can point at the same bytes: `Arc<[u8]>`
+    // rather than `Arc<Vec<u8>>` is what lets the mapper hold this exact
+    // allocation instead of copying it per instance.
+    let rom: Arc<[u8]> = Arc::from(rom);
     let state = Arc::new(state);
 
     // Best of `--repeat` rounds. A throughput figure taken once on a shared
