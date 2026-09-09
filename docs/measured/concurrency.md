@@ -115,6 +115,20 @@ in **66 ms** and 16,000 in **1.4 s** (500 ms pooled) — and an earlier figure o
 22.6 s was this instrument counting its own 300-frame warm-up as start-up time,
 not the emulator.
 
+**Read that figure with its condition, though, because the realistic one is up
+to 21x worse.** It is measured with every worker blocking at a gate once its
+machine exists, so constructors compete only with constructors. A launcher that
+lets each copy start playing the moment it is built has the last machine
+competing with every earlier one for a core:
+
+| copies | all still constructing | early copies already playing |
+|---:|---:|---:|
+| 200 | 20 ms | 117 ms |
+| 1,000 | 72 ms | 1,551 ms |
+
+The pool shape makes the distinction moot — twenty threads build every machine
+before any of them is stepped — which is one more reason to prefer it.
+
 ### The pool is 2.5x cheaper, and the reason is per-thread stack
 
 The machine itself is ~162 KiB — a 51 KiB inline struct (16 KiB VRAM, 32 KiB
