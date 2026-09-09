@@ -364,6 +364,11 @@ With an APU installed and silent — the shape a certification run uses — the 
 timer is about 2 % of it, so there was nothing there to win. **Frame *and* WRAM hashes are
 byte-identical in every cell**, before and after.
 
+The "after" column is a **paired** A/B — both binaries built and run alternately in one session,
+which is the only form that survives a box whose load moves. `tools/perf/field.sh` re-measured
+the same three cells independently at **0.0298 / 0.0257 / 0.3348** (load 1.9), with the same two
+frame hashes `c850103d…` and `4c97205a…` the pre-change build produced.
+
 ### 7d. What it cost in accuracy: nothing, and here is the whole check
 
 `make test-external` and `make test-external-accurate` match every baseline — **all 6,315 rows
