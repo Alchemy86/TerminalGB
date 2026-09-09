@@ -138,6 +138,22 @@ pub(super) struct Pipeline {
     obj_hi: u8,
     /// Bit *i* set once `scan[i]` has been fetched, so it is not fetched twice.
     fetched: u16,
+    /// The smallest `x` among the sprites in `scan` that `fetched` has not yet
+    /// claimed, or `u8::MAX` when none is left.
+    ///
+    /// Purely a short-circuit for [`Gpu::due_sprite`], which asks "is any
+    /// unfetched sprite at or before `lx + 8`?" on **every dot of mode 3** and
+    /// answers no almost every time. That question is a scan of up to ten
+    /// entries; this is one comparison, and it is exact rather than
+    /// conservative — no unfetched sprite can have an `x` below the minimum of
+    /// the unfetched ones.
+    ///
+    /// Derived state, so it is **not serialised**: `load_state` rebuilds it
+    /// from `scan`/`nscan`/`fetched`, which are, and `savestate::
+    /// FORMAT_VERSION` does not move. It is maintained at the four places that
+    /// can change the answer — the scan starting, an entry joining it, mode 3
+    /// clearing `fetched`, and a fetch claiming one.
+    min_unfetched_x: u8,
 
     // --- output ---
     /// Pixels painted on this line so far; mode 3 ends when it reaches 160.
@@ -242,6 +258,7 @@ impl Default for Pipeline {
             obj_lo: 0,
             obj_hi: 0,
             fetched: 0,
+            min_unfetched_x: u8::MAX,
             lx: 0,
             discard: 0,
             window: false,
@@ -257,6 +274,23 @@ impl Default for Pipeline {
 }
 
 impl Pipeline {
+    /// Recompute [`Pipeline::min_unfetched_x`] from `scan`/`nscan`/`fetched`.
+    ///
+    /// At most ten entries, and it runs only when the answer can actually
+    /// change: when mode 3 clears `fetched`, and when a fetch claims a sprite —
+    /// at most ten times a line against the ~172-289 dots that ask the
+    /// question. It is also what `load_state` calls, which is why the field
+    /// needs no place in the save format.
+    fn refresh_min_unfetched_x(&mut self) {
+        let mut m = u8::MAX;
+        for i in 0..self.nscan as usize {
+            if self.fetched & (1 << i) == 0 {
+                m = m.min(self.scan[i].x);
+            }
+        }
+        self.min_unfetched_x = m;
+    }
+
     fn bg_push(&mut self, px: [Pixel; 8]) {
         for (i, p) in px.into_iter().enumerate() {
             self.bg[(self.bg_head as usize + i) & 7] = p;
@@ -429,6 +463,10 @@ impl Pipeline {
         } else {
             self.bg_len > 0
         };
+        // Derived from `scan`/`nscan`/`fetched`, all of which are in the block
+        // above, so it is rebuilt rather than stored and every existing state
+        // keeps loading. See `Pipeline::min_unfetched_x`.
+        self.refresh_min_unfetched_x();
         Ok(())
     }
 
@@ -724,6 +762,7 @@ impl Gpu {
     fn start_oam_scan(&mut self) {
         self.pipe.nscan = 0;
         self.pipe.fetched = 0;
+        self.pipe.min_unfetched_x = u8::MAX;
     }
 
     /// One OAM entry. Hardware checks one sprite every two dots, so forty of
@@ -762,6 +801,7 @@ impl Gpu {
             oam: index as u8,
         };
         self.pipe.nscan += 1;
+        self.pipe.min_unfetched_x = self.pipe.min_unfetched_x.min(self.oam_bus_x);
     }
 
     // ---------------------------------------------------------------- mode 3
@@ -787,6 +827,13 @@ impl Gpu {
         p.win_fetch_x = 0;
         p.line_started = false;
         p.fetched = 0;
+        // Paired with the clear above rather than shown to be needed: measured
+        // over 300 frames of a real cartridge and over this module's own test,
+        // `fetched` is already zero every time mode 3 starts, so the recompute
+        // is a no-op there. It stays because leaving a clear of `fetched`
+        // without the cache following it is a latent silent bug, and ten
+        // iterations at most once a line is not a cost worth trading for that.
+        p.refresh_min_unfetched_x();
         // Nothing about `SCX` is latched here. Its low three bits decide how
         // many pixels the head of the line throws away, and that comparison is
         // made **live, on each of those dots** — see [`Gpu::output_dot`].
@@ -1295,6 +1342,13 @@ impl Gpu {
             return None;
         }
         let lx = self.pipe.lx as i16;
+        // Exact, not conservative: no unfetched sprite's `x` is below the
+        // minimum of the unfetched ones, so if that minimum is already past
+        // the window then the scan below has nothing to find. See
+        // `Pipeline::min_unfetched_x`.
+        if i16::from(self.pipe.min_unfetched_x) > lx + 8 {
+            return None;
+        }
         (0..self.pipe.nscan as usize).find(|&i| {
             if self.pipe.fetched & (1 << i) != 0 {
                 return false;
@@ -1335,6 +1389,7 @@ impl Gpu {
         };
         self.pipe.obj_i = i as u8;
         self.pipe.fetched |= 1 << i;
+        self.pipe.refresh_min_unfetched_x();
         self.pipe.obj_wait = penalty;
         self.pipe.obj_t = 1;
     }
@@ -2673,5 +2728,85 @@ mod savestate_compat {
         assert!(!loaded.tile_is_window);
         assert_eq!(loaded.win_fetch_x, 9);
         assert!(loaded.line_started);
+    }
+}
+
+#[cfg(test)]
+mod sprite_shortcut {
+    use super::super::{Gpu, RenderMode};
+
+    /// [`Pipeline::min_unfetched_x`] is a **short-circuit for a question whose
+    /// real answer is the scan below it**, so the only thing that can go wrong
+    /// is the two disagreeing — and the failure is silent: an object simply
+    /// never gets fetched and its pixels never appear.
+    ///
+    /// So drive a whole frame of a real fetcher and assert, at every dot, that
+    /// the cache equals a fresh recompute and that the shortcut never refuses a
+    /// dot the full scan would have accepted.
+    #[test]
+    fn the_cached_minimum_never_disagrees_with_a_fresh_scan() {
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.wb(0xFF40, 0x93); // LCD on, BG on, OBJ on, tile data $8000
+
+        // Ten objects spread across the line, deliberately NOT in `x` order:
+        // the cache is a minimum over the unfetched ones, so an ordering
+        // assumption would pass on a sorted OAM and fail on a real one.
+        for (i, x) in [80u8, 8, 160, 24, 120, 16, 100, 40, 64, 32]
+            .into_iter()
+            .enumerate()
+        {
+            gpu.voam[i * 4] = 16; // y: on line 0
+            gpu.voam[i * 4 + 1] = x;
+            gpu.voam[i * 4 + 2] = 1; // tile
+            gpu.voam[i * 4 + 3] = 0;
+        }
+
+        let mut checked = 0usize;
+        let mut fetches = 0usize;
+        for dot in 0..(super::LINE_DOTS * 8) {
+            // Switch the LCD off and back on part-way through. That is the one
+            // path on which `fetched` can survive a line — the line the PPU
+            // restarts on has no OAM scan (`skip_first_oam`), so
+            // `start_oam_scan` does not run and `start_mode3` is what clears
+            // it. Without this the mode-3 maintenance point is never exercised
+            // and dropping it passes.
+            if dot == super::LINE_DOTS * 3 {
+                gpu.wb(0xFF40, 0x13); // LCDC.7 low
+                gpu.wb(0xFF40, 0x93); // and back on
+            }
+            gpu.do_cycle(1);
+
+            let mut want = u8::MAX;
+            for i in 0..gpu.pipe.nscan as usize {
+                if gpu.pipe.fetched & (1 << i) == 0 {
+                    want = want.min(gpu.pipe.scan[i].x);
+                }
+            }
+            assert_eq!(
+                gpu.pipe.min_unfetched_x, want,
+                "cache drifted from a fresh recompute at line {} dot {}",
+                gpu.line, gpu.modeclock
+            );
+
+            // And the shortcut itself: whenever it would refuse, the full scan
+            // must agree there was nothing to find.
+            let lx = gpu.pipe.lx as i16;
+            if i16::from(gpu.pipe.min_unfetched_x) > lx + 8 {
+                let found = (0..gpu.pipe.nscan as usize).find(|&i| {
+                    gpu.pipe.fetched & (1 << i) == 0
+                        && i16::from(gpu.pipe.scan[i].x) <= lx + 8
+                });
+                assert_eq!(found, None, "the shortcut refused a dot the scan accepts");
+            }
+            if gpu.pipe.fetched != 0 {
+                fetches = fetches.max(gpu.pipe.fetched.count_ones() as usize);
+            }
+            checked += 1;
+        }
+        // Teeth: a run in which nothing was ever scanned or fetched would pass
+        // the assertions above while proving nothing.
+        assert!(checked > 3000, "too few dots observed: {checked}");
+        assert!(fetches >= 8, "objects were never fetched, so nothing was tested");
     }
 }
