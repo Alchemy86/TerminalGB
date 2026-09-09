@@ -291,13 +291,6 @@ impl Pipeline {
         self.min_unfetched_x = m;
     }
 
-    fn bg_push(&mut self, px: [Pixel; 8]) {
-        for (i, p) in px.into_iter().enumerate() {
-            self.bg[(self.bg_head as usize + i) & 7] = p;
-        }
-        self.bg_len = 8;
-    }
-
     fn bg_pop(&mut self) -> Pixel {
         let p = self.bg[self.bg_head as usize & 7];
         self.bg_head = (self.bg_head + 1) & 7;
@@ -1314,23 +1307,33 @@ impl Gpu {
         }
     }
 
+    /// Decode a fetched tile's two bitplanes straight into the background FIFO.
+    ///
+    /// This built an eight-pixel temporary and a second pass copied it in until
+    /// 2026-09-09. The temporary is 32 bytes and the copy is another eight
+    /// masked stores, on a path that runs once per tile for the whole visible
+    /// frame; writing the decode's own output where it belongs is the same
+    /// stores in one pass instead of two. Same values, same destinations — the
+    /// masked index is exactly what `Pipeline::bg_push` used to compute.
     fn push_bg_tile(&mut self) {
         let (lo, hi) = (self.pipe.lo, self.pipe.hi);
         let attr = self.pipe.tile_attr;
         let cgb = self.gbmode == GbMode::Color;
         let flip_x = cgb && attr & 0x20 != 0;
-        let mut px = [Pixel::default(); 8];
-        for (i, slot) in px.iter_mut().enumerate() {
+        let palette = attr & 0x07;
+        let prio = cgb && attr & 0x80 != 0;
+        let head = self.pipe.bg_head as usize;
+        for i in 0..8usize {
             let bit = if flip_x { i } else { 7 - i } as u32;
             let color = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-            *slot = Pixel {
+            self.pipe.bg[(head + i) & 7] = Pixel {
                 color,
-                palette: attr & 0x07,
-                prio: cgb && attr & 0x80 != 0,
+                palette,
+                prio,
                 oam: 0,
             };
         }
-        self.pipe.bg_push(px);
+        self.pipe.bg_len = 8;
     }
 
     // --------------------------------------------------------------- sprites
