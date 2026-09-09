@@ -546,6 +546,39 @@ impl Gpu {
                 left -= step;
                 continue;
             }
+            // **Mode 3 is a RUN, not a sequence of independent dots**, and
+            // everything the general path re-decides each dot is invariant
+            // across it: `pipeline_dot` reaches no `change_mode` and no
+            // `next_line` (the only calls are in this function, `accurate_dot`
+            // and `oam_scan_span`), so within mode 3 the mode cannot move
+            // under the loop and `line` cannot either. The two ways out are
+            // `lx` reaching the screen edge and `modeclock` reaching the end
+            // of the line, and both are the loop's own condition.
+            //
+            // So the general path's `idle` test, its OAM-slot test, and
+            // `accurate_dot`'s own repeat of both plus its `mode != 3` arm are
+            // all answering a question that was settled when the run began.
+            // Mode 3 is ~172-289 dots of every visible line, which is the bulk
+            // of the frame's dots, so that is ~six predictable-but-real
+            // branches paid about twenty-five thousand times a frame.
+            //
+            // This is a control-flow change and nothing else: the work per dot
+            // is `pipeline_dot` then `end_of_dot`, in that order, exactly as
+            // `accurate_dot` runs them.
+            // The `lx` half of this guard is load-bearing and its absence is
+            // an infinite loop, not a slow path: mode 3 with `lx` already at
+            // the screen edge is exactly the state whose *only* transition is
+            // `accurate_dot`'s `change_mode(0)`, so a fast path that took it
+            // would spin the outer loop forever without ever consuming `left`.
+            if self.mode == 3 && (self.pipe.lx as usize) < WIDTH {
+                while left > 0 && self.mode == 3 && (self.pipe.lx as usize) < WIDTH {
+                    self.pipeline_dot();
+                    self.end_of_dot();
+                    self.tick_dma_arm(1);
+                    left -= 1;
+                }
+                continue;
+            }
             self.accurate_dot();
             self.tick_dma_arm(1);
             left -= 1;
@@ -590,6 +623,16 @@ impl Gpu {
             self.pipeline_dot();
         }
 
+        self.end_of_dot();
+    }
+
+    /// Everything a dot does *after* its own work, whichever mode it was in.
+    ///
+    /// Extracted so the mode-3 run in [`Gpu::do_cycle_accurate`] and the
+    /// general [`Gpu::accurate_dot`] cannot drift: there is one definition of
+    /// what ending a dot means, and both call it.
+    #[inline(always)]
+    fn end_of_dot(&mut self) {
         self.modeclock += 1;
         if self.modeclock >= LINE_DOTS {
             self.next_line();
