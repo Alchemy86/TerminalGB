@@ -147,7 +147,30 @@ struct Args {
     state: Option<String>,
     frames: u32,
     warmup: u32,
+    /// Seconds of real work before the gate, on top of `--warmup` frames.
+    ///
+    /// **This box's sustained clock is not its burst clock, and the gap is
+    /// 45 %.** The identical 20-worker 2,000-frame run reads 0.2145 ms/frame
+    /// on a cold box and 0.3116 immediately after a long one, recovering to
+    /// 0.2197 after 45 s idle. So a sweep with a fixed frame count per worker
+    /// measures its small points at burst clock and its large ones at
+    /// sustained clock and reports the difference as a scaling collapse —
+    /// which is exactly what it did here before this existed. Warm every
+    /// point to steady state and the confound goes away.
+    warm_seconds: f64,
     workers: usize,
+    /// How many machines exist at once. `0` means "one per worker", which is
+    /// this example's original shape and what every figure before 2026-09-09
+    /// was measured on.
+    /// Whether `--workers` was typed. **Never infer "was this argument given"
+    /// from its value** — comparing against the default cannot tell "not
+    /// given" from "given the default", which silently ignored a real
+    /// `--workers` here once already.
+    workers_given: bool,
+    instances: usize,
+    /// Frames one machine runs before the thread moves to the next of its own.
+    /// Only meaningful with `--instances`; see [`one_pool_worker`].
+    chunk: u32,
     repeat: u32,
     no_pixels: bool,
     speed: String,
@@ -165,7 +188,11 @@ impl Default for Args {
             state: None,
             frames: 3000,
             warmup: 300,
+            warm_seconds: 0.0,
             workers: 1,
+            workers_given: false,
+            instances: 0,
+            chunk: 1,
             repeat: 3,
             no_pixels: false,
             speed: String::new(),
@@ -204,12 +231,25 @@ fn parse() -> Args {
                 a.frames = next(i).parse().unwrap_or(a.frames);
                 i += 1;
             }
+            "--warm-seconds" => {
+                a.warm_seconds = next(i).parse().unwrap_or(a.warm_seconds);
+                i += 1;
+            }
             "--warmup" => {
                 a.warmup = next(i).parse().unwrap_or(a.warmup);
                 i += 1;
             }
             "--workers" => {
                 a.workers = next(i).parse().unwrap_or(a.workers);
+                a.workers_given = true;
+                i += 1;
+            }
+            "--instances" => {
+                a.instances = next(i).parse().unwrap_or(a.instances);
+                i += 1;
+            }
+            "--chunk" => {
+                a.chunk = next(i).parse().unwrap_or(a.chunk).max(1);
                 i += 1;
             }
             "--repeat" => {
@@ -233,7 +273,9 @@ fn parse() -> Args {
             "-h" | "--help" => {
                 println!(
                     "core_bench --rom PATH [--state PATH] [--frames N] [--warmup N]\n\
-                                [--workers N] [--repeat N] [--no-pixels] [--audio]\n\
+                                [--workers N] [--instances N] [--chunk N]\n\
+                                [--warm-seconds T]\n\
+                                [--repeat N] [--no-pixels] [--audio]\n\
                                 [--speed-mode] [--speed SPEC]\n\
                                 [--no-audio-out] [--reset-every N] [--json]\n\
                                 [--breakdown]   (needs --features profile)"
@@ -289,6 +331,18 @@ struct Run {
     /// contention the frames do, which is the honest figure for a swarm that
     /// starts its instances all at once.
     startup_seconds: f64,
+    /// Frames this worker ran in its timed section, summed over every machine
+    /// it owns. Equal to `--frames` in the one-machine-per-worker shape and
+    /// `--frames x machines` in the pool shape, so every rate below divides by
+    /// the work that was actually done rather than by an assumed shape.
+    frames_run: u64,
+    /// The instant this worker reached the start gate.
+    ///
+    /// **"Time to have them all running" is `max(ready_at) - spawn`, and it is
+    /// not the startup figure above.** That one is per machine and excludes
+    /// thread creation; this one is the wall a caller waits before the swarm
+    /// is fully live, which is what decides whether a fan-out is usable.
+    ready_at: Instant,
 }
 
 fn one_worker(rom: &Arc<[u8]>, state: Option<&[u8]>, a: &Args, start: &Barrier) -> Run {
@@ -324,8 +378,22 @@ fn one_worker(rom: &Arc<[u8]>, state: Option<&[u8]>, a: &Args, start: &Barrier) 
     gb.frame();
     let startup_seconds = boot.elapsed().as_secs_f64();
 
+    // **"Running" is built and drawing frames, not warmed up.** Everything
+    // below is scaffolding for the measurement; a caller asking when its swarm
+    // is live means this instant, so the warm-up must not be inside it.
+    let ready_at = Instant::now();
+
     for _ in 1..a.warmup.max(1) {
         gb.frame();
+    }
+
+    if a.warm_seconds > 0.0 {
+        let until = Instant::now();
+        while until.elapsed().as_secs_f64() < a.warm_seconds {
+            for _ in 0..64 {
+                gb.frame();
+            }
+        }
     }
 
     // **Every worker finishes warming up before the wall clock starts.**
@@ -381,6 +449,145 @@ fn one_worker(rom: &Arc<[u8]>, state: Option<&[u8]>, a: &Args, start: &Barrier) 
         wram_hash: fnv1a(&wram),
         span: (t0, t1),
         startup_seconds,
+        frames_run: a.frames as u64,
+        ready_at,
+    }
+}
+
+/// One worker owning **several** machines, round-robining over them `--chunk`
+/// frames at a time.
+///
+/// ## Why this shape exists
+///
+/// "Hundreds of concurrent copies" has two implementations and they do not
+/// measure the same thing. One thread per machine leaves the interleaving to
+/// the kernel: at 500 machines on 20 cores every core cycles through 25 of
+/// them, each timeslice starts on a cold cache, and 500 threads have to be
+/// created before any of them plays a frame. A pool of `--workers` threads
+/// each owning `instances / workers` machines keeps every machine live and
+/// advancing while making the interleaving *explicit* — and therefore
+/// measurable, which is the point.
+///
+/// **`--chunk` is the instrument.** Machines, threads and total frames are
+/// held fixed and only the interleaving granularity moves, so a difference
+/// between `--chunk 1` and `--chunk 1000` is locality and cannot be anything
+/// else — not scheduling, not memory, not thread count. That is the one
+/// experiment thread-per-instance cannot run.
+fn one_pool_worker(
+    rom: &Arc<[u8]>,
+    state: Option<&[u8]>,
+    a: &Args,
+    machines: usize,
+    start: &Barrier,
+) -> Run {
+    let boot = Instant::now();
+    let mut gbs: Vec<Gameboy> = Vec::with_capacity(machines);
+    for _ in 0..machines {
+        let mut gb = Gameboy::new(Arc::clone(rom), None);
+        if a.audio {
+            gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+        }
+        gb.set_render_audio(a.audio_out);
+        if let Some(bytes) = state {
+            gb.load_state(bytes).expect("save state did not load");
+        }
+        gb.set_render_pixels(!a.no_pixels);
+        apply_speed(&mut gb, &a.speed);
+        gb.frame();
+        gbs.push(gb);
+    }
+    // Per **machine**, so it is comparable with the one-machine-per-worker
+    // shape rather than being however many machines this thread happened to
+    // be given.
+    let startup_seconds = boot.elapsed().as_secs_f64() / machines as f64;
+
+    let picture = match gbs[0].render_mode() {
+        terminalgb::ppu::RenderMode::Accurate => "identical",
+        terminalgb::ppu::RenderMode::Fast => "standard",
+    };
+    let timing = gbs[0].speed_flags().spec();
+
+    let ready_at = Instant::now();
+
+    for _ in 1..a.warmup.max(1) {
+        for gb in gbs.iter_mut() {
+            gb.frame();
+        }
+    }
+    if a.warm_seconds > 0.0 {
+        let until = Instant::now();
+        while until.elapsed().as_secs_f64() < a.warm_seconds {
+            for gb in gbs.iter_mut() {
+                for _ in 0..64 {
+                    gb.frame();
+                }
+            }
+        }
+    }
+
+    start.wait();
+
+    let episode: Option<Vec<u8>> = if a.reset_every > 0 {
+        Some(gbs[0].save_state())
+    } else {
+        None
+    };
+
+    let c0 = thread_cpu_nanos();
+    let t0 = Instant::now();
+    let mut done: u32 = 0;
+    while done < a.frames {
+        let k = a.chunk.min(a.frames - done);
+        for gb in gbs.iter_mut() {
+            for j in 0..k {
+                gb.frame();
+                if let Some(bytes) = &episode {
+                    if (done + j + 1) % a.reset_every == 0 {
+                        gb.load_state(bytes).expect("reset");
+                    }
+                }
+            }
+        }
+        done += k;
+    }
+    let t1 = Instant::now();
+    let seconds = (t1 - t0).as_secs_f64();
+    let cpu_seconds = match (c0, thread_cpu_nanos()) {
+        (Some(x), Some(y)) if y > x => Some((y - x) as f64 / 1e9),
+        _ => None,
+    };
+
+    // Every machine here ran the same cartridge from the same state with no
+    // input, so they must agree byte for byte. Checking that is free and it is
+    // the one thing that would say the pool had corrupted a machine.
+    let mut frame_hash = 0u64;
+    let mut wram_hash = 0u64;
+    for gb in gbs.iter_mut() {
+        let mut wram = Vec::with_capacity(0x2000);
+        for addr in 0xC000u32..0xE000 {
+            wram.push(gb.peek(addr as u16));
+        }
+        let (f, w) = (fnv1a(gb.image()), fnv1a(&wram));
+        if frame_hash == 0 {
+            frame_hash = f;
+            wram_hash = w;
+        } else {
+            assert_eq!(f, frame_hash, "machines in one pool diverged (frame)");
+            assert_eq!(w, wram_hash, "machines in one pool diverged (wram)");
+        }
+    }
+
+    Run {
+        picture,
+        timing,
+        seconds,
+        cpu_seconds,
+        frame_hash,
+        wram_hash,
+        span: (t0, t1),
+        startup_seconds,
+        frames_run: a.frames as u64 * machines as u64,
+        ready_at,
     }
 }
 
@@ -648,6 +855,30 @@ fn main() {
     let mut timing = String::from("?");
     let mut hashes_agree = true;
 
+    // **A pool with no worker count asked for is one thread holding every
+    // machine**, which is a legitimate measurement (perfect locality) and
+    // almost never the one somebody means by "hundreds at once". Default it to
+    // the core count instead, and say so.
+    let mut a = a;
+    if a.instances > 0 && !a.workers_given {
+        a.workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+    }
+    let a = a;
+    // Machines per worker, remainder spread over the low workers so no thread
+    // is ever more than one machine behind another.
+    let per_worker: Vec<usize> = (0..a.workers)
+        .map(|w| {
+            if a.instances == 0 {
+                1
+            } else {
+                a.instances / a.workers + usize::from(w < a.instances % a.workers)
+            }
+        })
+        .collect();
+    let total_instances: usize = per_worker.iter().sum();
+
+    let mut best_ready_ms = f64::INFINITY;
+
     for _ in 0..a.repeat {
         let busy = Arc::new(AtomicU64::new(0));
         let wallbusy = Arc::new(AtomicU64::new(0));
@@ -655,7 +886,11 @@ fn main() {
         // at the same instant every worker's timed section does.
         let gate = Arc::new(Barrier::new(a.workers + 1));
         let mut handles = Vec::with_capacity(a.workers);
-        for _ in 0..a.workers {
+        // Read before anything is spawned, so nothing this thread competes
+        // with exists yet and the descheduling hazard `Run::span` documents
+        // cannot touch it.
+        let spawn_t0 = Instant::now();
+        for &machines in &per_worker {
             let rom = Arc::clone(&rom);
             let state = Arc::clone(&state);
             let busy = Arc::clone(&busy);
@@ -666,7 +901,11 @@ fn main() {
                 state: None,
                 frames: a.frames,
                 warmup: a.warmup,
+                warm_seconds: a.warm_seconds,
                 workers: 1,
+                workers_given: true,
+                instances: a.instances,
+                chunk: a.chunk,
                 repeat: 1,
                 no_pixels: a.no_pixels,
                 speed: a.speed.clone(),
@@ -677,7 +916,11 @@ fn main() {
                 breakdown: false,
             };
             handles.push(std::thread::spawn(move || {
-                let r = one_worker(&rom, state.as_deref(), &args, &gate);
+                let r = if args.instances == 0 {
+                    one_worker(&rom, state.as_deref(), &args, &gate)
+                } else {
+                    one_pool_worker(&rom, state.as_deref(), &args, machines, &gate)
+                };
                 busy.fetch_add(
                     (r.cpu_seconds.unwrap_or(r.seconds) * 1e9) as u64,
                     Ordering::Relaxed,
@@ -702,17 +945,29 @@ fn main() {
         // theirs and what every other ms/frame figure in this repository means.
         // See `thread_cpu_nanos` for why it is not the wall clock.
         on_cpu_clock = results.iter().all(|r| r.cpu_seconds.is_some());
+        // **Divide by the frames that were actually run, not by an assumed
+        // shape.** A pool worker runs `frames x machines` of them, so
+        // `workers x frames` would understate the cost per frame by exactly
+        // the pool's depth.
+        let ran: f64 = results.iter().map(|r| r.frames_run as f64).sum();
         let busy_total = busy.load(Ordering::Relaxed) as f64 / 1e9;
-        let ms = busy_total / (a.workers as f64) / (a.frames as f64) * 1e3;
-        let wall_ms = wallbusy.load(Ordering::Relaxed) as f64
-            / 1e9
-            / (a.workers as f64)
-            / (a.frames as f64)
+        let ms = busy_total / ran * 1e3;
+        let wall_ms = wallbusy.load(Ordering::Relaxed) as f64 / 1e9 / ran * 1e3;
+        // **When the swarm was fully live**, from before the first spawn to
+        // the last worker reaching the gate — thread creation, every machine
+        // built, and a first frame drawn on each.
+        let ready = results
+            .iter()
+            .map(|r| (r.ready_at - spawn_t0).as_secs_f64())
+            .fold(0.0f64, f64::max)
             * 1e3;
+        if ready < best_ready_ms {
+            best_ready_ms = ready;
+        }
         // Aggregate steps per second is wall-clock across the whole fan-out —
         // the community convention, which counts every environment in your
         // favour.
-        let sps = (a.workers as f64) * (a.frames as f64) / wall;
+        let sps = ran / wall;
 
         // **The slowest worker's startup is the one that matters**: a swarm is
         // ready when its last machine is, not when its median one is.
@@ -762,14 +1017,18 @@ fn main() {
              \"workers\":{},\"frames\":{},\"no_pixels\":{},\"audio\":{},\"audio_out\":{},\
              \"picture\":\"{picture}\",\"timing\":\"{timing}\",\"cycle_accurate\":{cycle_accurate},\
              \"frame_hash\":\"{frame_hash:#018x}\",\"wram_hash\":\"{wram_hash:#018x}\",\
-             \"deterministic\":{hashes_agree},\"startup_ms\":{:.2},\"peak_rss_kib\":{}}}",
+             \"deterministic\":{hashes_agree},\"startup_ms\":{:.2},\"peak_rss_kib\":{},             \"instances\":{},\"chunk\":{},\"ready_ms\":{:.1},\"sps_per_instance\":{:.1}}}",
             a.workers,
             a.frames,
             a.no_pixels,
             a.audio,
             a.audio_out,
             worst_startup * 1e3,
-            peak_rss
+            peak_rss,
+            total_instances,
+            a.chunk,
+            best_ready_ms,
+            best_sps / total_instances as f64
         );
     } else {
         println!("rom            {rom_path}");
@@ -777,9 +1036,15 @@ fn main() {
             println!("state          {p}");
         }
         println!(
-            "workers        {}   frames/worker {}   best of {}",
+            "workers        {}   frames/machine {}   best of {}",
             a.workers, a.frames, a.repeat
         );
+        if a.instances > 0 {
+            println!(
+                "instances      {total_instances} live machines, {} per worker,                  interleaved every {} frame(s)",
+                per_worker[0], a.chunk
+            );
+        }
         // **Both mode axes, every run, from the machine that ran.** A
         // millisecond figure from this program is meaningless without them and
         // they are not recoverable from a flag somebody typed hours ago — see
@@ -788,7 +1053,9 @@ fn main() {
         if cycle_accurate {
             println!("timing         accurate   (cycle-accurate: peripherals stepped per bus access)");
         } else {
-            println!("timing         *** FAST — NOT CYCLE-ACCURATE *** shortcuts: {timing}");
+            println!(
+                "timing         *** FAST — NOT CYCLE-ACCURATE *** shortcuts: {timing}"
+            );
             println!("               conformance measured in this mode is NOT the accurate machine's.");
         }
         println!("pixels         {}", if a.no_pixels { "off" } else { "on" });
@@ -817,9 +1084,21 @@ fn main() {
             );
         }
         println!(
-            "aggregate      {best_sps:.0} steps/s across {} worker(s)",
+            "aggregate      {best_sps:.0} steps/s across {total_instances} machine(s)              on {} thread(s)",
             a.workers
         );
+        // **What one copy gets while the others are running.** The aggregate
+        // alone cannot say whether a fan-out is delivering a usable machine to
+        // each caller or starving all of them equally.
+        let share = best_sps / total_instances as f64;
+        println!(
+            "  each machine {share:.0} frames/s   {:.1}x real time",
+            share / DMG_HZ
+        );
+        // **When every machine was live**, not when the median one was — see
+        // `Run::ready_at`. Thread creation is inside this and outside
+        // `startup`, which is why the two diverge so hard at scale.
+        println!("ready          {best_ready_ms:.0} ms until all {total_instances} were running");
         // **What a fan-out is actually bounded by**, which stops being
         // ms/frame the moment there is more than a handful of machines.
         println!(
