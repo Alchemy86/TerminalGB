@@ -984,11 +984,18 @@ fn main() {
 
         picture = results[0].picture;
         timing = results[0].timing.clone();
+        // **A time-based warm-up ends every worker on a different frame**, so
+        // the machines are not at a common index and comparing their hashes
+        // across workers answers a question nobody asked. Reporting that as
+        // "NOT DETERMINISTIC" would send somebody hunting a bug this example
+        // invented, so the comparison is skipped and said to be skipped.
         for r in &results {
             if frame_hash == 0 {
                 frame_hash = r.frame_hash;
                 wram_hash = r.wram_hash;
-            } else if r.frame_hash != frame_hash || r.wram_hash != wram_hash {
+            } else if a.warm_seconds == 0.0
+                && (r.frame_hash != frame_hash || r.wram_hash != wram_hash)
+            {
                 hashes_agree = false;
             }
         }
@@ -1017,12 +1024,20 @@ fn main() {
              \"workers\":{},\"frames\":{},\"no_pixels\":{},\"audio\":{},\"audio_out\":{},\
              \"picture\":\"{picture}\",\"timing\":\"{timing}\",\"cycle_accurate\":{cycle_accurate},\
              \"frame_hash\":\"{frame_hash:#018x}\",\"wram_hash\":\"{wram_hash:#018x}\",\
-             \"deterministic\":{hashes_agree},\"startup_ms\":{:.2},\"peak_rss_kib\":{},             \"instances\":{},\"chunk\":{},\"ready_ms\":{:.1},\"sps_per_instance\":{:.1}}}",
+             \"deterministic\":{},\"startup_ms\":{:.2},\"peak_rss_kib\":{},\
+             \"instances\":{},\"chunk\":{},\"ready_ms\":{:.1},\"sps_per_instance\":{:.1}}}",
             a.workers,
             a.frames,
             a.no_pixels,
             a.audio,
             a.audio_out,
+            if a.warm_seconds > 0.0 {
+                "\"not-checked\""
+            } else if hashes_agree {
+                "true"
+            } else {
+                "false"
+            },
             worst_startup * 1e3,
             peak_rss,
             total_instances,
@@ -1121,7 +1136,9 @@ fn main() {
         println!("wram hash      {wram_hash:#018x}");
         println!(
             "workers agree  {}",
-            if hashes_agree {
+            if a.warm_seconds > 0.0 {
+                "not checked (--warm-seconds leaves each worker on its own frame)"
+            } else if hashes_agree {
                 "yes"
             } else {
                 "NO — NOT DETERMINISTIC"
