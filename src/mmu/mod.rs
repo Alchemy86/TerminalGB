@@ -1261,23 +1261,14 @@ impl<'a> MemoryManagementUnit<'a> {
             if crate::profile::bus_tick_skipped() {
                 return;
             }
-            self.timer.do_mcycle_now();
-            // Every one of these is a *test* before a store, not a store. This
-            // runs once per memory access of every instruction and the answer
-            // is almost always "nothing happened": an unconditional
-            // read-modify-write of `intf` and an unconditional `mem::take` of
-            // the serial edges are four dirty cache lines a bus cycle for two
-            // events that occur a handful of times a frame.
-            if self.timer.interrupt != 0 {
-                self.intf |= self.timer.interrupt;
-                self.timer.interrupt = 0;
-            }
-            // The link port's shift clock is divided from the same counter, so
-            // it has to be drained here, *before* the access — otherwise an
-            // `SC` write landing on an edge M-cycle would consume that edge and
-            // finish a shift too early.
-            if self.timer.serial_edge_pending() {
-                self.serial_shift();
+            // The counter owes an M-cycle. It is *applied* only when it could
+            // do something this access can tell apart — see [`Timer::pending`]
+            // — so the common case here is an add and a predicted branch, not
+            // a step of the counter followed by two loads from the far end of
+            // a 150 KiB struct for events that happen a handful of times a
+            // frame.
+            if self.timer.tick_mcycle() {
+                self.timer_landed();
             }
             // The APU clock advances per-access too, so a wave-RAM or NR5x
             // access lands on its exact sub-instruction cycle (Blargg
@@ -1356,6 +1347,42 @@ impl<'a> MemoryManagementUnit<'a> {
         }
     }
 
+    /// The system counter has just been brought up to date and it did
+    /// something: publish the timer's interrupt and hand the link port any
+    /// shift-clock edges.
+    ///
+    /// Out of line because it runs only when [`Timer::tick_mcycle`] says the
+    /// counter reached its horizon, which on a cartridge that never enables
+    /// the timer is a handful of times a frame.
+    #[cold]
+    #[inline(never)]
+    fn timer_landed(&mut self) {
+        if self.timer.interrupt != 0 {
+            self.intf |= self.timer.interrupt;
+            self.timer.interrupt = 0;
+        }
+        // The link port's shift clock is divided from the same counter, so it
+        // is drained here, *before* the access that syncs — otherwise an `SC`
+        // write landing on an edge M-cycle would consume that edge and finish
+        // a shift too early.
+        if self.timer.serial_edge_pending() {
+            self.serial_shift();
+        }
+    }
+
+    /// Bring the system counter up to the machine's real position, and act on
+    /// whatever that turned out to have done.
+    ///
+    /// **This is the observation half of [`Timer::pending`]** and it guards
+    /// every path that can see the counter or an interrupt it raised.
+    #[inline]
+    fn sync_timer(&mut self) {
+        if self.timer.needs_sync() {
+            self.timer.sync();
+            self.timer_landed();
+        }
+    }
+
     /// Hand the link port the shift-clock edges the system counter has just
     /// produced, and publish any interrupt that finishes a transfer.
     #[inline]
@@ -1365,6 +1392,9 @@ impl<'a> MemoryManagementUnit<'a> {
             self.serial.shift_clock(edges);
             self.intf |= self.serial.interrupt;
             self.serial.interrupt = 0;
+            // A transfer that has just finished stops pinning the counter to
+            // one M-cycle at a time.
+            self.timer.set_serial_hold(self.serial.transfer_in_flight());
         }
     }
 
@@ -1843,6 +1873,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// observations and a save state is an observation.
     pub(crate) fn flush_for_observer(&mut self) {
         self.flush_pending();
+        self.sync_timer();
         self.flush_gpu();
     }
 
@@ -2135,6 +2166,9 @@ impl<'a> MemoryManagementUnit<'a> {
         if self.pending_ticks != 0 {
             self.run_pending();
         }
+        // The halt batch asks the timer how far it may run, and that answer is
+        // only meaningful once the counter is where the machine is.
+        self.sync_timer();
     }
 
     /// The flush itself, kept out of line so the per-access path is one
@@ -2173,14 +2207,8 @@ impl<'a> MemoryManagementUnit<'a> {
         self.gpu.clear_hblank_latch();
         let timerticks = cputicks.saturating_sub(self.bus_ticked);
         self.bus_ticked = 0;
-        self.timer.do_cycle_cold(timerticks);
-        if self.timer.interrupt != 0 {
-            self.intf |= self.timer.interrupt;
-            self.timer.interrupt = 0;
-        }
-        if self.timer.serial_edge_pending() {
-            self.serial_shift();
-        }
+        self.timer.tick_ticks(timerticks);
+        self.sync_timer();
         if self.keypad.interrupt != 0 {
             self.intf |= self.keypad.interrupt;
             self.keypad.interrupt = 0;
@@ -2320,7 +2348,11 @@ impl<'a> MemoryManagementUnit<'a> {
         );
         let timerticks = cputicks.saturating_sub(self.bus_ticked);
         self.bus_ticked = 0;
-        self.timer.do_cycle(timerticks);
+        // The instruction's remaining M-cycles join whatever its accesses
+        // already owed; the counter is applied only if that reached its
+        // horizon. The landing is deferred to exactly where the folds used to
+        // be so the order against OAM DMA is unchanged.
+        let timer_landed = self.timer.tick_ticks(timerticks);
         #[cfg(feature = "profile")]
         let dma = !crate::profile::oam_dma_skipped();
         #[cfg(not(feature = "profile"))]
@@ -2328,15 +2360,8 @@ impl<'a> MemoryManagementUnit<'a> {
         if dma && self.oam_dma_busy {
             self.oam_dma_cycles(timerticks);
         }
-        if self.timer.interrupt != 0 {
-            self.intf |= self.timer.interrupt;
-            self.timer.interrupt = 0;
-        }
-        // Gated for the same reason `bus_tick` gates it: draining
-        // unconditionally dirties a cache line once per instruction for an
-        // event that happens ~137 times a frame.
-        if self.timer.serial_edge_pending() {
-            self.serial_shift();
+        if timer_landed {
+            self.timer_landed();
         }
 
         if self.keypad.interrupt != 0 {
@@ -2541,11 +2566,23 @@ impl<'a> MemoryManagementUnit<'a> {
                 }
             }
             0xFF00 => self.joypad_read(),
-            0xFF01..=0xFF02 => self.serial.rb(address),
-            0xFF04..=0xFF07 => self.timer.rb(address),
+            0xFF01..=0xFF02 => {
+                // The shift clock is divided from the system counter.
+                self.sync_timer();
+                self.serial.rb(address)
+            }
+            0xFF04..=0xFF07 => {
+                self.sync_timer();
+                self.timer.rb(address)
+            }
             // IF: only 5 interrupt bits exist; the unused top 3 always read 1
             // (Pan Docs "Interrupts").
-            0xFF0F => self.intf | 0b11100000,
+            0xFF0F => {
+                // `IF` bit 2 is the timer's, so the counter has to have landed
+                // before the answer is composed.
+                self.sync_timer();
+                self.intf | 0b11100000
+            }
             0xFF10..=0xFF3F => {
                 // Catch the APU up to "now" first: NR52 status, length and
                 // sweep state are otherwise evaluated lazily in ~45 ms blocks
@@ -2818,7 +2855,13 @@ impl<'a> MemoryManagementUnit<'a> {
                     sgb.write(value);
                 }
             }
-            0xFF01..=0xFF02 => self.serial.wb(address, value),
+            0xFF01..=0xFF02 => {
+                // Drain any edge the counter owes *before* `SC` arms a
+                // transfer, or the new transfer consumes a stale one.
+                self.sync_timer();
+                self.serial.wb(address, value);
+                self.timer.set_serial_hold(self.serial.transfer_in_flight());
+            }
             0xFF04..=0xFF07 => {
                 // A DIV reset is also an APU event: the frame sequencer is
                 // clocked by the falling edge of a DIV bit, so zeroing DIV
@@ -2874,7 +2917,12 @@ impl<'a> MemoryManagementUnit<'a> {
                 self.flush_gpu();
                 self.gpu.wb(address, value)
             }
-            0xFF0F => self.intf = value,
+            0xFF0F => {
+                // A write replaces the whole register, so anything the counter
+                // still owes must land first or it would be overwritten.
+                self.sync_timer();
+                self.intf = value;
+            }
             0xFF70 => {
                 self.wrambank = match value & 0x7 {
                     0 => 1,

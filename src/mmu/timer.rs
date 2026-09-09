@@ -69,6 +69,38 @@ pub struct Timer {
     /// `MemoryManagementUnit::bus_tick`), so it never holds a value across a
     /// save point and is deliberately not serialised.
     serial_edges: u8,
+    /// M-cycles the counter has been promised but not yet advanced by.
+    ///
+    /// The counter is the emulator's most-stepped piece of state — one M-cycle
+    /// per memory access of every instruction — and essentially nothing looks
+    /// at it: Pokémon Blue reads a timer register **twice a frame** and writes
+    /// one five times in a 7,168-frame run, while `do_mcycle` is asked 5,943
+    /// times a frame. So the steps are counted here and applied in closed form
+    /// ([`Timer::batch_mcycles`]) when something could actually tell, which is
+    /// the same trade [`crate::gpu::Gpu::defer_dots`] makes for the PPU.
+    ///
+    /// **Never serialised**: a save state is an observation and
+    /// [`MemoryManagementUnit::flush_for_observer`] empties this first, so it
+    /// is always zero at a save point.
+    ///
+    /// [`MemoryManagementUnit::flush_for_observer`]: crate::mmu::MemoryManagementUnit
+    pending: u32,
+    /// How far [`Timer::pending`] may run before the counter does something a
+    /// program can observe *without asking* — a `TIMA` overflow, which raises
+    /// an interrupt, or a serial shift while the link port is holding one.
+    ///
+    /// Everything else it does is observable only through a register read or
+    /// an `IF` read, and both of those sync first. Derived from `tac`, `tima`
+    /// and `div` by [`Timer::idle_mcycles`]; **not state**, and rebuilt at
+    /// every flush.
+    horizon: u32,
+    /// The link port is mid-transfer, so a shift edge is observable on the
+    /// M-cycle it happens and the counter may not run ahead of one.
+    ///
+    /// With no transfer in flight [`crate::mmu::serial::Serial::shift_clock`]
+    /// returns on its first line, so the edges are inert and the counter is
+    /// free to run to the next `TIMA` event.
+    serial_hold: bool,
     /// Set on the M-cycle `TIMA` overflowed: `TMA` is copied in on the next one.
     reload_pending: bool,
     /// True for exactly the M-cycle in which `TMA` was copied into `TIMA`.
@@ -133,6 +165,7 @@ impl Timer {
     pub fn set_boot_counter(&mut self, observed: u16) {
         self.div = observed.wrapping_sub(4);
         self.prev_div = self.div;
+        self.refresh_horizon();
     }
 
     /// The system counter **as the current M-cycle's bus access observes it**.
@@ -146,7 +179,11 @@ impl Timer {
         self.div.wrapping_add(4)
     }
 
-    pub fn rb(&self, a: u16) -> u8 {
+    pub fn rb(&mut self, a: u16) -> u8 {
+        // The counter may be running behind — see [`Timer::pending`]. Nothing
+        // may read a register off a stale one, and this is cheap: Pokémon Blue
+        // reads a timer register twice a frame.
+        self.sync();
         match a {
             0xFF04 => (self.div >> 8) as u8,
             0xFF05 => self.tima,
@@ -157,6 +194,15 @@ impl Timer {
     }
 
     pub fn wb(&mut self, a: u16, v: u8) {
+        // `TAC`'s latch reads `prev_div`, and every one of these registers
+        // moves the horizon, so the counter lands before the write and the
+        // horizon is re-derived after it.
+        self.sync();
+        self.wb_inner(a, v);
+        self.refresh_horizon();
+    }
+
+    fn wb_inner(&mut self, a: u16, v: u8) {
         match a {
             // Writing DIV clears the whole 16-bit counter. If the tap bit was
             // high this is a falling edge and TIMA increments — that is the
@@ -241,6 +287,10 @@ impl Timer {
         self.reload_pending = r.bool()?;
         self.reloading = r.bool()?;
         self.interrupt = r.u8()?;
+        // Neither is state: a save point is always synced, and the horizon is
+        // derived from the three registers just restored.
+        self.pending = 0;
+        self.refresh_horizon();
         Ok(())
     }
 
@@ -252,13 +302,101 @@ impl Timer {
     /// asked ~17,000 times a frame in a busy game.
     ///
     /// [`MemoryManagementUnit::bus_tick`]: crate::mmu::MemoryManagementUnit
+    /// The counter owes an M-cycle. Returns **true** when that landed the
+    /// counter on something the caller has to look at — an interrupt, or a
+    /// serial edge — and false, which is almost always, when it did not.
+    ///
+    /// This is the per-access path and it is two instructions in the common
+    /// case. See [`Timer::pending`] for why the counter is allowed to lag.
     #[inline]
-    pub(crate) fn do_mcycle_now(&mut self) {
+    pub(crate) fn tick_mcycle(&mut self) -> bool {
         #[cfg(feature = "profile")]
         if crate::profile::timer_skipped() {
-            return;
+            return false;
         }
-        self.do_mcycle();
+        self.pending += 1;
+        if self.pending >= self.horizon {
+            self.sync_cold();
+            return true;
+        }
+        false
+    }
+
+    /// [`Timer::tick_mcycle`] for a whole instruction's remaining T-cycles.
+    ///
+    /// A span that is not a whole number of M-cycles cannot be counted, so it
+    /// takes the slow path — nothing in this core produces one, but
+    /// `do_cycle`'s partial-cycle arm exists and this must not silently drop it.
+    #[inline]
+    pub(crate) fn tick_ticks(&mut self, ticks: u32) -> bool {
+        #[cfg(feature = "profile")]
+        if crate::profile::timer_skipped() {
+            return false;
+        }
+        if ticks & 3 != 0 {
+            self.sync();
+            self.do_cycle_cold(ticks);
+            self.refresh_horizon();
+            return true;
+        }
+        self.pending += ticks >> 2;
+        if self.pending >= self.horizon {
+            self.sync_cold();
+            return true;
+        }
+        false
+    }
+
+    /// Is the counter behind where the machine has actually reached?
+    #[inline]
+    pub(crate) fn needs_sync(&self) -> bool {
+        self.pending != 0
+    }
+
+    /// Bring the counter up to the machine's real position.
+    ///
+    /// **Every path that can observe the timer calls this first**: a read or a
+    /// write of `$FF04-$FF07`, a read or a write of `IF`, the link port's
+    /// registers, the halt horizon, and a save state.
+    #[inline]
+    pub(crate) fn sync(&mut self) {
+        if self.pending != 0 {
+            self.sync_cold();
+        }
+    }
+
+    /// [`Timer::sync`]'s body, kept out of line so the per-access path is an
+    /// add, a compare and a predicted branch.
+    #[cold]
+    #[inline(never)]
+    fn sync_cold(&mut self) {
+        let n = std::mem::take(&mut self.pending);
+        self.do_cycle_inner(4 * n);
+        self.refresh_horizon();
+    }
+
+    /// The link port has started or finished shifting; the counter may or may
+    /// not run ahead of a shift edge from here.
+    pub(crate) fn set_serial_hold(&mut self, held: bool) {
+        if self.serial_hold != held {
+            self.sync();
+            self.serial_hold = held;
+            self.refresh_horizon();
+        }
+    }
+
+    /// Recompute how far the counter may run unobserved.
+    ///
+    /// Capped so `pending` cannot grow without bound on a cartridge that never
+    /// enables the timer — `batch_mcycles` counts in `u32` and a bounded span
+    /// keeps that argument trivially true.
+    fn refresh_horizon(&mut self) {
+        const HORIZON_CAP: u32 = 0x1_0000;
+        self.horizon = if self.serial_hold {
+            1
+        } else {
+            self.idle_mcycles_raw().min(HORIZON_CAP)
+        };
     }
 
     fn do_mcycle(&mut self) {
@@ -309,6 +447,14 @@ impl Timer {
     /// them, and the interrupt lands one M-cycle after the last. A reload
     /// already pending *is* that next M-cycle.
     pub(crate) fn idle_mcycles(&self) -> u32 {
+        // Answer for where the counter *will* be once `pending` lands, so a
+        // caller never has to know whether a sync is outstanding.
+        self.idle_mcycles_raw().saturating_sub(self.pending)
+    }
+
+    /// [`Timer::idle_mcycles`] measured from the counter as it currently
+    /// stands, i.e. ignoring [`Timer::pending`]. Only the horizon wants this.
+    fn idle_mcycles_raw(&self) -> u32 {
         if self.reload_pending || self.reloading {
             return 1;
         }
@@ -397,7 +543,9 @@ impl Timer {
     /// `docs/measured/speed-ledger.md` §3a, one level down.
     #[inline]
     pub fn do_cycle(&mut self, ticks: u32) {
+        self.sync();
         self.do_cycle_inner(ticks);
+        self.refresh_horizon();
     }
 
     /// [`Timer::do_cycle`] behind a call, for the horizon batch's flush.
@@ -576,7 +724,7 @@ mod tests {
     ///
     /// Each ROM is `jp; jp; NOP × N; LDH A,($04)` from `$0100`; N = 13 wants
     /// `DIV = $1E`, N = 14 wants `$1F`. Counted in real bus accesses (each
-    /// `NOP` is one M-cycle, matching [`Timer::do_mcycle_now`] one for one)
+    /// `NOP` is one M-cycle, matching [`Timer::tick_mcycle`] one for one)
     /// the read lands on M-cycle 24 for N = 13 and 25 for N = 14: the two
     /// `jp`s cost 4 M-cycles each *before* the first `NOP`, and the `LDH`
     /// costs 3 more *after* the last one — 8 + N + 3.
@@ -586,11 +734,14 @@ mod tests {
     fn a_genuine_cgb_cartridge_boots_div_where_gambatte_measures_it() {
         let mut t = Timer::default();
         t.set_boot_counter(crate::mmu::CGB_BOOT_SYSTEM_COUNTER);
+        // `tick_mcycle` is the per-access path, so this also pins that the
+        // deferred counter reads back exactly where the stepped one did:
+        // `rb` syncs, and the answer is the same M-cycle for M-cycle.
         for _ in 0..24 {
-            t.do_mcycle_now();
+            t.tick_mcycle();
         }
         assert_eq!(t.rb(0xFF04), 0x1E, "13 NOPs (M-cycle 24)");
-        t.do_mcycle_now();
+        t.tick_mcycle();
         assert_eq!(t.rb(0xFF04), 0x1F, "14 NOPs (M-cycle 25)");
     }
 
