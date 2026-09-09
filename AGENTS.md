@@ -3566,9 +3566,16 @@ across every configuration measured.
   machine that never stopped drawing. That is what action repetition rests on: skip the
   intermediate frames, ask for the one the policy will look at. Toggling *mid*-frame leaves that
   frame half-drawn, so toggle between `frame()` calls, never inside one.
-- **The per-dot engine ignores it, deliberately**: under `identical` the fetcher *is* the timing.
-  `Gpu::pixels_effective` reports what is actually happening, so a caller cannot believe it saved
-  something it is still paying for.
+- ~~**The per-dot engine ignores it, deliberately**~~ — **SUPERSEDED 2026-09-09: it honours it
+  now, and the old note conflated two things.** The *fetcher* is mode 3's timing and is not
+  optional; *painting the fetcher's result* is not the fetcher. The per-dot output skips only the
+  store into `data`, after the FIFO shift, the `SCX & 7` discard and `lx` have all run — so it
+  skips a write, never a cycle, and `Gpu::pixels_effective()` is simply `render_pixels` on both
+  engines again. Worth **10.3 %** of a collector's frame on `identical`, which had been paying it
+  since that engine became the default. Pinned by
+  `the_accurate_engine_skips_the_store_and_not_a_cycle`, which drives two accurate PPUs **dot for
+  dot** and compares all observable state; teeth proven by hoisting the skip above the FIFO shift,
+  which fails at dot 88.
 - ~~**The APU needs no equivalent and never will**~~ — **WRONG, and it cost a 14 % saving until it
   was checked.** `Sound::do_cycle` does return immediately with no player installed, but every
   scenario, longplay and swarm run **installs a `SilentPlayer` on purpose**, because a machine with
@@ -3648,11 +3655,16 @@ in every run.
   **60 %, the P/E ratio** — and `8 × 18,502 + 12 × 11,155 = 281,876` against a measured 281,879.
   Per-instance cost rises only 26 % from one worker to twenty. **There is no throughput to win in
   contention on this box; there is throughput to win in cores.**
-- **About 3.3 MiB per agent, so cores bind two hundred times sooner than memory.** Peak RSS 7 MiB
-  at one worker, 56 MiB at sixteen — ~4.5 MiB base plus 3.27 MiB an agent (a megabyte of it the
-  cloned cartridge). ~9,000 agents would fit in 30 GiB. **That is why the cartridge is NOT shared**
-  between agents: an `Arc<[u8]>` through all six mappers, the save-state codec and the FFI to save
-  a megabyte of something nothing is short of.
+- ~~**About 3.3 MiB per agent** … **That is why the cartridge is NOT shared** between agents~~ —
+  **SUPERSEDED 2026-09-09: it is shared, and it cost one type change rather than the redesign that
+  note assumed.** Every mapper already stored `Arc<[u8]>`; only the entry points forced a copy,
+  because `rom: data.into()` from a `Vec` allocates. The whole chain takes
+  `impl Into<Arc<[u8]>>` now, so a caller holding an `Arc<[u8]>` pays nothing and N machines point
+  at one allocation — and because `Vec<u8>: Into<Arc<[u8]>>`, all 185 existing call sites compile
+  unchanged and still pay exactly the one copy they always paid. Marginal RSS **1.96 → 0.385 MiB
+  an instance (5.1x)**, and startup **1.10 → 0.38 ms**. The reasoning the old note gave was sound
+  for its evidence (memory was not binding) and simply did not survive somebody asking for
+  hundreds of instances; the *cost* it assumed was the part that was wrong.
 - **A reset is not a cost: ~0.3-0.5 ms, four to seven frames' worth.** `core_bench --reset-every N`
   measures it in the unit an episode is measured in: +0.14 % at 3500, +0.72 % at 1000, +1.58 % at
   300, and *negative* at 100 and 30 (i.e. under the noise). Against a 3,500-frame episode that is
@@ -14085,6 +14097,59 @@ anchoring on a name that matches several symbols produces a *plausible, entirely
 full of the other engine's functions). Then `addr2line -a -f -C -i` for inline-aware attribution.
 After the four changes the profile is **flat — top item 7.5 %, then 7.5, 7.1, 5.5, 5.3** — which
 is this repository's own signature for "the work is now the work".
+
+## RUNNING HUNDREDS OF MACHINES — where it actually stops, and what the swarm was paying for
+
+**Measured 2026-09-09 on the 20-core box (8 P at 5.3 GHz, 2 at 6.5, 10 E at 4.6), Pokemon Blue,
+collector configuration (`--audio --no-pixels --no-audio-out`), default `identical` engine.**
+Instrument: `core_bench`, which reports startup and peak RSS as well as the two throughput units.
+
+- **THE BINDING CONSTRAINT IS CORES, AND IT IS THE ONLY ONE.** Aggregate frames/s against worker
+  count, swept both directions so drift is visible (points with >5 % up/down spread are the box
+  moving, not the emulator): 1 → 6,079; 4 → 23,848 (3.92x); 8 → 44,125 (7.26x); **16 → 78,112
+  (12.85x)**; 24 → 73,166; 64 → 79,995 (13.16x); 1024 → 60,799 (10.00x). Near-linear to the core
+  count, flat from 16 to 256, declining past 512. That is the silicon: 8 P-cores plus 10-12 E-cores
+  at ~60 % of one is about 15 P-core-equivalents, and one core is usually busy with something else.
+- **"4 THREADS BEAT 16 BY ~10x ON THIS WORKLOAD" IS FALSE — 16 IS 3.3x FASTER THAN 4.** Measured
+  twice, before and after this round's changes. Oversubscription does eventually cost: 1024 workers
+  is 22 % below the peak. But the knee is at the core count, not below it, and CPU utilisation and
+  throughput move together up to it.
+- **MEMORY AND STARTUP STOPPED BEING INTERESTING**, which is the answer to "how many fit": 0.385 MiB
+  and ~0.3 ms an instance, so a thousand machines is ~400 MiB and a third of a second of setup.
+  Hundreds of *resident* machines is not the question; hundreds *progressing* is, and that is the
+  core count with each getting a share.
+- **PIN THE COMPARISON TO ONE CORE WHEN THE BOX IS BUSY — the fan-out figure is unresolvable and
+  the per-instance one is not.** Four interleaved rounds of the real `pewter_chain corpus` workload
+  at 16 workers were decided entirely by *run order* (whichever ran first won, both directions).
+  The same comparison at `--workers 1` under `taskset -c 4` gave the same answer five times out of
+  five with under 1.3 % spread: **4,279 → 4,682 frames/s, +9.4 %**. Aggregate throughput is
+  per-instance times cores, so a pinned per-instance gain carries; a wall-clock fan-out number on a
+  loaded box carries nothing.
+- **A number that contradicts its neighbour is worth more than one that merely looks wrong.**
+  `core_bench` reported 302,988 steps/s at 2048 workers while its own per-instance CPU figure
+  implied at least 23 s across 20 cores for a run that took 29.5 s of wall — arithmetically
+  impossible. Cause: the main thread read `Instant::now()` *after* the barrier released it, and with
+  more runnable threads than cores it can be descheduled before the clock read, which shortens the
+  measured wall and inflates the figure **in our own favour** by nearly five times. Each worker now
+  timestamps its own section and the aggregate divides by `max(end) - min(start)`. Cross-check any
+  new fan-out figure against `/usr/bin/time` before believing it.
+- **`core_bench` reports startup and peak RSS now** (`startup`, `peak rss`, and `startup_ms` /
+  `peak_rss_kib` in `--json`), both read from `/proc` for the same reason `thread_cpu_nanos` is:
+  the example must build on `--no-default-features`. **A per-instance RSS figure is the DIFFERENCE
+  between two worker counts, never the quotient** — the base is ~1.8 MiB and dividing hides it.
+- **MEASURED NEGATIVE — allocating the framebuffer zeroed instead of `Box::new([0; N])` buys
+  nothing.** The stack temporary is a real hazard in a debug build and LLVM already lowers it to a
+  zeroed allocation in release: interleaved and pinned, 0.30 vs 0.295 ms of startup, at the
+  quantisation floor. Reverted rather than landed. Note also that `core_bench` hashes the
+  framebuffer, so it faults every page in and **cannot** show a resident-page saving from an
+  untouched buffer — a different instrument would be needed to measure that at all.
+- **What is left in an instance: ~400 KiB, of which ~184 KiB is accounted** — 50 KiB of inline
+  struct (`Gameboy` is 51,296 bytes: VRAM 16 KiB + WRAM 32 KiB), a 90 KiB framebuffer and 32 KiB of
+  cartridge RAM on the heap, plus ~12 KiB of APU. The remainder is thread-stack pages touched while
+  a 50 KiB machine is constructed and moved. Nobody has chased it because at 0.385 MiB an instance
+  there is no reason to.
+- **`src/gameboy.rs` trips grep's binary detection** under a UTF-8 locale, so a plain `grep` over it
+  silently prints nothing and reads as "the symbol is not there". Use `grep -a`.
 
 ## Maintaining this file
 

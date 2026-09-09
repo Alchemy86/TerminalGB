@@ -91,7 +91,11 @@ impl MBC1 {
         MBC1::build(data, rambanks, battery)
     }
 
-    fn build(data: std::sync::Arc<[u8]>, rambanks: usize, battery: Battery) -> StrResult<MBC1> {
+    fn build(
+        data: std::sync::Arc<[u8]>,
+        rambanks: usize,
+        battery: Battery,
+    ) -> StrResult<MBC1> {
         let ramsize = rambanks * 0x2000;
         let multicart = is_multicart(&data);
         // An MBC1M is 1 MiB by construction, so trust that over `0x148` — a

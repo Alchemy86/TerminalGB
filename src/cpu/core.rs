@@ -54,7 +54,10 @@ impl Cpu<'_> {
     /// `A=0x01 HL=0x014D`, and the undocumented CGB registers respond). Test
     /// ROMs that print their boot registers can tell, which is why nine
     /// Mooneye acceptance tests changed verdict when this was added.
-    pub fn new(data: impl Into<std::sync::Arc<[u8]>>, file: Option<std::path::PathBuf>) -> Self {
+    pub fn new(
+        data: impl Into<std::sync::Arc<[u8]>>,
+        file: Option<std::path::PathBuf>,
+    ) -> Self {
         Self::new_with_model(data, file, Model::Auto)
     }
 
@@ -107,7 +110,8 @@ impl Cpu<'_> {
         model: Model,
         boot: Option<crate::boot::BootRom>,
     ) -> Result<Self, &'static str> {
-        let memory = MemoryManagementUnit::new_with_boot_rom(data.into(), file, model, boot)?;
+        let memory =
+            MemoryManagementUnit::new_with_boot_rom(data.into(), file, model, boot)?;
         let registers = if memory.boot_rom_mapped() {
             Registers::at_reset()
         } else {
