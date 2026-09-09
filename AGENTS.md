@@ -12844,6 +12844,48 @@ suites match in both picture modes.
   `Gameboy::frame` to its loop header, so the line profile said "frame loop 21 %, fetch 19 %"
   and the ablations said both were worth **nothing**. The ablations were right, twice.
 
+### THE ACCURACY-TRADING SURFACE IS EXHAUSTED — 3.1 %, and the best item costs 440 rows
+
+**Full ledger with both sides measured:
+[`docs/measured/against-the-field.md`](docs/measured/against-the-field.md) §7e.** This project's
+rule is *never trade accuracy in the accurate mode*, not *never trade accuracy* — a shortcut that
+pays belongs behind `SpeedFlags` ([`docs/modes.md`](docs/modes.md)). So the whole surface was
+re-measured after the timer horizon, **and it is spent**.
+
+- **A build with EVERY remaining trade applied at once measures 0.0249 against speed mode's
+  0.0257 — 3.1 %, and still 1.60× behind PyBoy.** That is the ceiling of any new fast mode. Do
+  not go looking for a big one; there isn't one.
+- **The best single candidate is "OAM DMA does not share the CPU's bus"
+  (`dma_conflict` + `wram_bus_address`): 1.3 % accurate, 0.8 % speed, and it changes 440 Gambatte
+  rows — measured by running the suite, not estimated.** `instruction-bus` buys 8.9-12 % for
+  about six rows; this is **550 rows per point**, three orders of magnitude worse value. Rejected,
+  and the numbers are recorded so the decision is reversible in five lines.
+- **THREE SHORTCUTS ARE ACTIVELY SLOWER on the post-timer baseline and were rejected for that
+  alone**: dropping `perform_vramdma` + the HBlank latch (**−5.4 %**), an unchecked opcode fetch
+  (−1.3 %), and simplifying the frame loop's vestigial `waitticks` pair (−1.3 %). All three
+  *looked* like obvious wins in the line profile. **Re-measure a shortcut on the current baseline
+  before believing an old sizing** — the timer's removal changed which of these pay.
+- **Two ablations are structurally invalid and will mislead you**: removing the per-access OAM DMA
+  check or the per-access DMA tick leaves a transfer that never completes, so the build measures
+  4× *slower*. A 4× regression from removing work is a broken ablation, not a finding.
+
+### THE HORIZON IS SAFE BY THE HARDWARE CONTRACT, NOT BY POKÉMON BLUE'S HABITS
+
+Worth stating separately because it is the general form of the question, and the answer came from
+a primary source rather than from a game: **Nintendo's *Game Boy Programming Manual* v1.1 §2.4.3
+documents `TAC` bit 2 as the timer's stop/start control and states that `TIMA` counts on the
+input clock `TAC` selects.** So with that bit clear the counter cannot reach `TIMA` on *any*
+cartridge — the unbounded horizon is a guarantee, not an observation. §2.4.2 documents `DIV` as
+the top byte of the free-running 16-bit counter, which keeps running regardless, and is why a
+`DIV` read still syncs.
+
+**The cartridge's habits make a win large; the contract makes it correct.** When you find that
+something is "never observed", establish which of the two you have before you skip work on it.
+
+**The manual is Nintendo's: read it, learn from it, cite it — never copy its text or tables into
+this repository.** Same rule as PyBoy (LGPL-3.0). Pan Docs is the CC0 one that may be quoted
+freely. A local copy is not vendored and must not be.
+
 ### Where the standard frame is after all of it, and it is FLAT
 
 `eu-stack` by source line on a **quiet** box: `bus_tick`'s entry 9.4 %, `Cpu::operation`'s

@@ -390,6 +390,22 @@ impl Timer {
     /// Capped so `pending` cannot grow without bound on a cartridge that never
     /// enables the timer — `batch_mcycles` counts in `u32` and a bounded span
     /// keeps that argument trivially true.
+    /// **Why an unbounded horizon is a hardware guarantee and not a lucky
+    /// property of one cartridge.** `TAC` bit 2 is documented as the timer's
+    /// stop/start control, and `TIMA` counts only on the input clock `TAC`
+    /// selects — so with that bit clear the counter cannot reach `TIMA` at all,
+    /// on any cartridge (Nintendo, *Game Boy Programming Manual* v1.1, §2.4.3
+    /// "Timer Registers"; Pan Docs, ["Timer and Divider
+    /// Registers"](https://gbdev.io/pandocs/Timer_and_Divider_Registers.html)).
+    /// `DIV` keeps counting regardless — it is the top byte of the free-running
+    /// 16-bit counter (§2.4.2) — which is why a `DIV` read still syncs.
+    ///
+    /// That distinction is the whole safety argument: Pokémon Blue never
+    /// setting the bit is what makes the win *large*, and the contract above is
+    /// what makes it *correct*. When a cartridge does set it, `idle_mcycles`
+    /// returns a finite horizon and the counter is applied on the M-cycle the
+    /// overflow lands — which is what Mooneye's thirteen `acceptance/timer/*`
+    /// ROMs measure, and they are green.
     fn refresh_horizon(&mut self) {
         const HORIZON_CAP: u32 = 0x1_0000;
         self.horizon = if self.serial_hold {

@@ -382,44 +382,83 @@ bootrom, ppuengines and gbselftest all green.
 pinned `c240dd7d`), because the harness *skips* rather than fails when the Blargg ROMs are
 absent — a green run against an empty submodule would have proved nothing.
 
-### 7e. The ablation ledger — what a faster mode could still buy, and what it would cost
+### 7e. The ablation ledger — every shortcut, both sides measured
 
-Fourteen shortcuts were measured, each against the baseline stated. The point of the ledger is
-that **everything which trades accuracy and pays 2 % or more is already behind the existing
-flag**, and the one big item that was going to need a flag turned out to be free.
+The captain's rule here is not "never trade accuracy", it is **"never trade accuracy in the
+accurate mode"**: this emulator already ships modes ([`modes.md`](../modes.md),
+[`picture-modes.md`](../picture-modes.md)), and something that costs accuracy belongs behind a
+flag rather than in the bin. So every shortcut was re-measured on the post-timer baseline, and
+**both sides were measured** — what it buys *and* what it costs, in rows, not in adjectives.
 
-| shortcut | buys | costs | verdict |
-|---|---:|---|---|
-| per-access + per-instruction timer stepping | **19 %** | nothing | **taken, lossless, in the default** |
-| runaway-`PC` fault check's `fault()` load and message | 1.3 % | nothing | **taken, lossless** (the test itself still runs) |
-| peripherals per instruction, not per access | 8.9–12 % | `mem_timing`, `mem_timing-2`, `dmg_sound` 09/10/12 | already `instruction-bus`, in the preset |
-| peripherals per horizon | see §4 | as above | already `horizon-batch`, in the preset |
-| freeze the APU state machine | 7.4 % (collector) | any sound driver spinning on a length counter or `NR52` hangs | exists as `no-apu-state`, out of the preset |
-| skip the DMG OAM-corruption bug | **0.0 %** | `blargg/oam_bug` | exists as `no-oam-bug`, out of the preset |
-| serial `take_pending` per instruction | 0.8 % | the link-cable plugin partner | not worth a flag |
-| `perform_vramdma` + the HBlank latch per instruction | ~2 % | HDMA | subsumed by `horizon-batch` |
-| per-access APU accumulate / PPU hook / interrupt folds | 0 % | — | rejected |
-| frame-loop restructure (drop the vestigial `waitticks` pair) | **−1 %** | — | rejected, it is slower |
-| unchecked opcode fetch (`get_unchecked`) | 0 % | — | rejected |
-| `IDLE_BATCH_MAX` 1024 / 2048 / 4096 | ≤1.3 %, inside noise | — | rejected; **16384 changes the WRAM hash**, so the cap is not a free knob once a batch approaches frame length |
+Baselines: accurate **0.0298**, speed **0.0257**. A negative "buys" means the build was *slower*.
 
-The two remaining sub-2 % items each disable a real feature, and this project's own bar for the
-preset is *safe **and** worth having*. Three flags for ~3 % of one mode fails it.
+| shortcut | accurate | speed | what it costs | verdict |
+|---|---:|---:|---|---|
+| per-access timer step | — | — | nothing | **taken, lossless** (part of §7's 26.5 %) |
+| per-instruction timer remainder | — | — | nothing | **taken, lossless** |
+| timer interrupt + serial-edge checks per access | — | — | nothing | **taken, lossless** |
+| runaway-`PC` check's `fault()` load and message | 1.3 % | — | nothing | **taken, lossless** |
+| peripherals per instruction, not per access | 8.9–12 % | — | `mem_timing`, `mem_timing-2`, `dmg_sound` 09/10/12 | already `instruction-bus`, in the preset |
+| peripherals per horizon | §4 | — | as above | already `horizon-batch`, in the preset |
+| freeze the APU state machine | — | 7.4 % (collector) | any driver spinning on a length counter or `NR52` hangs | already `no-apu-state`, out of the preset |
+| skip the DMG OAM-corruption bug | 0.0 % | — | `blargg/oam_bug` | already `no-oam-bug`, out of the preset |
+| **OAM DMA does not share the CPU's bus** (`dma_conflict` + `wram_bus_address`) | **1.3 %** | **0.8 %** | **440 Gambatte rows** — measured, not estimated | **rejected: 550 rows per point** |
+| serial `take_pending` per instruction | 1.0 % | 0.8 % | the link cable — `gen1-link`, `LinkCable`, `bgblink` | rejected |
+| OAM-page hook in `read_at` | 0.0 % | — | `oam_bug`, the prohibited block | rejected |
+| per-access APU accumulate | 0.0 % | — | APU sub-instruction phase | rejected |
+| per-access PPU hook | 0.0 % | — | interrupt-dispatch redirect | rejected |
+| keypad + serial interrupt folds | 0.0 % | — | interrupt latency | rejected |
+| `perform_vramdma` + the HBlank latch | **−5.4 %** | — | HDMA | rejected — *slower* |
+| unchecked opcode fetch (`get_unchecked`) | **−1.3 %** | — | nothing | rejected — slower |
+| frame-loop restructure (drop the `waitticks` pair) | **−1.3 %** | — | nothing | rejected — slower |
+| per-access OAM DMA tick | — | — | — | invalid ablation: the transfer never completes |
+| `IDLE_BATCH_MAX` 1024 / 2048 / 4096 | ≤1.3 %, noise | — | **16384 changes the WRAM hash** | rejected |
 
-### 7f. What is left, and it is not bookkeeping
+**The decisive number is the ceiling.** A build with *every* trade in that table applied at once
+— OAM DMA bus conflicts, the work-RAM address override, the OAM-page hook, the link cable, the
+per-access APU and PPU hooks, the interrupt folds — measures **0.0249 on top of the speed
+preset**. That is **3.1 %**, and it is **still 1.60× behind PyBoy**.
+
+So no new flag was shipped, and the reason is a ratio rather than a principle. `instruction-bus`
+earns its place by buying 8.9–12 % for about six conformance rows. The best remaining candidate
+buys 0.8 % for **440**. Everything that genuinely pays is already behind the existing flag; what
+is left is three orders of magnitude worse value, and a flag nobody should turn on is worse than
+no flag. **The measurements are here so that decision is reversible by anyone who disagrees** —
+the change is about five lines in `SpeedFlags`.
+
+### 7f. Where the remaining gap actually is
 
 In speed mode the per-instruction bookkeeping outside the opcode is now small — the serial take
 is 0.8 %, the bus-hook flag pair 1.6 % — so a PyBoy-shaped inner loop, which checks interrupts
-**once per horizon** and then runs bare `fetch_and_execute()` (`pyboy/core/cpu.py`'s `tick`,
-read for technique and cited; none of its code is here), has a ceiling of about 6–8 % and would
-land near 0.024. That is still 1.5× behind.
+**once per horizon** and then runs bare `fetch_and_execute()` (`pyboy/core/cpu.py`'s `tick`, read
+for technique and cited; none of its code is here), has a ceiling of a few per cent and would
+land near 0.024. Applied *together* with everything in §7e it is still ~1.5× behind.
 
 **The remaining gap is the interpreter itself**: 0.0257 ms/frame over 2,487 instructions is
 **~55 host cycles an emulated instruction against PyBoy's ~33**, and
 [`docs/throughput.md`](../throughput.md) §17 has already measured the standard remedies — flag
 packing, page tables, devirtualising the mapper, `target-cpu=native`, PGO — as neutral or
 negative. Beating 0.0156 from there is a different execution model, not another pass. Said
-plainly: **we are still behind PyBoy, by 1.94× in the default mode and 1.65× in speed mode.**
+plainly: **we are still behind PyBoy, by 1.91× in the default mode and 1.65× in speed mode, and
+no combination of the liberties available closes it.**
+
+### 7g. The horizon is safe by the hardware contract, not by one game's habits
+
+The finding in §7a is a fact about Pokémon Blue — it never enables the timer — and a fact about
+one cartridge is not a licence to skip work on every cartridge. The guarantee is in Nintendo's
+own *Game Boy Programming Manual* v1.1: **§2.4.3 documents `TAC` bit 2 as the timer's stop/start
+control, and states that `TIMA` counts on the input clock `TAC` selects** — so with that bit
+clear the counter cannot reach `TIMA` at all, on any cartridge. §2.4.2 documents `DIV` as the top
+byte of the free-running 16-bit counter, which keeps counting regardless, and is why a `DIV` read
+still syncs.
+
+That is the difference between a safe optimisation and a lucky one: **the cartridge's habits make
+the win large; the contract makes it correct.** When a cartridge does set the bit,
+`Timer::idle_mcycles` returns a finite horizon — which is what Mooneye's thirteen
+`acceptance/timer/*` ROMs measure, and they are green.
+
+*(The manual is Nintendo's and is cited, never quoted or reproduced — the same rule this page
+already applies to PyBoy. Pan Docs is the CC0 reference that may be quoted freely.)*
 
 ## 5. What this changes about the goal
 
