@@ -460,14 +460,132 @@ the win large; the contract makes it correct.** When a cartridge does set the bi
 *(The manual is Nintendo's and is cited, never quoted or reproduced — the same rule this page
 already applies to PyBoy. Pan Docs is the CC0 reference that may be quoted freely.)*
 
+## 8. 2026-09-09 — mGBA measured at last, and the ordering is the accuracy ordering
+
+**mGBA had never been run here.** This page's whole argument is that a claim about another
+emulator is not a measurement, and the one native emulator this project calls its gold standard
+was the one it had never timed. [`tools/perf/mgba-bench.c`](../../tools/perf/mgba-bench.c) is the
+sibling of the SameBoy bench and calls only mGBA's public `mCore` API; `field.sh` runs it
+interleaved with everything else.
+
+### 8a. A fairness correction this page needed
+
+Every row above compares our `--no-pixels` run — **a machine with no sound chip at all**,
+because `Sound::do_cycle` returns immediately with no player installed — against emulators that
+draw pixels and emulate the APU whether or not anyone is listening. That is not like-for-like,
+and it flatters us. `field.sh` now prints two blocks:
+
+* the **PyBoy block**, APU-free on both sides, because `sound_emulated=False` really does return
+  on entry (`pyboy/core/sound.py`, `tick`);
+* the **native block**, where we pass `--audio` and draw pixels, because that is the machine mGBA
+  and SameBoy are running.
+
+And **pair the picture engines**, or you measure the PPU rather than the emulator. mGBA's GB PPU
+is event-scheduled at mode boundaries (`_endMode0`..`_endMode3` and `mTimingSchedule`,
+`src/gb/video.c`) — architecturally our `standard`. SameBoy's is a per-dot pixel FIFO — our
+`identical`.
+
+### 8b. The result, machine-matched, one core, interleaved, load 1.9
+
+| emulator | ms/frame | × real time | PPU granularity |
+|---|---:|---:|---|
+| **TerminalGB `standard`** | **0.0662** | 253× | whole-scanline |
+| mGBA (MPL-2.0), render on | 0.0818 | 205× | event-scheduled modes |
+| **TerminalGB `identical`** (the default) | **0.2207** | 76× | per-dot FIFO |
+| SameBoy (Expat), render on | 0.4071 | 41× | per-dot FIFO |
+
+**We are 1.24× faster than mGBA and 1.84× faster than SameBoy, each against the engine of its own
+granularity.** PyBoy, in the APU-free block both sides, is 0.0157 against our 0.0297 — **1.89×
+ahead of us**.
+
+### 8c. So the received wisdom is wrong on this box, and it is worth saying plainly
+
+The expectation put to this work was that native C emulators run at thousands of frames a second
+where PyBoy manages hundreds, and that PyBoy is fast only *for something with Python bindings*.
+Measured here, **the ordering is almost exactly the accuracy ordering, inverted**:
+
+    PyBoy 0.0157   <   ours standard 0.0297   <   mGBA 0.0555   <   ours identical 0.2207   <   SameBoy 0.3825
+    Mealybug 0                                    (not in that table)   26 rows                15 rows
+
+PyBoy is the fastest Game Boy emulator on this machine, and it buys that by not being
+cycle-accurate — it scores **0** on Mealybug's published rows where the per-dot engine here
+scores 26 and SameBoy 15. There is no native emulator here to catch; there is a *design* to
+catch, and its price is already measured (§4).
+
+*(mGBA's render-off row, 0.0555, is not in the table above because it is a different machine from
+the one SameBoy and our `identical` are running. It is what `field.sh` prints for `render 0`.)*
+
+### 8d. The default mode is 1.56× faster, losslessly
+
+72 % of a default-mode frame is the PPU, so that is where a user's time goes and where this round
+went. Three changes, each A/B'd interleaved on one P-core over blue.gb at 7,168 frames with
+pixels and the APU on, each followed by **all 6,315 rows in both picture modes**:
+
+| change | ms/frame | gain |
+|---|---:|---:|
+| baseline | 0.3450 | — |
+| mode 3 taken as a run, not a sequence of independent dots | 0.3224 | +7.0 % |
+| the per-dot idle horizon asks whether STAT can wake | 0.2497 | +29.3 % |
+| the object scan answers "no" in one compare | 0.2283 | +9.8 % |
+
+**None of it is a trade.** Frame and WRAM hashes are byte-identical throughout, no baseline file
+was touched, and `savestate::FORMAT_VERSION` did not move.
+
+The middle one is the interesting one, and it is the same idea mGBA and PyBoy both use from
+different directions: *a halted CPU observes the PPU through `IF` and through nothing else.*
+`Gpu::idle_dots` already knew that and already acted on it — for the batched renderer only. The
+argument never mentioned how the picture is drawn, and the channel is the same channel.
+
+**It is workload-shaped, and the counters are why no row moved.** Halted M-cycles a frame, and
+the batches they arrive in:
+
+| cartridge | halted M-cycles | batches | each |
+|---|---:|---:|---:|
+| Pokémon Blue | 13,051 | **26** (was 7,308) | 492.3 |
+| dmg-acid2 | 17,132 | 10,458 | 1.6 |
+| Blargg `cpu_instrs` | 245 | 0 | — |
+
+dmg-acid2 arms a STAT source, so it keeps the old horizon exactly — as does every Mealybug ROM
+and every Gambatte `miscmstatirq`/`lycEnable`/`m0enable` row. **A ROM that can tell the difference
+does not take the branch**, which is a structural reason for the suites staying green rather than
+a lucky one. Measured on those two cartridges the change is worth nothing: dmg-acid2 0.3479 →
+0.3499, `cpu_instrs` 0.3605 → 0.3631, both inside the code-layout band.
+
+### 8e. Three negatives, so nobody repeats them
+
+* **Deferring the per-dot engine the way `standard` is deferred** (`Gpu::defer_dots` returning
+  `next_mode_edge()` for `Accurate` too) is worth only **+4.5 %** and **moves the frame and WRAM
+  hashes**. The cartridge can tell, so it is not available to the accurate mode at any price —
+  and the price was small anyway.
+* **Cutting `setcolor` from three bounds-checked stores to one** measured 0.2516 → 0.2503 and
+  *lost* four rounds of five. Inside the code-layout band; LLVM had already handled it. `setcolor`
+  is genuinely ~4 % of the frame, but it is the memory traffic of an RGBA buffer holding four
+  shades, not the checks.
+* **`std::env::var_os` in a per-dot ablation costs 6×** (0.25 → 1.61 ms/frame) and destroys the
+  measurement it was added to take. Ablate at compile time.
+
+### 8f. What is left, and it is flat
+
+After the three wins the per-dot profile has no item above 10 %: a field read at 9.8 %, then
+4.3, 4.1, 3.9, 3.5, 3.0, 2.8. That is the signature this repository has recorded before for "the
+work is now the work". The largest single remaining idea is the framebuffer itself — a DMG frame
+is four shades and is stored as RGBA, so `setcolor` writes three bytes where one would do — and
+that is a public-API change (`Gameboy::image`, the FFI, screenshots, `make test-cross`'s hash),
+not a pass.
+
 ## 5. What this changes about the goal
 
 "As fast as possible, lossless in ways that matter" is the right framing, and it is better
 served by a real ceiling than by a borrowed number:
 
-* Against the accuracy reference we are **9.5× ahead**, and that lead is the design.
-* Against the fastest thing measured here we are **2.1× behind**, and 13.6 points of that is
-  accuracy we are choosing to keep.
+* Against the accuracy reference we are **1.84× ahead at its own PPU granularity** and
+  **1.24× ahead of mGBA at its own** (§8b, machine-matched — the older 9.5× compared our
+  APU-free, pixel-free run against SameBoy drawing and sounding, which is not the same machine).
+  That lead is the design.
+* Against the fastest thing measured here we are **1.89× behind**, and it is behind because it
+  is not cycle-accurate: PyBoy scores 0 on Mealybug where we score 26.
+* **There is no faster native emulator here to chase.** That was the expectation and it did not
+  survive being run (§8c).
 * **Aggregate throughput** — which is what a certification run actually experiences — is
   already **1242× real time** on a contended box (see
   [headless throughput](throughput-baseline.md)).

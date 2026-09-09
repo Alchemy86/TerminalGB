@@ -20,8 +20,10 @@ use std::cmp::Ordering;
 ///   it, and mode 3 gets its true variable length. This is what the Mealybug
 ///   Tearoom suite and Mooneye's mid-scanline `acceptance/ppu` tests
 ///   photograph. It costs about [`RenderMode::IDENTICAL_COST`] times as much
-///   *PPU*, which on a real cartridge is 0.37 ms of a 16.74 ms frame — 45x real
-///   time on one core of this box.
+///   *PPU*, which on a real cartridge is **0.22 ms of a 16.74 ms frame — 76x
+///   real time** on one core of this box (Pokémon Blue, pixels drawn and the
+///   APU installed; it was 0.37 ms before docs/measured/against-the-field.md
+///   §8d).
 /// * **`standard`** ([`RenderMode::Fast`]) draws a whole scanline in one go at
 ///   the mode 3 → 0 transition and gives mode 3 a fixed 172-dot length. A
 ///   register written part-way along a line is invisible: only its final value
@@ -99,6 +101,16 @@ impl RenderMode {
     /// was busy gave 7.75, and one while it was very busy gave 5.56 — which is
     /// why the figure is approximate, is shown with a `~`, and is checked
     /// against a deliberately wide band. See docs/portability.md §3.7.
+    ///
+    /// **The ratio a PLAYER pays is now well below this, and the gap is real
+    /// rather than drift.** `testharness/ppuengines.rs` measures on dmg-acid2,
+    /// which arms a STAT source and so keeps the narrow idle horizon; a real
+    /// cartridge halts with STAT masked off and takes the wide one
+    /// (against-the-field.md §8d). Measured the same session on Pokémon Blue
+    /// with pixels and the APU on: `standard` 0.0662 against `identical`
+    /// 0.2207, a ratio of **3.3x**, where dmg-acid2 reads 8.25x. The constant
+    /// stays on the harness's own workload because that is what gates it — but
+    /// quote 3.3x, not this, when telling somebody what a game will cost them.
     ///
     /// Quoted wherever the choice is offered — a player trading speed for
     /// exactness has to be told the price at the moment they trade.

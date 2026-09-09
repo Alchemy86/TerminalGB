@@ -2807,6 +2807,9 @@ mod sprite_shortcut {
         // Teeth: a run in which nothing was ever scanned or fetched would pass
         // the assertions above while proving nothing.
         assert!(checked > 3000, "too few dots observed: {checked}");
-        assert!(fetches >= 8, "objects were never fetched, so nothing was tested");
+        assert!(
+            fetches >= 8,
+            "objects were never fetched, so nothing was tested"
+        );
     }
 }
