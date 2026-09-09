@@ -1261,6 +1261,15 @@ gate green throughout. With no APU installed at all — PyBoy's configuration �
 
 ### 16.6 The timer is NOT the other half — measured, and it is 8.5 % the wrong way
 
+> **SUPERSEDED on 2026-09-09, and the reversal is instructive.** The timer *was* the other half:
+> a horizon-bounded deferral is worth **19 %** of the accurate frame and is lossless
+> ([`docs/measured/against-the-field.md`](measured/against-the-field.md) §7). Everything measured
+> below is still true — a **fixed eight-access** deferral really is 8.5 % slower — but a fixed
+> deferral is the wrong shape to size a horizon with. `Timer::idle_mcycles` is unbounded whenever
+> `TAC`'s enable bit is clear, so the real deferral is hundreds of M-cycles, not eight, and the
+> guards are paid a handful of times a frame instead of once per instruction. **An upper bound
+> computed from the wrong shape is not an upper bound.**
+
 §15 named "make the timer lazy the way the APU already is" as the next item, on the strength of
 `--breakdown` pricing `no timer` at 13.0 %. **It was sized before it was built, and the sizing
 killed it**: deferring `Timer::do_mcycle_now` by a fixed eight accesses — wrong, but the
@@ -1432,7 +1441,8 @@ profile it buys.**
 
 ### 17.6 What the negatives in this round have in common
 
-Deferring the timer (8.5 % slower), skipping `refresh_stat_line` on quiet PPU chunks (0.8 %),
+Deferring the timer *by a fixed span* (8.5 % slower — but see §16.6's correction: a **horizon**
+is worth 19 %), skipping `refresh_stat_line` on quiet PPU chunks (0.8 %),
 gating two per-instruction stores (2.7 %), and packing the flags (neutral) — plus this round's
 hoist at 0.7 % for a correctness hazard.
 

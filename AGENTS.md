@@ -12784,20 +12784,65 @@ in both picture modes**, every other gate green. The largest single win since th
 - **THE OAM-CORRUPTION HOOK NEEDS IT TOO**, and for a reason worth remembering: `Gpu::oam_bug`
   predicts which OAM row a bus cycle hits **from the PPU's own free-running dot counter**, so the
   counter has to be current. Both hooks (`read_at`'s and `idu_tick`'s) flush.
-- **THE TIMER IS NOT THE OTHER HALF OF THIS IDEA — MEASURED, AND IT IS 8.5 % THE WRONG WAY.**
-  `--breakdown` prices `no timer` at 13.0 % and the obvious next move is to defer it the same
-  way. **Sized before building**: deferring `Timer::do_mcycle_now` by a fixed eight accesses —
-  wrong, but the cheapest possible version and so an upper bound — measures **0.0436 → 0.0473
-  ms/frame, 8.5 % SLOWER**. `do_mcycle` is a handful of field operations; `batch_mcycles` is
-  closed-form arithmetic behind three guards, and it wins over a *loop* of 38 M-cycles (which is
-  what a halted CPU hands it) and loses to a direct step over eight. **The PPU pays a whole chunk
-  of bookkeeping per call whatever the dot count; the timer pays per M-cycle because per M-cycle
-  is what it does.** Do not repeat this.
+- ~~**THE TIMER IS NOT THE OTHER HALF OF THIS IDEA**~~ — **SUPERSEDED 2026-09-09: it was, and it
+  is worth 19 % of the accurate frame. See "The system counter runs to a horizon" below.** The
+  measurement here was right and its conclusion did not follow from it: deferring
+  `Timer::do_mcycle_now` by a **fixed eight accesses** really is 8.5 % slower (0.0436 → 0.0473),
+  because `batch_mcycles` carries three guards and two divisions and cannot win over eight direct
+  steps. **A horizon is not a fixed deferral.** `Timer::idle_mcycles` — which already existed as
+  the halt batch's own bound — is *unbounded* on a cartridge that leaves the timer disabled, which
+  Pokémon Blue does for all 127.8 M of its M-cycles, so the flush count falls to the couple of
+  hundred I/O accesses a frame rather than one in eight. **The lesson to keep is about sizing, not
+  about the timer: an upper bound computed from the wrong shape is not an upper bound.**
 - **ANYTHING ELSE THAT READS THE PPU MUST FLUSH FIRST**, and the list is the whole contract:
   VRAM, OAM, `$FF40-$FF4F`, `$FF68-$FF6B`, a VRAM DMA (gated on one being active), an OAM DMA, a
   render-mode switch, a speed switch, and `Gameboy::end_frame` for the framebuffer and plugins.
   **Add a new PPU observer and you must add its flush** — the gates will tell you, but they take
   ten minutes and the row groups above are the map of what each mistake looks like.
+
+## THE SYSTEM COUNTER RUNS TO A HORIZON (`Timer::pending`, `Timer::horizon`, `MMU::sync_timer`)
+
+**Full record: [`docs/measured/against-the-field.md`](docs/measured/against-the-field.md) §7.**
+Default mode **0.0382 → 0.0302 ms/frame (+26.5 %)**, speed mode +2.3 %, `identical` −0.7 % (noise).
+Frame **and** WRAM hashes byte-identical in all three cells; all 6,315 rows of all 18 external
+suites match in both picture modes.
+
+- **THE COUNTER WAS BEING STEPPED FOR NOBODY, AND THE NUMBERS ARE THE ARGUMENT.** Instrumented
+  over 7,168 frames of Pokémon Blue: `Timer::do_mcycle` ran **5,943 times a frame**, the
+  cartridge read a timer register **twice a frame**, wrote one **five times in the whole run**,
+  and **never once set `TAC`'s enable bit** — so `TIMA` could not increment at all (`tima_inc=0`
+  over 127.8 M M-cycles). Ablated, the timer was **19 %** of the accurate frame.
+- **The horizon and the closed form both already existed.** `Timer::idle_mcycles` is the halt
+  batch's own bound; `Timer::batch_mcycles` is proven against the loop over 133,120 starting
+  states. Nothing new was derived — the per-access path just became an add, a compare and a
+  predicted branch, and the closed form runs a handful of times a frame instead of the loop
+  running thousands.
+- **THE FLUSH LIST IS THE LOAD-BEARING HALF — add a new observer and you must add its sync.**
+  `MMU::sync_timer()` guards `$FF04-$FF07`, `$FF0F`, the link port's `$FF01/$FF02`,
+  `flush_pending` (the halt horizon) and `flush_for_observer` (every save point). `Timer::rb` and
+  `Timer::wb` sync themselves, so a stale counter is not reachable through the public API, and
+  `Timer::idle_mcycles` answers for where the counter *will* be so no caller has to know whether
+  a sync is outstanding. `Timer::tick_mcycle` returns **true** only when the counter reached its
+  horizon; that is when `MMU::timer_landed()` folds the interrupt and drains the serial edges.
+- **A serial edge is inert unless a transfer is in flight** — `Serial::shift_clock` returns on
+  its first line when `bits_left == 0` — which is what makes an unbounded horizon safe.
+  `Timer::set_serial_hold` pins the horizon to 1 M-cycle while the link port is shifting, so
+  `boot_sclk_align` and the cable are unaffected.
+- **NEITHER FIELD IS STATE — `savestate::FORMAT_VERSION` did not move.** A save point is always
+  synced (`flush_for_observer`), and the horizon is derived from the three registers a load
+  restores. `testharness/savestate.rs` proves it at every frame boundary and on a live HALT-bug
+  latch.
+- **THE OLD "the timer was sized and refused" NOTE IS SUPERSEDED, AND THE LESSON IS ABOUT
+  SIZING.** §16.6 of `docs/throughput.md` measured a **fixed eight-access** deferral at 8.5 %
+  slower and concluded the idea was dead. The measurement was right; the conclusion did not
+  follow. A horizon is not a fixed deferral — it is unbounded whenever `TAC`'s enable bit is
+  clear. **An upper bound computed from the wrong shape is not an upper bound.**
+- **`IDLE_BATCH_MAX` stays 512, re-swept on this code**: 1024/2048 are inside noise, 4096 is
+  worse, and **16384 changes the WRAM hash** — a batch approaching frame length is not a free
+  knob. Do not raise it.
+- **PROFILE TO FIND CANDIDATES, ABLATE TO SIZE THEM.** `addr2line` attributes the 32 KiB inlined
+  `Gameboy::frame` to its loop header, so the line profile said "frame loop 21 %, fetch 19 %"
+  and the ablations said both were worth **nothing**. The ablations were right, twice.
 
 ### Where the standard frame is after all of it, and it is FLAT
 

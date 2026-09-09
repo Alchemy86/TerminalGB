@@ -53,6 +53,12 @@ Reproduce it: [`tools/perf/sameboy-bench.c`](../../tools/perf/sameboy-bench.c),
 slower with `GB_SPEED=speed`, which is the horizon batch taking PyBoy's own
 technique as a named, opt-in liberty (§4).
 
+> **Superseded twice since.** §6a corrected the PyBoy figure (its harness was
+> charging PyBoy 7,168 Python calls we never paid, so the target is 0.0158, not
+> 0.0190), and **§7 moved our own row on 2026-09-09**: the default mode is
+> 0.0302 and the gap is **1.94×**. The row above is kept because it is what was
+> measured on the day, and somebody planned on it.
+
 All three rows are the best of three runs **interleaved with each other on the same core in the
 same minute**, on a quiet box (load 1.3). A single-shot reading of any of them drifts by 30 % as
 the box's other occupant comes and goes — an earlier set taken at load 16 read 28×, 249× and
@@ -289,6 +295,126 @@ Re-verified rather than quoted, because the question was asked directly: `o3-fat
 shipping default) is **+5.1 %** over thin LTO; `-Ctarget-cpu=native` is **1 % slower** than
 it; PGO is **+0.4 %** against its fair comparator and **5.5 % worse** than the fat LTO it
 cannot combine with on rustc 1.83. None of the three is a lever nobody had pulled.
+
+## 7. 2026-09-09 — the system counter was being stepped for nobody
+
+The default mode is **26.5 % faster** and nothing the cartridge can see moved. The gap to
+PyBoy in that mode goes **2.42× → 1.94×**.
+
+### 7a. What was measured before anything was changed
+
+The §6c matrix reproduces on a quiet box (load 1.4), which is the first thing to establish
+because the doc is a hypothesis and the run is the fact: PyBoy 0.0156, standard/accurate
+0.0377, standard/fast 0.0261, identical/accurate 0.3351. Every figure below is
+`tools/perf/field.sh`'s own method — one P-core, thread CPU time, interleaved, best of the
+round.
+
+Instrumenting the timer over the same 7,168 frames from reset gave the finding:
+
+| over one 7,168-frame run of Pokémon Blue | count |
+|---|---:|
+| `Timer::do_mcycle` calls | **5,943 a frame** |
+| M-cycles with `TAC`'s enable bit set | **0** |
+| `TIMA` increments | **0** |
+| timer registers read | **2 a frame** |
+| timer registers written | **5 in the whole run** |
+
+The cartridge never enables the timer, so `TIMA` cannot increment at all, and it looks at the
+counter twice a frame. Every one of those 5,943 steps advanced a counter to a value no program
+asked for. Ablated, the timer was **19 %** of the accurate frame — the largest single item, and
+larger than the profile suggested: `addr2line` attributes a 32 KiB inlined `Gameboy::frame` to
+its loop header, so the *line* profile said "frame loop 21 %, fetch 19 %" and the *ablations*
+said both were worth nothing (0.0386 and 0.0380 against a 0.0383 baseline). **The ablations were
+right.** Profile to find candidates; ablate to size them.
+
+### 7b. A horizon, not a fixed deferral — which is why the sign flipped
+
+[`docs/throughput.md`](../throughput.md) §13 sized this once and refused it, measuring **8.5 %
+the wrong way**. That experiment deferred the counter by a **fixed eight accesses**, and
+`Timer::batch_mcycles` carries three guards and two divisions — it cannot win over eight direct
+steps. A horizon is not a constant: it is `Timer::idle_mcycles`, which already existed as the
+halt batch's bound and is **unbounded on a cartridge that leaves the timer disabled**. The
+counter now accumulates M-cycles and is applied in closed form only when it could do something a
+program can observe without asking — a `TIMA` overflow, or a serial shift while the link port is
+holding one. Everything else it does is visible only through a register read or an `IF` read, and
+those sync first. That old note is superseded, not contradicted.
+
+Neither the horizon nor the closed form is new arithmetic: `idle_mcycles` is the halt batch's
+own bound and `batch_mcycles` is already proven against the loop over 133,120 starting states.
+What is new is that the per-access path is an add, a compare and a predicted branch.
+
+### 7c. Every mode, because one number hides the trade
+
+Interleaved on one P-core, four rounds, Pokémon Blue, 7,168 frames from reset, load 1.4. The
+**picture engine** is what a frame looks like; the **timing core** is what the CPU's neighbours
+may skip ([`picture-modes.md`](../picture-modes.md), [`modes.md`](../modes.md)).
+
+| picture | timing | before | after | × real time | vs PyBoy 0.0156 |
+|---|---|---:|---:|---:|---:|
+| PyBoy 2.7.0 (not cycle-accurate) | — | — | 0.0156 | 1073× | — |
+| **standard** | **accurate (default)** | 0.0382 | **0.0302** | 554× | **1.94× behind** |
+| **standard** | **speed** (`--speed-mode`) | 0.0263 | **0.0257** | 651× | 1.65× behind |
+| **identical** | **accurate** | 0.3410 | 0.3433 | 49× | 22.0× behind |
+| identical | speed | — | refused by design | — | — |
+
+With an APU installed and silent — the shape a certification run uses — the same three cells are
+**0.0318 accurate**, **0.0275 speed**, and **0.0256** with `speed,no-apu-state`.
+
+`identical` is −0.7 %, inside the spread: the per-dot engine steps the PPU per bus access and the
+timer is about 2 % of it, so there was nothing there to win. **Frame *and* WRAM hashes are
+byte-identical in every cell**, before and after.
+
+### 7d. What it cost in accuracy: nothing, and here is the whole check
+
+`make test-external` and `make test-external-accurate` match every baseline — **all 6,315 rows
+of all 18 suites in both picture modes**, Gambatte 5,320 twice, Mooneye 103 + 8, SameSuite 76,
+Mealybug 79, gbmicrotest 513. The in-repo harness is 46/47 with `mem_timing`, `mem_timing-2`,
+`instr_timing`, `halt_bug` and `oam_bug@dmg` 8/8 unmoved and dmg-acid2 at 0/23,040 pixels; 913
+library tests, savestate (including every frame boundary and a live HALT-bug latch), battery,
+bootrom, ppuengines and gbselftest all green.
+
+**The `tests` submodule was verified initialised first** (`git submodule status`, 58 ROMs, the
+pinned `c240dd7d`), because the harness *skips* rather than fails when the Blargg ROMs are
+absent — a green run against an empty submodule would have proved nothing.
+
+### 7e. The ablation ledger — what a faster mode could still buy, and what it would cost
+
+Fourteen shortcuts were measured, each against the baseline stated. The point of the ledger is
+that **everything which trades accuracy and pays 2 % or more is already behind the existing
+flag**, and the one big item that was going to need a flag turned out to be free.
+
+| shortcut | buys | costs | verdict |
+|---|---:|---|---|
+| per-access + per-instruction timer stepping | **19 %** | nothing | **taken, lossless, in the default** |
+| runaway-`PC` fault check's `fault()` load and message | 1.3 % | nothing | **taken, lossless** (the test itself still runs) |
+| peripherals per instruction, not per access | 8.9–12 % | `mem_timing`, `mem_timing-2`, `dmg_sound` 09/10/12 | already `instruction-bus`, in the preset |
+| peripherals per horizon | see §4 | as above | already `horizon-batch`, in the preset |
+| freeze the APU state machine | 7.4 % (collector) | any sound driver spinning on a length counter or `NR52` hangs | exists as `no-apu-state`, out of the preset |
+| skip the DMG OAM-corruption bug | **0.0 %** | `blargg/oam_bug` | exists as `no-oam-bug`, out of the preset |
+| serial `take_pending` per instruction | 0.8 % | the link-cable plugin partner | not worth a flag |
+| `perform_vramdma` + the HBlank latch per instruction | ~2 % | HDMA | subsumed by `horizon-batch` |
+| per-access APU accumulate / PPU hook / interrupt folds | 0 % | — | rejected |
+| frame-loop restructure (drop the vestigial `waitticks` pair) | **−1 %** | — | rejected, it is slower |
+| unchecked opcode fetch (`get_unchecked`) | 0 % | — | rejected |
+| `IDLE_BATCH_MAX` 1024 / 2048 / 4096 | ≤1.3 %, inside noise | — | rejected; **16384 changes the WRAM hash**, so the cap is not a free knob once a batch approaches frame length |
+
+The two remaining sub-2 % items each disable a real feature, and this project's own bar for the
+preset is *safe **and** worth having*. Three flags for ~3 % of one mode fails it.
+
+### 7f. What is left, and it is not bookkeeping
+
+In speed mode the per-instruction bookkeeping outside the opcode is now small — the serial take
+is 0.8 %, the bus-hook flag pair 1.6 % — so a PyBoy-shaped inner loop, which checks interrupts
+**once per horizon** and then runs bare `fetch_and_execute()` (`pyboy/core/cpu.py`'s `tick`,
+read for technique and cited; none of its code is here), has a ceiling of about 6–8 % and would
+land near 0.024. That is still 1.5× behind.
+
+**The remaining gap is the interpreter itself**: 0.0257 ms/frame over 2,487 instructions is
+**~55 host cycles an emulated instruction against PyBoy's ~33**, and
+[`docs/throughput.md`](../throughput.md) §17 has already measured the standard remedies — flag
+packing, page tables, devirtualising the mapper, `target-cpu=native`, PGO — as neutral or
+negative. Beating 0.0156 from there is a different execution model, not another pass. Said
+plainly: **we are still behind PyBoy, by 1.94× in the default mode and 1.65× in speed mode.**
 
 ## 5. What this changes about the goal
 
