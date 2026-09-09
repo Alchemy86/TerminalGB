@@ -1569,6 +1569,22 @@ impl Gpu {
         if x >= WIDTH || self.line as usize >= HEIGHT {
             return;
         }
+        // **A caller that will not read the framebuffer need not be handed
+        // one, on this engine either.** Everything that decides *when* has
+        // already happened above: the FIFO shift, the `SCX & 7` discard, the
+        // window's own skip and `lx` itself. All that is left below is a store
+        // into `data`, which is emulator output reachable from no address on
+        // the bus — so this skips a write, never a cycle, and mode 3 still ends
+        // on the dot the fetcher says it does.
+        //
+        // That is the distinction the old blanket "the per-dot engine always
+        // produces pixels" collapsed: the *fetcher* is the timing and is not
+        // optional, but painting the result of it is not the fetcher.
+        // `the_accurate_engine_skips_the_store_and_not_a_cycle` drives both
+        // machines dot for dot and pins it.
+        if !self.render_pixels {
+            return;
+        }
         // STOP mode, or the blanked first frame after LCDC turns the LCD on:
         // every pixel is the same flat shade either way. See
         // `Gpu::set_stop_fill` and `Gpu::poweron_fill`.

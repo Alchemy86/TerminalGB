@@ -619,10 +619,16 @@ impl Gpu {
     }
 
     /// Whether pixels are *actually* being produced, which is
-    /// [`Gpu::render_pixels`] unless the per-dot engine is running — it always
-    /// produces them. See [`Gpu::set_render_pixels`].
+    /// Whether pixels are actually being produced. Both engines honour the
+    /// declaration now, so this is simply [`Gpu::render_pixels`].
+    ///
+    /// It used to report `true` under `RenderMode::Accurate` whatever was
+    /// asked for, on the grounds that the per-dot fetcher *is* mode 3's
+    /// timing. The fetcher is; the store into the framebuffer is not, and it
+    /// is the store this skips — see the comment at the per-dot output in
+    /// [`fifo`].
     pub fn pixels_effective(&self) -> bool {
-        self.render_pixels || self.render_mode == RenderMode::Accurate
+        self.render_pixels
     }
 
     /// The current STAT mode (0 HBlank, 1 VBlank, 2 OAM scan, 3 drawing).
@@ -3361,22 +3367,94 @@ mod tests {
         );
     }
 
-    /// The per-dot engine produces pixels whatever the declaration says,
-    /// because there the fetcher *is* the timing. Reporting otherwise would
-    /// invite a caller to skip a cost it is still paying.
+    /// **On the per-dot engine the skip must cost a write and not a cycle.**
+    ///
+    /// The fetcher *is* mode 3's length, so a skip that reached it would move
+    /// the one thing this engine exists to get right. Painting the fetcher's
+    /// result is not the fetcher, and this drives two accurate PPUs dot for
+    /// dot — with the window switched on and off mid-frame, and objects on the
+    /// line — asserting after **every dot** that everything the cartridge can
+    /// observe is byte-identical: mode, `LY`, `modeclock`, the whole pipeline
+    /// state and the interrupt line.
+    ///
+    /// A dot is the resolution that matters: at scanline resolution a fetcher
+    /// stalled part-way and then caught up would pass.
+    ///
+    /// Teeth: move the `!self.render_pixels` return in `fifo` above the FIFO
+    /// shift, the `SCX & 7` discard or the `lx` increment and this fails
+    /// within the first visible line.
     #[test]
-    fn the_per_dot_engine_always_produces_pixels() {
-        let mut gpu = Gpu::new();
-        gpu.set_render_mode(RenderMode::Fast);
-        gpu.set_render_pixels(false);
-        assert!(!gpu.pixels_effective());
-        gpu.set_render_mode(RenderMode::Accurate);
-        assert!(
-            gpu.pixels_effective(),
-            "the fetcher drives mode 3's length, so its pixels are not optional"
+    fn the_accurate_engine_skips_the_store_and_not_a_cycle() {
+        let mut drawn = Gpu::new();
+        let mut skipped = Gpu::new();
+        drawn.set_render_mode(RenderMode::Accurate);
+        skipped.set_render_mode(RenderMode::Accurate);
+        skipped.set_render_pixels(false);
+        assert!(drawn.pixels_effective() && !skipped.pixels_effective());
+
+        for gpu in [&mut drawn, &mut skipped] {
+            for (i, byte) in gpu.vram[..0x1000].iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(37).wrapping_add(11);
+            }
+            for (i, byte) in gpu.vram[0x1800..0x1C00].iter_mut().enumerate() {
+                *byte = (i % 97) as u8;
+            }
+            for (i, byte) in gpu.voam.iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(13);
+            }
+            gpu.wb(0xFF47, 0xE4);
+            gpu.wb(0xFF48, 0x1B);
+            gpu.wb(0xFF4B, 7);
+            gpu.wb(0xFF4A, 40);
+            gpu.wb(0xFF42, 3); // SCY: the fetch is not tile-aligned
+            gpu.wb(0xFF43, 5); // SCX: and the discard counter is exercised
+            gpu.wb(0xFF40, 0xE3);
+        }
+
+        // Two whole frames, one dot at a time.
+        for dot in 0..(154u32 * DOTS_PER_LINE * 2) {
+            drawn.do_cycle(1);
+            skipped.do_cycle(1);
+            if dot == 60 * DOTS_PER_LINE {
+                drawn.wb(0xFF40, 0xC3); // window off mid-frame
+                skipped.wb(0xFF40, 0xC3);
+            }
+            if dot == 120 * DOTS_PER_LINE {
+                drawn.wb(0xFF40, 0xE3); // and on again
+                skipped.wb(0xFF40, 0xE3);
+            }
+            assert_eq!(
+                state_without_the_picture(&mut drawn),
+                state_without_the_picture(&mut skipped),
+                "dot {dot}: skipping the store moved state the cartridge can observe"
+            );
+            assert_eq!(drawn.interrupt, skipped.interrupt, "dot {dot}: interrupts");
+        }
+
+        // ...and it really was doing different work.
+        assert_ne!(
+            drawn.data.iter().filter(|b| **b != 0).count(),
+            0,
+            "the drawn PPU produced no picture, so this test proved nothing"
         );
-        gpu.set_render_pixels(true);
-        assert!(gpu.pixels_effective());
+        assert_ne!(
+            &drawn.data[..],
+            &skipped.data[..],
+            "pixels were stored either way — the skip did nothing"
+        );
+    }
+
+    /// Both engines honour the declaration, and say so.
+    #[test]
+    fn both_engines_report_the_skip_honestly() {
+        let mut gpu = Gpu::new();
+        for mode in [RenderMode::Fast, RenderMode::Accurate] {
+            gpu.set_render_mode(mode);
+            gpu.set_render_pixels(false);
+            assert!(!gpu.pixels_effective(), "{mode:?} claims pixels it skips");
+            gpu.set_render_pixels(true);
+            assert!(gpu.pixels_effective(), "{mode:?} denies pixels it draws");
+        }
     }
 }
 
