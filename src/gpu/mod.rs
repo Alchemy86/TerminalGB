@@ -1282,7 +1282,9 @@ impl Gpu {
             return 0;
         }
         if self.render_mode == RenderMode::Accurate {
-            return self.accurate_idle_dots();
+            // The `stat_wakes` argument reaches this engine too. See
+            // `accurate_idle_dots`.
+            return self.accurate_idle_dots(stat_wakes);
         }
         // **A halted CPU observes the PPU through `IF` and through nothing
         // else**, and the PPU writes exactly two of its bits: VBlank, at the
@@ -1390,7 +1392,34 @@ impl Gpu {
     /// to three dots — harmless, because a CPU only looks at `IE & IF` on an
     /// M-cycle boundary, so an edge inside the M-cycle it wakes on is seen at
     /// the same instant either way.
-    fn accurate_idle_dots(&self) -> u32 {
+    fn accurate_idle_dots(&self, stat_wakes: bool) -> u32 {
+        // **The channel is `IF`, and it is the same channel for both engines.**
+        // A halted CPU observes the PPU through the two bits the PPU writes and
+        // through nothing else, so when a STAT interrupt cannot be *taken* at
+        // all — no source selected, or `IE` masking bit 1 off — the only edge
+        // left in the whole frame is VBlank at line 144. That is the argument
+        // `idle_dots` already makes for the batched renderer, and none of it
+        // mentions how the picture is drawn.
+        //
+        // This is **narrower than the mode-0/VBlank batching §14 measured and
+        // rejected**, and the difference is the gate rather than the window:
+        // that experiment batched those modes whatever `STAT` held, so a ROM
+        // that had armed a source genuinely lost its interrupt. Under this
+        // gate no such ROM takes the branch — every Mealybug ROM and every
+        // Gambatte `miscmstatirq`/`lycEnable`/`m0enable` row arms a source, so
+        // they all keep the old horizon exactly.
+        //
+        // The HBlank VRAM-DMA rows that experiment also cost are not reachable
+        // from here in either form: `MemoryManagementUnit::idle_mcycles`
+        // refuses to batch at all while `hdma_status != DMAType::NoDma`, before
+        // it asks the PPU anything.
+        //
+        // Nothing here changes what the PPU *draws*: `do_cycle_accurate` still
+        // runs every dot in turn whatever span it is handed. The horizon says
+        // only how long a halted CPU may stay halted.
+        if !(stat_wakes && self.any_inte) {
+            return self.dots_to_vblank().max(1);
+        }
         let m = self.modeclock;
         if m >= OAM_DOTS && self.line < VBLANK_LINE && self.mode != 0 {
             let togo = (WIDTH as u32).saturating_sub(self.pipe.lx as u32);
