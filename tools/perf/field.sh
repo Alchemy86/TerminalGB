@@ -35,6 +35,31 @@
 # `SpeedFlags::from_env`, which only the frontends and the scenario runner
 # call). Passing the env var to this bench sets nothing and reads as "the flag
 # buys nothing", which is how a stale row gets published.
+#
+# ## The native rows, and why they are a SECOND block
+#
+# mGBA and SameBoy emulate the APU whether or not anyone listens, and PyBoy
+# does not when it is asked not to. So one table cannot hold all four fairly:
+#
+#   * the **PyBoy block** is APU-free on both sides — our `--no-pixels` with no
+#     `--audio` is a machine with no sound chip at all (`Sound::do_cycle`
+#     returns immediately with no player), which is exactly what PyBoy's
+#     `sound_emulated=False` gives (`pyboy/core/sound.py`, `tick` returns on
+#     `not self.emulate`).
+#   * the **native block** installs the APU on our side (`--audio`) and draws
+#     pixels, because that is the machine mGBA and SameBoy are running. Ours
+#     without it is a machine a cartridge can tell apart — see
+#     `docs/measured/host.md`.
+#
+# Pair the picture engines too: mGBA's GB PPU is **event-scheduled at mode
+# boundaries** (`_endMode0`..`_endMode3` + `mTimingSchedule` in
+# `src/gb/video.c`), i.e. our `standard`; SameBoy's is a per-dot pixel FIFO,
+# i.e. our `identical`. Comparing across that line measures the PPU, not the
+# emulator.
+#
+# Point the two at built binaries; a row with no binary is skipped, not faked:
+#   GB_MGBA_BENCH=/tmp/mgbabench GB_SAMEBOY_BENCH=/tmp/sbbench \
+#   GB_SAMEBOY_BOOTROM=target/sameboy-oracle/SameBoy/build/bin/BootROMs/dmg_boot.bin
 set -eu
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -45,6 +70,9 @@ FRAMES=${GB_FRAMES:-7168}
 [ -x "$BENCH" ] || { echo "no core_bench at $BENCH — cargo build --release --example core_bench" >&2; exit 2; }
 rounds=${1:-3}
 core=${2:-4}
+MGBA=${GB_MGBA_BENCH:-}
+SAMEBOY=${GB_SAMEBOY_BENCH:-}
+SAMEBOY_BOOT=${GB_SAMEBOY_BOOTROM:-}
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ours() { # name, ppu, extra args...
@@ -52,6 +80,15 @@ ours() { # name, ppu, extra args...
     GB_PPU="$ppu" taskset -c "$core" "$BENCH" --rom "$ROM" --frames "$FRAMES" \
         --no-pixels --repeat 1 --json "$@" >>"$tmp/$n"
 }
+
+# The native block's machine: pixels drawn and the APU installed, because that
+# is what mGBA and SameBoy are running. No `--no-pixels`.
+ours_full() { # name, ppu
+    GB_PPU="$2" taskset -c "$core" "$BENCH" --rom "$ROM" --frames "$FRAMES" \
+        --audio --repeat 1 --json >>"$tmp/$1"
+}
+# Both native benches print "... = <ms> ms/frame = ..." on their last line.
+native_ms() { taskset -c "$core" "$@" 2>/dev/null | sed -n 's/.*= \([0-9.]*\) ms\/frame.*/\1/p' | tail -1; }
 
 echo "core $core  frames $FRAMES  rounds $rounds"
 echo "load before: $(cut -d' ' -f1-3 /proc/loadavg)"
@@ -69,6 +106,12 @@ while [ "$r" -le "$rounds" ]; do
     ours standard_accurate  standard
     ours standard_fast      standard --speed-mode
     ours identical_accurate identical
+    if [ -n "$MGBA" ] || [ -n "$SAMEBOY" ]; then
+        ours_full standard_full  standard
+        ours_full identical_full identical
+        [ -n "$MGBA" ] && native_ms "$MGBA" "$ROM" "$FRAMES" 1 >>"$tmp/mgba"
+        [ -n "$SAMEBOY" ] && native_ms "$SAMEBOY" "$ROM" "$FRAMES" 1 ${SAMEBOY_BOOT:+"$SAMEBOY_BOOT"} >>"$tmp/sameboy"
+    fi
     r=$((r + 1))
 done
 echo "load after:  $(cut -d' ' -f1-3 /proc/loadavg)"
@@ -100,6 +143,28 @@ for n in standard_accurate standard_fast identical_accurate; do
 done
 printf '%-10s %-9s %10s %10s %10s   %s\n' identical fast '-' '-' '-' \
     'REFUSED by design: the per-dot engine takes no shortcut'
+
+if [ -s "$tmp/mgba" ] || [ -s "$tmp/sameboy" ]; then
+    echo
+    echo "native block — pixels drawn and the APU emulated on BOTH sides:"
+    printf '%-26s %10s %10s   %s\n' emulator ms/frame xrealtime 'PPU granularity'
+    ourfull() { # label, file, note
+        [ -s "$tmp/$2" ] || return 0
+        m=$(sed 's/.*"ms_per_frame":\([0-9.]*\).*/\1/' "$tmp/$2" | sort -g | head -1)
+        printf '%-26s %10s %10s   %s\n' "$1" "$m" \
+            "$(awk "BEGIN{printf \"%.0f\", 1000/$m/59.7275}")" "$3"
+    }
+    nat() { # label, file, note
+        [ -s "$tmp/$2" ] || return 0
+        m=$(sort -g "$tmp/$2" | head -1)
+        printf '%-26s %10s %10s   %s\n' "$1" "$m" \
+            "$(awk "BEGIN{printf \"%.0f\", 1000/$m/59.7275}")" "$3"
+    }
+    ourfull 'ours standard'   standard_full  'whole-scanline'
+    nat     'mGBA'            mgba           'event-scheduled modes'
+    ourfull 'ours identical'  identical_full 'per-dot FIFO'
+    nat     'SameBoy'         sameboy        'per-dot FIFO'
+fi
 echo
 echo "conformance belongs to the picture engine AND the timing core together;"
 echo "quote a speed from this table only beside a score measured in the same cell."
