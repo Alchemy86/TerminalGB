@@ -53,6 +53,13 @@ CFG=${CFG:---audio --no-pixels --no-audio-out}
 # free. Per-instance cost is measured as we go, so the prediction is the
 # machine's own, not a guess.
 MARGIN_MIB=${MARGIN_MIB:-2048}
+# `thread` gives every machine its own OS thread; `pool` runs them all over
+# `POOL_THREADS` of them. The pool is the cheaper shape by 2.5x in memory --
+# the difference is per-thread construction stack, which it amortises over
+# every machine that thread owns rather than paying per copy.
+SHAPE=${SHAPE:-thread}
+POOL_THREADS=${POOL_THREADS:-$(nproc)}
+CHUNK=${CHUNK:-64}
 
 [ -x "$BIN" ] || { echo "no $BIN — cargo build --release --example core_bench" >&2; exit 2; }
 
@@ -62,12 +69,19 @@ point() { # $1 = instances -> one json line
   local n=$1 f
   f=$(( BUDGET / n )); [ "$f" -lt 500 ] && f=500; [ "$f" -gt 30000 ] && f=30000
   # shellcheck disable=SC2086
-  "$BIN" --rom "$ROM" $CFG --frames "$f" --workers "$n" \
-         --warm-seconds "$WARM" --repeat 1 --json 2>/dev/null
+  if [ "$SHAPE" = pool ]; then
+    "$BIN" --rom "$ROM" $CFG --frames "$f" --workers "$POOL_THREADS" \
+           --instances "$n" --chunk "$CHUNK" \
+           --warm-seconds "$WARM" --repeat 1 --json 2>/dev/null
+  else
+    "$BIN" --rom "$ROM" $CFG --frames "$f" --workers "$n" \
+           --warm-seconds "$WARM" --repeat 1 --json 2>/dev/null
+  fi
 }
 
 echo "rom     $ROM"
 echo "cfg     $CFG   warm ${WARM}s   budget $BUDGET frames/point"
+echo "shape   $SHAPE$([ "$SHAPE" = pool ] && echo " over $POOL_THREADS threads, chunk $CHUNK")"
 echo "cores   $(nproc)"
 echo "load    $(uptime)"
 echo "other   $(ps -eo pcpu,comm --sort=-pcpu | awk 'NR>1 && $1>20 {printf "%s(%s%%) ",$2,$1}')"

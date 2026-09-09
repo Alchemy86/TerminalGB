@@ -863,6 +863,13 @@ fn main() {
     if a.instances > 0 && !a.workers_given {
         a.workers = std::thread::available_parallelism().map_or(1, |n| n.get());
     }
+    // **Fewer machines than threads leaves a thread owning none**, and a
+    // worker with no machine has nothing to time, nothing to hash, and no
+    // `gbs[0]`. Asking for one machine on a twenty-core box is a perfectly
+    // reasonable thing to type, so it is clamped rather than rejected.
+    if a.instances > 0 && a.instances < a.workers {
+        a.workers = a.instances;
+    }
     let a = a;
     // Machines per worker, remainder spread over the low workers so no thread
     // is ever more than one machine behind another.
