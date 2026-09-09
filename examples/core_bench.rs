@@ -103,6 +103,34 @@ fn thread_cpu_nanos() -> Option<u64> {
     s.split_whitespace().next()?.parse().ok()
 }
 
+/// Peak resident set size of the whole process, in KiB, or `None` where the
+/// kernel does not offer it.
+///
+/// **A fan-out's binding constraint stops being ms/frame and becomes bytes per
+/// instance long before it becomes anything else**, and nothing in this
+/// repository reported that number. `VmHWM` in `/proc/self/status` is the
+/// high-water mark the kernel has actually had to back with pages, which is
+/// the figure that decides how many machines fit — not `VmSize`, which counts
+/// address space nobody has touched.
+///
+/// Read from `/proc` rather than through `getrusage` for the same two reasons
+/// [`thread_cpu_nanos`] is: this example must build on
+/// `--no-default-features`, where there is no `libc` to call, and one file read
+/// per *run* costs nothing measurable.
+///
+/// It is the whole process, so divide by the worker count only after
+/// subtracting a base measured at one worker — the difference between two
+/// points is the honest per-instance figure, the quotient is not.
+fn peak_rss_kib() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/self/status").ok()?;
+    s.lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
 /// FNV-1a, hand-rolled for the same reason the harness hand-rolls one: this
 /// example must build with no features and no crates.
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -241,9 +269,21 @@ struct Run {
     /// FNV over a WRAM window. Guest-side state, so it must be identical
     /// whether or not pixels were drawn.
     wram_hash: u64,
+    /// Seconds from "have the ROM bytes" to "the first frame is drawn" —
+    /// construction, the APU install, any save state, and one `frame()`.
+    ///
+    /// **This is per-instance startup, and a fan-out pays it once per machine
+    /// before any of them has played anything.** Measured on the same thread
+    /// as the machine it builds, so at high worker counts it carries the same
+    /// contention the frames do, which is the honest figure for a swarm that
+    /// starts its instances all at once.
+    startup_seconds: f64,
 }
 
 fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Run {
+    // **Startup is timed from here to the first drawn frame**, because that is
+    // what a swarm pays per machine before any of them has played anything.
+    let boot = Instant::now();
     // `None` for the save path: a benchmark must never write a `.sav` beside
     // somebody's cartridge (`src/mbc/battery.rs`).
     let mut gb = Gameboy::new(rom.to_vec(), None);
@@ -267,7 +307,12 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
     };
     let timing = gb.speed_flags().spec();
 
-    for _ in 0..a.warmup {
+    // One frame closes the startup interval: a machine that has been built but
+    // has never run is not yet a machine anybody can collect from.
+    gb.frame();
+    let startup_seconds = boot.elapsed().as_secs_f64();
+
+    for _ in 1..a.warmup.max(1) {
         gb.frame();
     }
 
@@ -321,6 +366,7 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
         cpu_seconds,
         frame_hash: fnv1a(gb.image()),
         wram_hash: fnv1a(&wram),
+        startup_seconds,
     }
 }
 
@@ -574,6 +620,8 @@ fn main() {
     let mut best_ms = f64::INFINITY;
     let mut best_wall_ms = f64::INFINITY;
     let mut best_sps = 0.0f64;
+    let mut worst_startup = 0.0f64;
+    let mut peak_rss = 0u64;
     let mut on_cpu_clock = false;
     let mut frame_hash = 0u64;
     let mut wram_hash = 0u64;
@@ -642,6 +690,19 @@ fn main() {
         // favour.
         let sps = (a.workers as f64) * (a.frames as f64) / wall;
 
+        // **The slowest worker's startup is the one that matters**: a swarm is
+        // ready when its last machine is, not when its median one is.
+        let slowest_start = results
+            .iter()
+            .map(|r| r.startup_seconds)
+            .fold(0.0f64, f64::max);
+        if slowest_start > worst_startup {
+            worst_startup = slowest_start;
+        }
+        if let Some(k) = peak_rss_kib() {
+            peak_rss = peak_rss.max(k);
+        }
+
         picture = results[0].picture;
         timing = results[0].timing.clone();
         for r in &results {
@@ -677,8 +738,14 @@ fn main() {
              \"workers\":{},\"frames\":{},\"no_pixels\":{},\"audio\":{},\"audio_out\":{},\
              \"picture\":\"{picture}\",\"timing\":\"{timing}\",\"cycle_accurate\":{cycle_accurate},\
              \"frame_hash\":\"{frame_hash:#018x}\",\"wram_hash\":\"{wram_hash:#018x}\",\
-             \"deterministic\":{hashes_agree}}}",
-            a.workers, a.frames, a.no_pixels, a.audio, a.audio_out
+             \"deterministic\":{hashes_agree},\"startup_ms\":{:.2},\"peak_rss_kib\":{}}}",
+            a.workers,
+            a.frames,
+            a.no_pixels,
+            a.audio,
+            a.audio_out,
+            worst_startup * 1e3,
+            peak_rss
         );
     } else {
         println!("rom            {rom_path}");
@@ -729,6 +796,23 @@ fn main() {
             "aggregate      {best_sps:.0} steps/s across {} worker(s)",
             a.workers
         );
+        // **What a fan-out is actually bounded by**, which stops being
+        // ms/frame the moment there is more than a handful of machines.
+        println!(
+            "startup        {:.2} ms to first frame (slowest worker)",
+            worst_startup * 1e3
+        );
+        if peak_rss > 0 {
+            println!(
+                "peak rss       {:.1} MiB whole process, {} worker(s)",
+                peak_rss as f64 / 1024.0,
+                a.workers
+            );
+            println!(
+                "               per-instance is a DIFFERENCE between two worker counts, not this / {}",
+                a.workers
+            );
+        }
         println!();
         println!("frame hash     {frame_hash:#018x}");
         println!("wram hash      {wram_hash:#018x}");
