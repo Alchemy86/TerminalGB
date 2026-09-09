@@ -23,17 +23,26 @@ count at which **a copy still keeps up with a real Game Boy**, because below
 1.0x a copy is no longer playing the game in any useful sense — it is being
 sampled slowly.
 
-Best of three 60-second windows at each point, `identical` engine:
+`identical` engine, pool shape. **The timed window is stated per row**,
+because a ten-second window on this box reads a few per cent optimistic
+against a sixty-second one (§2) and pretending otherwise would flatter the
+crossover:
 
-| copies | each copy | aggregate | peak RSS |
-|---:|---:|---:|---:|
-| 1 | 87x real time | 5,044 f/s | 4.0 MiB |
-| 20 | 40x | 48,033 f/s | 12.6 MiB |
-| 200 | 4.0x | 48,120 f/s | 40.9 MiB |
-| 600 | 1.36x | 48,769 f/s | — |
-| **~820** | **1.00x** | **~49,000 f/s** | ~136 MiB |
-| 1,000 | 0.87x | 52,019 f/s | 166.8 MiB |
-| 16,000 | 0.050x | 48,512 f/s | 2,521 MiB |
+| copies | each copy | aggregate | peak RSS | window |
+|---:|---:|---:|---:|---|
+| 1 | 87x real time | 5,044 f/s | 4.0 MiB | 10 s |
+| 20 | 40x | 48,033 f/s | 12.6 MiB | 10 s |
+| 200 | 4.0x | 48,120 f/s | 40.9 MiB | 10 s |
+| 600 | 1.36x | 48,769 f/s | — | 74 s |
+| **~820** | **1.00x** | **~49,000 f/s** | ~136 MiB | best of 3 x 77 s |
+| 1,000 | 0.87x | 52,019 f/s | 166.8 MiB | 10 s |
+| 16,000 | 0.050x | 48,512 f/s | 2,521 MiB | 133 s |
+
+The crossover is taken from the 820 row, which is the longest-window
+measurement of the three nearest it: 48,047 / 48,707 / 49,213 f/s over three
+77-second runs, i.e. 57.2 / 58.0 / 58.6 frames a second per copy. A
+ten-second window at 900 copies read 0.99x, which would have put the crossover
+about 8 % higher; the longer run is the one to believe.
 
 On `standard`, the same shape four times further out: aggregate
 ~300,000-313,000 f/s, 5,000 copies at 1.03x and 5,500 at 0.95x, so the
