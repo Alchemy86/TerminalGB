@@ -489,13 +489,13 @@ is event-scheduled at mode boundaries (`_endMode0`..`_endMode3` and `mTimingSche
 
 | emulator | ms/frame | × real time | PPU granularity |
 |---|---:|---:|---|
-| **TerminalGB `standard`** | **0.0662** | 253× | whole-scanline |
-| mGBA (MPL-2.0), render on | 0.0818 | 205× | event-scheduled modes |
-| **TerminalGB `identical`** (the default) | **0.2207** | 76× | per-dot FIFO |
-| SameBoy (Expat), render on | 0.4071 | 41× | per-dot FIFO |
+| **TerminalGB `standard`** | **0.0666** | 251× | whole-scanline |
+| mGBA (MPL-2.0), render on | 0.0819 | 204× | event-scheduled modes |
+| **TerminalGB `identical`** (the default) | **0.2126** | 79× | per-dot FIFO |
+| SameBoy (Expat), render on | 0.4084 | 41× | per-dot FIFO |
 
-**We are 1.24× faster than mGBA and 1.84× faster than SameBoy, each against the engine of its own
-granularity.** PyBoy, in the APU-free block both sides, is 0.0157 against our 0.0297 — **1.89×
+**We are 1.23× faster than mGBA and 1.92× faster than SameBoy, each against the engine of its own
+granularity.** PyBoy, in the APU-free block both sides, is 0.0156 against our 0.0297 — **1.90×
 ahead of us**.
 
 ### 8c. So the received wisdom is wrong on this box, and it is worth saying plainly
@@ -504,7 +504,7 @@ The expectation put to this work was that native C emulators run at thousands of
 where PyBoy manages hundreds, and that PyBoy is fast only *for something with Python bindings*.
 Measured here, **the ordering is almost exactly the accuracy ordering, inverted**:
 
-    PyBoy 0.0157   <   ours standard 0.0297   <   mGBA 0.0555   <   ours identical 0.2207   <   SameBoy 0.3825
+    PyBoy 0.0156   <   ours standard 0.0297   <   mGBA 0.0555   <   ours identical 0.2126   <   SameBoy 0.3825
     Mealybug 0                                    (not in that table)   26 rows                15 rows
 
 PyBoy is the fastest Game Boy emulator on this machine, and it buys that by not being
@@ -527,6 +527,10 @@ pixels and the APU on, each followed by **all 6,315 rows in both picture modes**
 | mode 3 taken as a run, not a sequence of independent dots | 0.3224 | +7.0 % |
 | the per-dot idle horizon asks whether STAT can wake | 0.2497 | +29.3 % |
 | the object scan answers "no" in one compare | 0.2283 | +9.8 % |
+| a background tile decoded straight into the FIFO | 0.2125 | +3.4 % |
+
+End to end that is **0.3447 → 0.2126 ms/frame, 1.62×**, and `standard` did not move
+(0.0666 before and after — every change is inside the per-dot engine).
 
 **None of it is a trade.** Frame and WRAM hashes are byte-identical throughout, no baseline file
 was touched, and `savestate::FORMAT_VERSION` did not move.
@@ -578,11 +582,11 @@ not a pass.
 "As fast as possible, lossless in ways that matter" is the right framing, and it is better
 served by a real ceiling than by a borrowed number:
 
-* Against the accuracy reference we are **1.84× ahead at its own PPU granularity** and
-  **1.24× ahead of mGBA at its own** (§8b, machine-matched — the older 9.5× compared our
+* Against the accuracy reference we are **1.92× ahead at its own PPU granularity** and
+  **1.23× ahead of mGBA at its own** (§8b, machine-matched — the older 9.5× compared our
   APU-free, pixel-free run against SameBoy drawing and sounding, which is not the same machine).
   That lead is the design.
-* Against the fastest thing measured here we are **1.89× behind**, and it is behind because it
+* Against the fastest thing measured here we are **1.90× behind**, and it is behind because it
   is not cycle-accurate: PyBoy scores 0 on Mealybug where we score 26.
 * **There is no faster native emulator here to chase.** That was the expectation and it did not
   survive being run (§8c).

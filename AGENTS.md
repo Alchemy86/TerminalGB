@@ -13971,6 +13971,121 @@ Passing the env var to it sets nothing and reads as "the flag buys nothing", whi
 stale row gets published. `against-the-field.md`'s old `GB_SPEED=speed` row label was
 misleading for that reason.
 
+## THE FIELD, MEASURED — and PyBoy is the fastest thing on this box
+
+**Full record: [`docs/measured/against-the-field.md`](docs/measured/against-the-field.md) §8.
+Instruments: `tools/perf/field.sh` (interleaved, one core, one session) plus
+`tools/perf/{mgba-bench.c,sameboy-bench.c,pyboy-bench.py}`.** mGBA had never been timed here;
+it is now.
+
+- **THE RECEIVED WISDOM IS WRONG ON THIS BOX AND THE ORDERING IS THE ACCURACY ORDERING,
+  INVERTED.** blue.gb, 7,168 frames, one P-core, machine-matched (pixels drawn and the APU
+  emulated on both sides): **ours `standard` 0.0666 < mGBA 0.0819**, **ours `identical` 0.2126 <
+  SameBoy 0.4084**, and PyBoy 0.0156 against our APU-free 0.0297. *PyBoy is the fastest Game Boy
+  emulator on this machine*, and it buys that by scoring **0** on Mealybug where the per-dot
+  engine scores 26 and SameBoy 15. "Native emulators do thousands of frames a second against
+  PyBoy's hundreds" did not survive being run. **There is no native emulator here to catch.**
+- **PAIR THE PICTURE ENGINES OR YOU ARE MEASURING THE PPU, NOT THE EMULATOR.** mGBA's GB PPU is
+  **event-scheduled at mode boundaries** (`_endMode0`..`_endMode3` + `mTimingSchedule`,
+  `src/gb/video.c`) — architecturally our `standard`. SameBoy's is a per-dot FIFO — our
+  `identical`. Comparing across that line is a four-times error.
+- **AND MATCH THE MACHINE: our bench's default installs NO APU** (`Sound::do_cycle` returns
+  immediately with no player) while mGBA and SameBoy emulate one whether or not anyone listens.
+  Every field figure this repository published before 2026-09-09 compared our no-APU, no-pixels
+  run against their full machine. `field.sh` prints two blocks now: an APU-free one for PyBoy
+  (whose `sound_emulated=False` really does return on entry) and a machine-matched one with
+  `--audio` for the natives.
+- **mGBA's "render off" is expressed by NOT calling `setVideoBuffer`** — it installs a dummy
+  renderer in `_GBCoreInit` and only swaps the software one in on reset if an output buffer
+  exists (`src/gb/core.c:141,571`). Its own supported path, not a poke at internals. **It logs
+  to stdout**, so a `| tail -1` eats the log and hides it.
+- **mGBA is MPL-2.0 — the same licence as ours** — so it may be reused with attribution, not
+  merely read. SameBoy is Expat, PyBoy is **LGPL-3.0** (read and cite, never transcribe).
+
+### THE STRUCTURAL IDEA ALL THREE SHARE, and what we already had
+
+- **mGBA has ONE priority-ordered event queue** (`struct mTiming`/`mTimingEvent`,
+  `include/mgba/core/timing.h`) and the CPU runs until `cpu->nextEvent`; `_SM83TickInternal`
+  (`src/sm83/sm83.c`) has an explicit fast path — *if no event is within 2 T-cycles, skip every
+  per-cycle check and just add the cycles*. **PyBoy** does the same thing with a `min()` over
+  each peripheral's `_cycles_to_interrupt` (`pyboy/core/mb.py`, `Motherboard.tick`), then runs
+  `cpu.tick(target)` with **zero peripheral work inside the loop**. **We** do it per peripheral
+  (`Timer::horizon`, `Gpu::defer_dots`, `Gpu::idle_dots`, `Sound::cycles_to_output`).
+  A single queue was **not** adopted: with five events a `min` is a handful of compares and a
+  sorted insert is not obviously cheaper. Worth revisiting only with a measurement.
+- **Two things PyBoy does that we already do**: the opcode fetch bypasses the memory dispatch
+  by reading the ROM bank directly (its own `# HACK` comment, `cpu.py`; ours is
+  `MemoryManagementUnit::fetch`), and the immediate is decoded at fetch time from a length
+  table. **One it does worse**: `execute_opcode` is a 512-way if/elif chain where ours is a
+  jump table.
+- **What PyBoy does that we deliberately do not**: no per-access bus tick at all, and a flat
+  `cycles += 20` interrupt dispatch. That is the accuracy, and its price is already measured —
+  see the accuracy-trading section above.
+
+## The per-dot engine is 1.62x faster, losslessly (2026-09-09)
+
+**72 % of a DEFAULT-mode frame is the PPU**, so that is where a user's time goes and where to
+look first. `identical` **0.3447 → 0.2126 ms/frame** on blue.gb with pixels and the APU on, in
+four changes, each A/B'd interleaved on one P-core and each followed by **all 6,315 rows in both
+picture modes**. `standard` did not move (0.0666 either side). No baseline touched, no
+`savestate::FORMAT_VERSION` bump, frame and WRAM hashes byte-identical.
+
+- **Mode 3 is a RUN, not a sequence of independent dots (+7.0 %).** `pipeline_dot` reaches no
+  `change_mode` and no `next_line`, so inside mode 3 neither the mode nor the line can move; the
+  general loop's `idle` test, its OAM-slot test and `accurate_dot`'s repeat of both were
+  answering a settled question ~25,000 times a frame. **The `lx < WIDTH` half of the fast path's
+  guard is an infinite loop if you omit it** — mode 3 with `lx` already at the edge is the one
+  state whose only transition is `change_mode(0)`.
+- **THE IDLE HORIZON ASKS WHETHER STAT CAN WAKE (+29.3 %), and this is the one to understand.**
+  `Gpu::idle_dots` already knew a halted CPU observes the PPU through `IF` alone and already
+  acted on it — **for the batched renderer only**; the per-dot engine returned before reaching
+  the argument and answered 1 in modes 0, 1 and 2 whatever STAT held. *The argument never
+  mentioned how the picture is drawn.* Gated on `!(stat_wakes && any_inte)` the only edge left
+  is VBlank. **Strictly narrower than the mode-0/VBlank batching `docs/throughput.md` §14
+  measured and rejected** — that one ignored STAT. Halt batches a frame on blue.gb: **7,308 at
+  1.7 each → 26 at 492.3**.
+- **A WIN THAT DEPENDS ON HALTING IS INVISIBLE TO TEST ROMS, AND THAT IS WHY NO ROW MOVED.**
+  blue.gb halts 13,051 M-cycles a frame; **dmg-acid2 arms a STAT source** so it keeps the old
+  horizon exactly (10,458 batches at 1.6), and `cpu_instrs` halts 245. Measured, the change is
+  worth nothing on either (0.3479 → 0.3499, 0.3605 → 0.3631, inside the code-layout band). Every
+  Mealybug ROM and every Gambatte `miscmstatirq`/`lycEnable`/`m0enable` row arms a source, so **a
+  ROM that could tell the difference does not take the branch** — a structural reason for the
+  suites staying green, not a lucky one. **Quote a real cartridge and a test ROM separately.**
+- **The object scan answers "no" in one compare (+9.8 %).** `due_sprite` scanned up to ten
+  entries on every mode-3 dot and answered no almost every time; ablating it entirely is 19 %,
+  so it was worth sizing first. `Pipeline::min_unfetched_x` is exact rather than conservative and
+  is **derived state — `load_state` rebuilds it, so the save format did not move**. Its failure
+  mode is **silent** (an object simply never gets fetched), so it is pinned by driving a real
+  fetcher for eight scanlines with ten deliberately unsorted objects and asserting at every dot
+  that the cache equals a fresh recompute.
+- **A background tile is decoded straight into the FIFO (+3.4 %)** rather than into a 32-byte
+  temporary a second pass copied in. **Check the Color path explicitly** — `flip_x` and `prio`
+  only fire there, so DMG hashes agreeing proves half of it; `GB_MODEL=cgb` and `cgb-acid2.gbc`
+  are the other half.
+
+### Three negatives from the same round — do not repeat them
+
+- **Deferring the per-dot engine the way `standard` is deferred** (`Gpu::defer_dots` returning
+  `next_mode_edge()` for `Accurate` too) is worth **+4.5 % and MOVES THE FRAME AND WRAM HASHES**.
+  The cartridge can tell, so it is not available to the accurate mode at any price.
+- **Cutting `setcolor` to one bounds check** measured 0.2516 → 0.2503 and lost four rounds of
+  five — inside the code-layout band; LLVM had already handled it. It is genuinely ~7 % of the
+  frame, but the cost is the memory traffic of an RGBA buffer holding four shades, not the
+  checks. The remaining structural idea there is the buffer's own layout, which is a public-API
+  change (`Gameboy::image`, the FFI, screenshots, `make test-cross`'s hash).
+- **`std::env::var_os` in a per-dot ablation costs 6x** (0.25 → 1.61 ms/frame) and destroys the
+  measurement it was added to take. **Ablate at compile time**, with two binaries.
+
+### Profiling the per-dot engine: fix the PIE bias, do not infer it
+
+`eu-stack` prints runtime addresses and the binary is PIE with ASLR, so the load bias differs
+per run — **read it from `/proc/<pid>/maps` while the process is alive** rather than matching a
+symbol name against `nm` (eu-stack's demangled names do not compare equal to `nm -C`'s, and
+anchoring on a name that matches several symbols produces a *plausible, entirely wrong* profile
+full of the other engine's functions). Then `addr2line -a -f -C -i` for inline-aware attribution.
+After the four changes the profile is **flat — top item 7.5 %, then 7.5, 7.1, 5.5, 5.3** — which
+is this repository's own signature for "the work is now the work".
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
