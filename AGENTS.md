@@ -14108,14 +14108,39 @@ Instrument: `core_bench`, which reports startup and peak RSS as well as the two 
   count, swept both directions so drift is visible (points with >5 % up/down spread are the box
   moving, not the emulator): 1 → 6,079; 4 → 23,848 (3.92x); 8 → 44,125 (7.26x); **16 → 78,112
   (12.85x)**; 24 → 73,166; 64 → 79,995 (13.16x); 1024 → 60,799 (10.00x). Near-linear to the core
-  count, flat from 16 to 256, declining past 512. That is the silicon: 8 P-cores plus 10-12 E-cores
-  at ~60 % of one is about 15 P-core-equivalents, and one core is usually busy with something else.
+  count. That is the silicon: 8 P-cores plus 10-12 E-cores at ~60 % of one is about 15
+  P-core-equivalents, and one core is usually busy with something else.
+- ~~flat from 16 to 256, declining past 512~~ — **THE DECLINE IS THE BOX'S CLOCK, NOT THE FAN-OUT,
+  AND A SWEEP WITH A FIXED FRAME COUNT PER INSTANCE CANNOT SEE THE DIFFERENCE.** The P-cores hold
+  4,540 MHz for about five seconds of all-core load and then settle at **3,100 MHz** for as long as
+  the load lasts, so a sweep's small points finish at burst clock and its large ones run almost
+  entirely at sustained clock. 4540/3100 predicts the per-frame cost to **0.3 %**, and the control
+  needs no instance count at all: the identical 20-worker 2,000-frame run reads **0.2145 ms/frame
+  cold, 0.3116 straight after a long run, and 0.2197 again after 45 s idle.** Measured at steady
+  state, aggregate is **flat from 20 copies to 16,000**. Warm every point at its own load
+  (`core_bench --warm-seconds`), run points back to back, scale frames so every window is the same
+  wall duration — `tools/perf/fanout.sh` does all three and prints the up/down disagreement.
 - **"4 THREADS BEAT 16 BY ~10x ON THIS WORKLOAD" IS FALSE — 16 IS 3.3x FASTER THAN 4.** Measured
-  twice, before and after this round's changes. Oversubscription does eventually cost: 1024 workers
-  is 22 % below the peak. But the knee is at the core count, not below it, and CPU utilisation and
-  throughput move together up to it.
+  twice, before and after this round's changes. The knee is at the core count, not below it, and
+  CPU utilisation and throughput move together up to it.
+- **THE OPERATING POINT IS ~820 COPIES, NOT THE LARGEST COUNT THAT RUNS** —
+  [`docs/measured/concurrency.md`](docs/measured/concurrency.md). That is where a copy still keeps
+  up with a real Game Boy (`identical`; ~5,000 on `standard`). **16,000 copies run correctly and
+  are a useless operating point**: each gets 3.0 frames/s, 0.050x real time. Aggregate is flat
+  either way, so past the crossover you divide the same ~50,000 frames/s rather than gaining any.
+  Quote the crossover, and quote the picture engine with it.
+- **A POOL OF CORE-COUNT THREADS COSTS 2.5x LESS MEMORY PER COPY THAN ONE THREAD EACH** — 0.158
+  against 0.399 MiB, measured identically at 1,000, 4,000, 8,000 and 16,000 copies, and ~2.8x
+  quicker to have them all live. The machine is ~162 KiB, so **60 % of the thread-per-copy figure
+  is not the machine**: it is stack pages touched constructing and moving a 51 KiB `Gameboy`, paid
+  once per *thread*. `pewter_chain corpus` already has the pool shape; `core_bench --instances N`
+  now does too. **Cache locality is NOT the reason** — with machines, threads and total frames held
+  fixed and only `--chunk` moving from 1 frame to 2,000, ms/frame spans 0.3185-0.3323, which is
+  noise.
 - **MEMORY AND STARTUP STOPPED BEING INTERESTING**, which is the answer to "how many fit": 0.385 MiB
-  and ~0.3 ms an instance, so a thousand machines is ~400 MiB and a third of a second of setup.
+  and ~0.3 ms an instance, so a thousand machines is ~400 MiB and **live in 66 ms** (16,000 in 1.4 s,
+  or 500 ms pooled). Nothing else breaks up to 16,000 — not the scheduler, not file handles, not the
+  allocator, not correctness (frame hash `0xc850103d09c4eb25` at every count, all copies agreeing).
   Hundreds of *resident* machines is not the question; hundreds *progressing* is, and that is the
   core count with each getting a share.
 - **PIN THE COMPARISON TO ONE CORE WHEN THE BOX IS BUSY — the fan-out figure is unresolvable and

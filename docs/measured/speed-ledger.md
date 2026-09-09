@@ -54,6 +54,7 @@ Pokémon Blue, one P-core, quiet box, collector configuration unless stated.
 | `standard`, certification configuration | — | — | **414×** (no APU installed) |
 | `identical` | 0.5755 | **0.3320** | 29× → **50×** (+73 %) |
 | aggregate, 20 workers | — | — | **3,735×** real time |
+| concurrent copies at full DMG speed | — | — | **~820** (`identical`), **~5,000** (`standard`) — [`concurrency.md`](concurrency.md) |
 | aggregate, 4 workers | — | — | 1,066× — past 1000× on four cores |
 | certification run, `GB_SPEED=speed` | — | — | **+27 %** cold boot and **+39 %** on an overworld state, over the accurate machine — and the chain runs identically |
 
@@ -274,13 +275,26 @@ budget since the transport work.
 
 ---
 
-## 7. Two traps that produced a wrong answer first
+## 7. Three traps that produced a wrong answer first
 
 - **A between-binary difference under 2 % is code layout, not your change.**
   With fat LTO a change in one function moves everything after it: two binaries
   differing only in `draw_map_run` reported **pixels-off** figures 2 % apart, on
   a path that never calls it. Measure an isolated component as a *difference
   within each binary*.
+- **A fan-out sweep with a fixed frame count per instance measures the box's
+  clock, not the emulator's scaling — and it manufactures a collapse.** The
+  P-cores here hold 4,540 MHz for about five seconds of all-core load and then
+  settle at **3,100 MHz** for as long as the load lasts, and 4540/3100 predicts
+  the per-frame cost to within 0.3 %. So the small points of a sweep finish at
+  burst clock and the large ones run almost entirely at sustained clock, and
+  the difference reads as a 40 % scaling collapse past 200 copies. The control
+  needs no instance count: the identical 20-worker 2,000-frame run reads
+  **0.2145 ms/frame cold, 0.3116 straight after a long run, and 0.2197 again
+  after 45 s idle**. Warm every point to steady state at its own load
+  (`core_bench --warm-seconds`), run points back to back, and scale frames so
+  every timed window is the same wall duration —
+  [`concurrency.md`](concurrency.md) and `tools/perf/fanout.sh`.
 - **Never measure throughput with `--features profile` enabled.** Its counters
   are a single `static mut` by design, so at twenty workers every retired
   instruction writes the same cache line: **12,686 aggregate steps/s with it on
