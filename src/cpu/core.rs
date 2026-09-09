@@ -223,6 +223,26 @@ impl Cpu<'_> {
         // println!("{} {:#01x} {}", op, op, format!("{:?}", self.registers));
         // println!("{} {}", op, format!("{:?}", self.registers));
     }
+    /// The program counter has reached the unusable block or I/O, which is
+    /// the runaway-`PC` fault the window above describes.
+    ///
+    /// Out of line, and behind the range test rather than beside it: this runs
+    /// once per instruction, `Cpu::exec` is inlined into `Gameboy::frame`, and
+    /// keeping the `fault()` load and the message out of that function is
+    /// worth 1.3 % of a headless accurate frame. The test itself, and what it
+    /// does when it fires, are unchanged.
+    #[cold]
+    #[inline(never)]
+    fn report_runaway_pc(&mut self) {
+        if self.memory.fault().is_none() {
+            self.memory.report_fault(&format!(
+                "the CPU is executing from {:#06x}, which is not memory a program \
+                 can live in (unusable block / I-O) — the game has crashed",
+                self.registers.pc
+            ));
+        }
+    }
+
     pub fn get_byte(&mut self) -> u8 {
         let pc = self.memory.fetch(self.registers.pc);
         self.registers.pc = self.registers.pc.wrapping_add(1);
@@ -677,14 +697,8 @@ impl Cpu<'_> {
         // `oam_dma_start`). Including OAM made every one of them print a crash
         // report and, far worse for a player, silently stop writing the battery
         // save for the rest of the session. See docs/conformance-notes.md.
-        if self.registers.pc.wrapping_sub(0xFEA0) < 0x00E0
-            && self.memory.fault().is_none()
-        {
-            self.memory.report_fault(&format!(
-                "the CPU is executing from {:#06x}, which is not memory a program \
-                 can live in (unusable block / I-O) — the game has crashed",
-                self.registers.pc
-            ));
+        if self.registers.pc.wrapping_sub(0xFEA0) < 0x00E0 {
+            self.report_runaway_pc();
         }
         let op = self.get_byte();
         if self.halt_bug {
