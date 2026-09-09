@@ -269,6 +269,17 @@ struct Run {
     /// FNV over a WRAM window. Guest-side state, so it must be identical
     /// whether or not pixels were drawn.
     wram_hash: u64,
+    /// This worker's own timed section, as instants.
+    ///
+    /// **The aggregate divides by `max(end) - min(start)` over the workers,
+    /// not by a clock the main thread reads after the barrier.** With more
+    /// runnable threads than cores the main thread can be descheduled between
+    /// being released and reading `Instant::now()`, which *shortens* the wall
+    /// it measures and inflates the figure: at 2048 workers this example
+    /// reported 302,988 steps/s where the process really took 29.5 s of wall
+    /// for 1,638,400 frames, i.e. 64,389. A worker timestamps its own section
+    /// with nothing in between, so the span below is the honest one.
+    span: (Instant, Instant),
     /// Seconds from "have the ROM bytes" to "the first frame is drawn" —
     /// construction, the APU install, any save state, and one `frame()`.
     ///
@@ -347,7 +358,8 @@ fn one_worker(rom: &Arc<[u8]>, state: Option<&[u8]>, a: &Args, start: &Barrier) 
             }
         }
     }
-    let seconds = t0.elapsed().as_secs_f64();
+    let t1 = Instant::now();
+    let seconds = (t1 - t0).as_secs_f64();
     let cpu_seconds = match (c0, thread_cpu_nanos()) {
         (Some(a), Some(b)) if b > a => Some((b - a) as f64 / 1e9),
         _ => None,
@@ -367,6 +379,7 @@ fn one_worker(rom: &Arc<[u8]>, state: Option<&[u8]>, a: &Args, start: &Barrier) 
         cpu_seconds,
         frame_hash: fnv1a(gb.image()),
         wram_hash: fnv1a(&wram),
+        span: (t0, t1),
         startup_seconds,
     }
 }
@@ -674,9 +687,15 @@ fn main() {
             }));
         }
         gate.wait();
-        let wall = Instant::now();
         let results: Vec<Run> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-        let wall = wall.elapsed().as_secs_f64();
+        // **From the workers' own instants, never this thread's.** See
+        // `Run::span`: with more runnable threads than cores the main thread
+        // can be descheduled between the barrier releasing it and it reading
+        // the clock, and the figure that produces is not conservative — it is
+        // several times too large.
+        let first = results.iter().map(|r| r.span.0).min().expect("no workers");
+        let last = results.iter().map(|r| r.span.1).max().expect("no workers");
+        let wall = (last - first).as_secs_f64();
 
         // Per-instance cost is the mean of each worker's own **CPU** time,
         // which is what a single-instance user experiences on a machine that is
