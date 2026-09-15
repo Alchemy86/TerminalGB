@@ -44,8 +44,11 @@ pub fn chiptune_funk(bars_to_play: usize, seed: u64) -> Piece {
     // `Adsr::pluck` (whose whole point, used elsewhere in this module, is a
     // continuous decay across the gate — the wrong shape for this voice).
     let bass = Part::new(
-        Instrument::new(Waveform::Square { duty: 0.5 }, Adsr::linear(0.004, 0.0, 1.0, 0.004))
-            .with_gain(0.42),
+        Instrument::new(
+            Waveform::Square { duty: 0.5 },
+            Adsr::linear(0.004, 0.0, 1.0, 0.004),
+        )
+        .with_gain(0.42),
         Pattern::gated("x.x.x..xx.x.x.x.", &[0; 16], 0.9),
         NoteSource::Root,
     )
@@ -57,9 +60,12 @@ pub fn chiptune_funk(bars_to_play: usize, seed: u64) -> Piece {
     // audible ~2-6 Hz warble — see `Instrument`'s own docs on vibrato
     // depth), an octave up (the chip "bite" `lead_octave` gives).
     let lead = Part::new(
-        Instrument::new(Waveform::Square { duty: 0.30 }, Adsr::linear(0.004, 0.0, 1.0, 0.004))
-            .with_vibrato(6.0, 0.012)
-            .with_gain(0.20),
+        Instrument::new(
+            Waveform::Square { duty: 0.30 },
+            Adsr::linear(0.004, 0.0, 1.0, 0.004),
+        )
+        .with_vibrato(6.0, 0.012)
+        .with_gain(0.20),
         Pattern::gated(
             "xxxxxxxxxxxxxxxx",
             &[0, 2, 1, 3, 2, 3, 1, 2, 0, 2, 3, 2, 1, 3, 2, 3],
