@@ -1,23 +1,49 @@
-# TerminalGB on the M5Stack PaperColor — first boot
+# TerminalGB on the M5Stack PaperColor
 
 ```sh
 espup install --targets esp32s3     # once; upstream rustc cannot target Xtensa
 tools/m5paper-build.sh backup       # ONCE, before you overwrite the factory image
-tools/m5paper-build.sh flash
+TERMINALGB_ROM=~/roms/blue.gb tools/m5paper-build.sh flash
 ```
 
-This is **not** an emulator port. It is the step before one: a bring-up binary
-that proves the toolchain, the panel and the buttons on the real device, and
-touches no TerminalGB code at all.
-
-[`docs/m5paper-first-boot.md`](../../docs/m5paper-first-boot.md) has the measured
-results and the serial logs. What follows is how it works.
+**This runs the emulator.** The same `terminalgb` core the desktop and terminal
+frontends use, built `#![no_std]` through its `embedded` cargo feature, with the
+cartridge in flash and the picture on E Ink.
+[`docs/m5paper-emulator.md`](../../docs/m5paper-emulator.md) has the measured
+results; [`docs/m5paper-first-boot.md`](../../docs/m5paper-first-boot.md) is the
+bring-up that came before it. What follows is how it works.
 
 ## What it does
 
-Boots, powers the panel, paints a solid colour, paints a landscape test card,
-then repaints in the next ink every time you press a button. Each repaint takes
-about sixteen seconds, which is the panel, not the software.
+Boots, powers the panel, builds a machine from the cartridge compiled into
+flash, emulates a thousand frames as fast as the chip can, and puts one of them
+on the paper. Then three buttons: **A** presses Game Boy START, **B** presses
+Game Boy A, and **C** cycles the shade-to-ink mapping and repaints the same
+frame so the five looks can be compared by eye.
+
+Each repaint takes about sixteen seconds, which is the panel, not the software.
+
+## The cartridge
+
+`TERMINALGB_ROM` is an absolute path, read at **build** time and compiled into
+`.rodata`, which the ESP32-S3 memory-maps out of flash — so a 1 MiB cartridge
+costs no RAM at all. **No ROM is committed to this repository**, so the default
+is the MIT dmg-acid2 image in `third_party/` and a fresh clone builds, flashes
+and shows a picture with no game.
+
+## Two things a porter should know before measuring anything
+
+**`esp_hal::Config::default()` does not run this chip at 240 MHz.** Setting
+`CpuClock::max()` took the emulator from 3 fps to 10 — the largest single change
+in this port, and it looks like nothing.
+
+**The heap is PSRAM and the panel framebuffer is out there too.** Constructing a
+`Gameboy` needs about 322,928 bytes of stack (measured, from the stack guard's
+own `sp`), because every constructor in the chain returns a large value by value
+and fat LTO merges the temporaries into one frame. An app gets ~335 KiB of
+internal DRAM in total, and esp-hal gives the stack whatever `.data` and `.bss`
+leave. The full account, including what was tried and did not work, is in
+[`docs/m5paper-emulator.md`](../../docs/m5paper-emulator.md).
 
 ## The three things that were not obvious
 
@@ -63,9 +89,15 @@ The glass is portrait. Landscape is a coordinate mapping applied on the way in
 the panel, that mapping is **tested rather than asserted**:
 
 ```sh
-tools/m5paper-build.sh test        # 9 tests, no device needed
+tools/m5paper-build.sh test        # 26 tests, no device needed
 tools/m5paper-build.sh testcard    # render what the panel should show
 ```
+
+`src/gbscreen.rs` is held to the same standard for the same reason — nobody on
+the development end can see the paper, so the Game Boy picture's placement, its
+orientation, its box and every shade-to-ink ramp are checked rather than
+claimed. A ramp that is not monotonic in luminance inverts part of the picture,
+and on a six-ink panel that is easy to do by accident.
 
 `src/geom.rs` is deliberately free of any `esp-hal` dependency so `rustc --test`
 can compile the very file the firmware runs. The tests check that the logical
@@ -82,7 +114,9 @@ claiming six.
 | `src/geom.rs` | inks, rotation, framebuffer, the test card, and the host tests |
 | `src/panel.rs` | the ED2208 wire protocol: init list, transfer, refresh |
 | `src/pmic.rs` | the M5PM1 sequence that powers the panel |
-| `src/main.rs` | bring-up: power, init, two refreshes, the button loop |
+| `src/gbscreen.rs` | four Game Boy shades onto six inks, the ×2 blit, and its host tests |
+| `src/main.rs` | power, init, the machine, the emulation burst, the button loop |
+| `terminalgb-rlib/` | one manifest, no source: the emulator as an rlib only — see its own comment |
 | `src/testcard_host.rs` | renders the expected picture on the host |
 
 This crate is **not a workspace member and must never become one**, for the same
@@ -101,6 +135,9 @@ esptool --port /dev/ttyACM0 write-flash 0x0 papercolor-factory-16mb.bin
 
 ## What this does not show
 
-Nothing here runs the emulator. The next step, and the reason the refresh time
-above matters, is in
-[`docs/m5paper-first-boot.md`](../../docs/m5paper-first-boot.md).
+**Nobody plays a game on this**, and the numbers say why: twelve emulated frames
+a second is a fifth of real time, and each picture then takes sixteen seconds.
+The picture has also not been photographed and the shade mapping has not been
+chosen — both are one person in the room away. See
+[`docs/m5paper-emulator.md`](../../docs/m5paper-emulator.md)'s closing section
+for the honest list.

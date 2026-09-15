@@ -138,6 +138,7 @@ and that had quietly happened to more than half of this directory.
 | [debug tooling](debugging.md) | how to inspect, step and capture the running machine, and the surface external tools emit from |
 | [portability](portability.md) | what the core actually runs on, byte-identically — including a PSP that plays Pokémon |
 | [first boot on the PaperColor](m5paper-first-boot.md) | custom Rust on an ESP32-S3 e-paper device: the toolchain, one colour on the panel timed at 15.967 s, and a button read back |
+| [Pokémon Blue on the PaperColor](m5paper-emulator.md) | the emulator itself on an ESP32-S3: a 1 MiB cartridge in flash costing no RAM, 12 fps, and where 335 KiB of DRAM went |
 | [throughput](throughput.md) | how fast the core is in both units, what the build profile was costing, skippable rendering — and the three optimisations that measured worse |
 | [brand assets](brand/README.md) | the mark, and the rule that it is generated from a script with no font embedded |
 

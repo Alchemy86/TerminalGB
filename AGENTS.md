@@ -4078,8 +4078,8 @@ Emulation went 22.4 → 8.3 ms/frame on the overworld, every frame byte-identica
 
 **Full pages: [`docs/m5paper-first-boot.md`](docs/m5paper-first-boot.md) (measured results, the
 serial logs) and [`platform/m5paper/README.md`](platform/m5paper/README.md) (pinout, code layout,
-how to restore the factory image). Build with `tools/m5paper-build.sh`.** Bring-up only — **no
-emulator runs on it yet**, deliberately.
+how to restore the factory image). Build with `tools/m5paper-build.sh`.** Bring-up only — **the
+emulator runs on it now; see the section below.**
 
 - **THE TOOLCHAIN WALL IS CLEARED AND IT WAS THE THING THAT HAD STOPPED A CREW.** `espup install
   --targets esp32s3` installs the Xtensa Rust fork; source `~/.espup-export.sh` and
@@ -4117,9 +4117,61 @@ emulator runs on it yet**, deliberately.
   ~90 s. The image taken for this work is `~/m5paper-backup/papercolor-factory-16mb.bin`, sha256
   `cdfcae99...c514c`, carrying the factory descriptor `48a1057-dirty`. No secure boot and no flash
   encryption, so `write-flash 0x0` restores it exactly.
-- **PSRAM IS NEVER ALLOCATED FROM**, so the `s32c1i`-on-PSRAM atomics hazard the scouts flagged
-  cannot be hiding in any of these numbers. The 120,000-byte framebuffer is a static in internal
-  SRAM. That hazard is a question for the port, not for bring-up.
+- **PSRAM IS NEVER ALLOCATED FROM** *by the bring-up binary*, so the `s32c1i`-on-PSRAM atomics
+  hazard the scouts flagged cannot be hiding in any of these numbers. The emulator port that
+  followed does allocate from it, and the hazard is **absent there rather than avoided** — see the
+  next section.
+
+### THE EMULATOR RUNS ON IT — and the two facts that decided the whole port
+
+**Full page: [`docs/m5paper-emulator.md`](docs/m5paper-emulator.md)** (measured results, the RAM
+account, what was tried and did not work). `TERMINALGB_ROM=~/roms/blue.gb tools/m5paper-build.sh
+flash`. Measured on the captain's own device: Pokémon Blue, **1024 KiB in flash and 0 bytes of
+RAM**, **1000 frames in 81.051 s (12 fps, 20 % of real time)**, one frame on the paper in
+**15.953 s**. Confirmed by eye — dmg-acid2's reference picture first, then Blue.
+
+- **`esp_hal::Config::default()` DOES NOT RUN THIS CHIP AT 240 MHz, AND THAT WAS MOST OF THE
+  SPEED.** `CpuClock::max()` took the emulator from **3 fps to 10** on the same binary — the
+  single largest change in the port, and it looks like nothing. Set it before measuring anything
+  on any esp-hal target. **PSRAM at 80 MHz instead of its 40 MHz default HUNG the device**; it is
+  left at the default.
+- **CONSTRUCTING A `Gameboy` NEEDS ~322,928 BYTES OF STACK, AND THAT IS MEASURED** — the stack
+  guard's own `sp` against its `top`. Every constructor in the chain returns a large value by
+  value (`Gameboy` alone is 51,296 bytes) and fat LTO merges every level's temporary into one
+  frame. An app gets ~335 KiB of internal DRAM and esp-hal gives the stack whatever `.data` and
+  `.bss` leave, so the heap **and** the panel framebuffer had to go to PSRAM to make room.
+  **`#[inline(never)]` on every constructor in the chain made it WORSE, not better** (out of line
+  each nested frame keeps its own copy where LLVM could coalesce), and turning LTO off did not
+  help. The real fix is the core constructing in place, which is a change to
+  `Gameboy::try_new_with_model` and everything under it — not a flag. **Do not re-run those two
+  experiments.**
+- **The machine therefore lives on the PSRAM heap, which is the one real compromise** — its VRAM,
+  WRAM, HRAM and OAM are touched several times per emulated instruction and are on an external
+  bus. Internal SRAM would be several times faster and does not fit.
+- **`Box::new([0u8; N])` BUILDS THE ARRAY ON THE STACK.** The PPU's 92,160-byte framebuffer
+  overflowed the stack in a `memcpy` the fault handler named by its length.
+  `Gpu::blank_framebuffer` goes through `vec!` (so `alloc_zeroed`) instead; on a host it is the
+  same allocation, which `docs/throughput.md` already measured at the quantisation floor. **Any
+  large boxed array in the core has this problem.**
+- **`platform/m5paper/terminalgb-rlib/` is a SECOND MANIFEST over `src/lib.rs`, not a fork.** The
+  root package declares `crate-type = ["cdylib", "rlib", "staticlib"]` for its C ABI build and
+  Cargo builds **every** declared crate type even for a dependency; a `staticlib` is a final
+  artefact and on bare metal demands a `#[global_allocator]` and `#[panic_handler]` that belong to
+  the binary. `crate-type` cannot be put behind a feature or a target `cfg`. The proper fix is
+  moving the C ABI surface into its own package so the root can be `rlib` only — that touches
+  `make ffi-build`, the Go example and `lib::ffi_tests`, which a display port should not do.
+- **`third_party/blip_buf-nostd/` is blip_buf 0.1.5 with two hunks and nothing else** (`#![no_std]`
+  + `alloc`, and one `f64::ceil` replaced by integer arithmetic so no `libm` is pulled in). MIT,
+  licence carried, diff reproducible in one `diff`, and the `ceil` replacement is checked against
+  the real `f64::ceil` over 8,222 values by a test **with teeth** — the first version used a plain
+  `+ 1` and the sweep caught that an `as` cast from a float saturates where an add panics. Only
+  `platform/m5paper` patches it in; every other build resolves blip_buf from crates.io.
+- **`src/gbscreen.rs` carries no `esp-hal`**, like `geom.rs`, so `tools/m5paper-build.sh test`
+  compiles the code the firmware runs (26 tests). Four Game Boy shades onto six inks **with no
+  grey** is left to the device — button C cycles five looks — but every ramp being monotonic in
+  luminance, the ×2 placement, the orientation and the box around the picture are tested. Teeth
+  proven: inverting a ramp's middle two inks fails 2, a transpose instead of a rotation fails 1.
+
 
 ## Web audio, and the APU that was missing on wasm (`src/sound.rs` `mod web_audio`, `src/screen/{webaudio,pace,web}.rs`)
 
@@ -7290,9 +7342,21 @@ it. That is now a real, CI-enforced build; it did not compile before.
   `/dev/video*`, terminals, displays — is in `screen`/`video`/`sound::cpal_audio`. Adding a
   host dependency to `cpu`/`mmu`/`gpu`/`mbc`/`sound`/`savestate`/`mode`/`upscale` breaks the
   claim; put it in a frontend.
-- **`std` is required and `no_std` is not a flag away** (`Vec`, `Box<dyn>`, `std::sync::Mutex`
-  in the FFI shim, `PathBuf` in the battery layer). Say so rather than implying otherwise;
-  embedded *Linux* is fine, bare metal is a rework of the MBC/battery layer.
+- **`no_std` IS A FLAG NOW: `--no-default-features --features embedded`.** It is what
+  `platform/m5paper` runs on a bare-metal ESP32-S3, it needs only a `#[global_allocator]` from the
+  binary, and it is **additive** — the host builds are byte-for-byte what they were
+  (`cargo test --release --lib` 915 passed, 0 failed, before and after). What it costs is stated
+  in the feature's own doc comment in `Cargo.toml` and is real: no battery saves (`SavePath` is
+  **uninhabited**, so the compiler proves every mapper's save arm unreachable rather than us
+  promising it), no `$GB_*` overrides (`crate::env_var` answers `None`), no save-state `Error`
+  impl, no plugin trace or panic guard, and the ROM is a `&'static [u8]` rather than an
+  `Arc<[u8]>` — which is what lets it sit in memory-mapped flash and keeps a reference count out
+  of external PSRAM. `crate::compat` is the `std`-prelude shim; `crate::host_warn!` is the
+  stderr-or-nothing macro.
+- **Without that feature `std` is still required, and the reasoning that made it so is still
+  worth knowing** (`Vec`, `Box<dyn>`, `std::sync::Mutex` in the FFI shim, `PathBuf` in the battery
+  layer). Bare metal really was "a rework of the MBC/battery layer" — that rework is what the
+  `embedded` feature *is*, and it is why `SavePath` and `RomBytes` are type aliases now.
 - **`get_mbc` used to force an MBC3 whenever no save path was given** — i.e. for the wasm
   build, the FFI build and every embedder — so a non-MBC3 game was mis-banked from its first
   bank switch. Persistence and mapper selection are now separate: every `MBCx::new` takes

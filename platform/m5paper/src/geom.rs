@@ -274,7 +274,11 @@ mod tests {
                     seen[i] = true;
                 }
             }
-            assert!(seen.iter().all(|&s| s), "{:?} leaves pixels unreachable", rot);
+            assert!(
+                seen.iter().all(|&s| s),
+                "{:?} leaves pixels unreachable",
+                rot
+            );
         }
     }
 
@@ -299,7 +303,10 @@ mod tests {
         fb.clear(Ink::White);
         fb.set(600, 0, Ink::Black); // one past the right edge
         fb.set(0, 400, Ink::Black); // one past the bottom
-        assert!(fb.raw().iter().all(|&b| b == (Ink::White as u8) << 4 | Ink::White as u8));
+        assert!(fb
+            .raw()
+            .iter()
+            .all(|&b| b == (Ink::White as u8) << 4 | Ink::White as u8));
     }
 
     /// The test card has to be asymmetric in both axes or it proves nothing

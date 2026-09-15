@@ -12,6 +12,22 @@ export_file="${ESPUP_EXPORT_FILE:-$HOME/.espup-export.sh}"
 port="${M5PAPER_PORT:-/dev/ttyACM0}"
 elf="$crate/target/xtensa-esp32s3-none-elf/release/terminalgb-m5paper"
 
+# THE CARTRIDGE, compiled into the firmware's flash. No ROM is committed to this
+# repository, so the default is the MIT dmg-acid2 image in third_party/ — the one
+# cartridge this project may redistribute — and a fresh clone therefore builds
+# and shows a picture with no game at all. Point it somewhere else to play one:
+#
+#   TERMINALGB_ROM=~/roms/blue.gb tools/m5paper-build.sh flash
+#
+# It is an absolute path because `include_bytes!` resolves relative paths
+# against the source file, not the working directory.
+export TERMINALGB_ROM="${TERMINALGB_ROM:-$here/third_party/dmg-acid2/dmg-acid2.gb}"
+if [ ! -r "$TERMINALGB_ROM" ]; then
+  echo "TERMINALGB_ROM is not readable: $TERMINALGB_ROM" >&2
+  exit 1
+fi
+TERMINALGB_ROM="$(cd "$(dirname "$TERMINALGB_ROM")" && pwd)/$(basename "$TERMINALGB_ROM")"
+
 usage() {
   cat <<'EOF'
 usage: tools/m5paper-build.sh [command]
@@ -23,7 +39,7 @@ usage: tools/m5paper-build.sh [command]
   testcard   render the expected picture to target/m5paper/ as PPM
   backup     read the whole 16 MB flash to a file before you overwrite it
 
-  env: M5PAPER_PORT, ESPUP_EXPORT_FILE
+  env: M5PAPER_PORT, ESPUP_EXPORT_FILE, TERMINALGB_ROM
 EOF
 }
 
@@ -71,6 +87,11 @@ case "$cmd" in
     out="$(mktemp -d)"
     rustc --test --edition 2021 -o "$out/geomtest" "$crate/src/geom.rs"
     "$out/geomtest"
+    # gbscreen.rs is the same deal: no esp-hal, so the shade-to-ink mapping and
+    # the picture's placement are checked rather than claimed. It pulls geom.rs
+    # in itself under `cfg(test)`, so this runs both files' tests.
+    rustc --test --edition 2021 -o "$out/gbscreentest" "$crate/src/gbscreen.rs"
+    "$out/gbscreentest"
     rm -rf "$out"
     ;;
   testcard)

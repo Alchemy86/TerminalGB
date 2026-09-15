@@ -1,0 +1,50 @@
+# The emulator, as an rlib and nothing else.
+#
+# WHY THIS MANIFEST EXISTS. The root package declares
+# `crate-type = ["cdylib", "rlib", "staticlib"]` for its C ABI build, and Cargo
+# builds **every** declared crate type even when the package is only a
+# dependency. A `staticlib` is a final artifact, so on a bare-metal target it
+# demands a `#[global_allocator]` and a `#[panic_handler]` — which belong to the
+# firmware binary, not to a library. The firmware only ever wants the rlib, and
+# Cargo has no way to say "just that one": `crate-type` cannot be put behind a
+# feature or a target `cfg`.
+#
+# So this is a second manifest over the *same* `src/lib.rs`, differing only in
+# `crate-type`. It is not a fork: there is no copied source here, and a `cd
+# platform/m5paper && cargo tree` shows one `terminalgb`.
+#
+# It declares only what the `embedded` configuration actually uses. If that
+# configuration ever grows a dependency, this build fails to compile with a
+# missing-crate error — loudly, at the first build, not silently at run time.
+#
+# The proper fix is to move the C ABI surface into its own package so the root
+# can be `crate-type = ["rlib"]`; that touches `make ffi-build`, the Go example
+# and `lib::ffi_tests`, which is a bigger change than a display port should
+# make. See platform/m5paper/README.md.
+[package]
+name = "terminalgb"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "terminalgb"
+path = "../../../src/lib.rs"
+crate-type = ["rlib"]
+
+[features]
+default = ["embedded"]
+embedded = ["terminalgb-plugin-api/embedded"]
+
+[dependencies]
+terminalgb-plugin-api = { path = "../../../crates/terminalgb-plugin-api" }
+blip_buf = "0.1.5"
+
+[lints.rust]
+# `src/lib.rs` is written against the root package's full feature list; this
+# manifest declares only the one feature the firmware builds with, so every
+# other `#[cfg(feature = ...)]` in the file is an "unexpected" name here. They
+# are all correctly *off*, which is the configuration we want.
+unexpected_cfgs = "allow"

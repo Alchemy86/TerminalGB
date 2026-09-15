@@ -17,6 +17,13 @@ publish = false
 [workspace]
 
 [dependencies]
+# THE EMULATOR. `--no-default-features` is the embedding build and `embedded`
+# makes it `#![no_std]` + `alloc` — see the feature's own doc in the root
+# Cargo.toml for exactly what that costs (no battery saves, no `$GB_*`
+# overrides, no plugins, no save states) and `src/gb.rs` for what it buys.
+terminalgb = { path = "terminalgb-rlib" }
+# The `#[global_allocator]` the line above needs. `alloc` is the only reason.
+esp-alloc = "0.8.0"
 esp-hal = { version = "1.2.1", features = ["esp32s3", "unstable"] }
 esp-println = { version = "0.18.0", default-features = false, features = [
     "esp32s3",
@@ -30,7 +37,20 @@ esp-backtrace = { version = "0.20.0", features = [
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32s3"] }
 
 [profile.release]
-opt-level = "s"
+# 3, not "s". Flash is 16 MiB and the binary is under 200 KiB, so size is not a
+# constraint here — and `docs/throughput.md` measures opt-level 3 as worth about
+# 24 % on a real cartridge against "s", which is the whole game on a chip this
+# slow. `tools/psp-build.sh` overrides the same setting for the same reason.
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 debug = 2
+
+# `blip_buf` — the APU's resampler, and the emulator's only third-party crate —
+# is `std`-only as published, for `Vec` and one `f64::ceil`. This is the same
+# 0.1.5 source with those two hunks changed and nothing else; the diff, the
+# licence and the sweep that proves the `ceil` replacement exact are all in
+# third_party/blip_buf-nostd/. Only this firmware patches it: every other build
+# in the repository resolves blip_buf from crates.io as before.
+[patch.crates-io]
+blip_buf = { path = "../../third_party/blip_buf-nostd" }
