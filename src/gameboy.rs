@@ -1,3 +1,6 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::cpu::core::Cpu;
 use crate::input::KeypadKey;
 
@@ -39,7 +42,7 @@ pub enum Target {
     SuperGameBoy,
 }
 
-#[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+#[cfg(not(any(target_arch = "wasm32", feature = "ffi", feature = "embedded")))]
 pub fn load_rom(filepath: &str) -> Result<(Vec<u8>, std::path::PathBuf), String> {
     use std::fs::File;
     use std::io::Read;
@@ -115,8 +118,8 @@ impl Gameboy {
     /// that wants a machine independent of the ambient environment should use
     /// [`Gameboy::new_with_model`] instead.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        filepath: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        filepath: Option<crate::mbc::SavePath>,
     ) -> Gameboy {
         // let rom = load_rom();
 
@@ -136,8 +139,8 @@ impl Gameboy {
     /// must be reproducible — a hardware build, a test rig, a library caller
     /// that cannot vouch for its process environment.
     pub fn new_with_model(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        filepath: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        filepath: Option<crate::mbc::SavePath>,
         model: crate::mode::Model,
     ) -> Gameboy {
         Gameboy {
@@ -156,8 +159,8 @@ impl Gameboy {
     /// hold a header, an unreadable `.sav`), because `[profile.release]` sets
     /// `panic = 'abort'`.
     pub fn try_new_with_model(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        filepath: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        filepath: Option<crate::mbc::SavePath>,
         model: crate::mode::Model,
     ) -> Result<Gameboy, &'static str> {
         Ok(Gameboy {
@@ -178,8 +181,8 @@ impl Gameboy {
     /// the real one. The frontend finds the file; see [`crate::boot`] for where
     /// it looks and why the core never does it itself.
     pub fn new_with_boot_rom(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        filepath: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        filepath: Option<crate::mbc::SavePath>,
         model: crate::mode::Model,
         boot: Option<crate::boot::BootRom>,
     ) -> Gameboy {
@@ -654,7 +657,13 @@ impl Gameboy {
     pub fn frame(&mut self) {
         self.begin_frame();
 
-        let waitticks = (4194304f64 / 1000.0 * 16.0).round() as u32;
+        // 4194304 / 1000 * 16, rounded — a compile-time constant, in integers.
+        // It used to be written in `f64` with `.round()`, which is a `std`
+        // method: `--features embedded` has no float library, and computing a
+        // constant through one in the frame loop was never the point anyway.
+        // (4194304 * 16 + 500) / 1000 = 67109, which is what `.round()` gave.
+        const WAITTICKS: u32 = ((4_194_304u64 * 16 + 500) / 1000) as u32;
+        let waitticks = WAITTICKS;
         let mut ticks = 0;
         let mut total = 0u32;
 
@@ -864,18 +873,22 @@ impl Gameboy {
     // slave byte for a transfer that was never clocked.
     // ---------------------------------------------------------------------
 
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_role(&self) -> crate::mmu::serial::LinkRole {
         self.cpu.memory.serial.link_role()
     }
 
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_out(&self) -> u8 {
         self.cpu.memory.serial.link_out()
     }
 
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_seq(&self) -> u32 {
         self.cpu.memory.serial.link_seq()
     }
 
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_answer_master(&mut self, received: u8) {
         self.cpu.memory.serial.link_answer_master(received);
     }
@@ -883,10 +896,12 @@ impl Gameboy {
     // Only `link::peer` (`#[cfg(unix)]`) drives the hold, so gate to match —
     // otherwise wasm and Windows builds warn on dead code.
     #[cfg(unix)]
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_set_hold(&mut self, hold: bool) {
         self.cpu.memory.serial.link_set_hold(hold);
     }
 
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_clock_slave(&mut self, received: u8) -> bool {
         self.cpu.memory.serial.link_clock_slave(received)
     }

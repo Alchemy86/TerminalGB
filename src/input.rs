@@ -1,3 +1,8 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+#[cfg(not(feature = "embedded"))]
+use std::collections::VecDeque;
+
 pub struct Keypad {
     row0: u8,
     row1: u8,
@@ -47,7 +52,7 @@ pub use terminalgb_plugin_api::{DEFAULT_GAP, DEFAULT_HOLD};
 /// save state and is dropped when one is loaded.
 #[derive(Default)]
 pub struct InputQueue {
-    pending: std::collections::VecDeque<QueuedPress>,
+    pending: VecDeque<QueuedPress>,
     /// Key currently held: the button, frames of hold left, and the gap owed
     /// once it is released.
     current: Option<(KeypadKey, u16, u16)>,

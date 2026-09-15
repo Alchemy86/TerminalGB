@@ -39,7 +39,10 @@
 //!   (`wasm32` builds emulate the APU now too, and the format needed no change
 //!   when that happened, which is the point.)
 
-use std::fmt;
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
+use core::fmt;
 
 /// Container tag. Bumped only on an incompatible container change.
 pub const MAGIC: [u8; 4] = *b"GBSS";
@@ -219,6 +222,10 @@ impl fmt::Display for StateError {
     }
 }
 
+/// `core::error::Error` is not available on the pinned toolchain, so on bare
+/// metal [`StateError`] is a plain `Display` type. Nothing in the core matches
+/// on it as a `dyn Error`.
+#[cfg(not(feature = "embedded"))]
 impl std::error::Error for StateError {}
 
 /// Append-only little-endian byte sink. No allocations beyond the backing Vec.

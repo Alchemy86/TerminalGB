@@ -24,6 +24,9 @@
 //!
 //! [`RenderMode::Accurate`]: crate::ppu::RenderMode::Accurate
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 /// One named shortcut each. `false` everywhere is the accurate machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SpeedFlags {
@@ -193,8 +196,8 @@ impl SpeedFlags {
     /// Read `$GB_SPEED`. Absent or empty is [`Self::NONE`] — every shortcut is
     /// opt-in and nothing turns one on by accident.
     pub fn from_env() -> (Self, Vec<String>) {
-        match std::env::var("GB_SPEED") {
-            Ok(spec) if !spec.trim().is_empty() => Self::parse(&spec),
+        match crate::env_var("GB_SPEED") {
+            Some(spec) if !spec.trim().is_empty() => Self::parse(&spec),
             _ => (Self::NONE, Vec::new()),
         }
     }

@@ -27,6 +27,9 @@
 //! through raw pointers, exactly as a profiler's would be, and every frontend
 //! that uses it drives one `Gameboy` on one thread.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 /// Work a run may skip. See the module docs for which of these the guest can
 /// tell apart.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

@@ -1,5 +1,8 @@
 //! What a plugin is allowed to do.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 /// What a plugin is allowed to do. Declared by
 /// [`Plugin::capabilities`](crate::Plugin::capabilities) and enforced by
 /// [`Machine`](crate::Machine) — an undeclared operation fails rather than
@@ -66,7 +69,7 @@ impl Capability {
     }
 }
 
-impl std::ops::BitOr for Capability {
+impl core::ops::BitOr for Capability {
     type Output = Capability;
     fn bitor(self, rhs: Capability) -> Capability {
         self.union(rhs)

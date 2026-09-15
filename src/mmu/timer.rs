@@ -370,7 +370,7 @@ impl Timer {
     #[cold]
     #[inline(never)]
     fn sync_cold(&mut self) {
-        let n = std::mem::take(&mut self.pending);
+        let n = core::mem::take(&mut self.pending);
         self.do_cycle_inner(4 * n);
         self.refresh_horizon();
     }
@@ -450,7 +450,7 @@ impl Timer {
     /// Always drain this in the same step that advanced the counter.
     #[inline]
     pub fn take_serial_edges(&mut self) -> u8 {
-        std::mem::take(&mut self.serial_edges)
+        core::mem::take(&mut self.serial_edges)
     }
 
     /// How many **M-cycles** the timer can be advanced in one step before it

@@ -1,5 +1,8 @@
 //! Something the machine did.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 /// Something the machine did. The categories and their rough rates are the ones
 /// [`docs/debugging.md`](https://github.com/Alchemy86/TerminalGB/blob/main/docs/debugging.md)
 /// enumerates; only the two *cheap* ones are implemented here, because the hot
@@ -35,7 +38,7 @@ impl Event {
     /// change of pipe rather than of contract. Hand-rolled: this crate takes no
     /// serde dependency (see AGENTS.md "no new crate dependencies").
     pub fn write_json(&self, out: &mut String) {
-        use std::fmt::Write as _;
+        use core::fmt::Write as _;
         match self {
             Event::Frame { number } => {
                 let _ = write!(out, "{{\"ev\":\"frame\",\"number\":{number}}}");

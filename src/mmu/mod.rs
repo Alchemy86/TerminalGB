@@ -1,3 +1,6 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 mod oamdma;
 pub(crate) mod serial;
 mod timer;
@@ -10,7 +13,6 @@ use crate::mmu::serial::Serial;
 use crate::mmu::timer::Timer;
 use crate::mode::{GbMode, GbSpeed, PpuRevision};
 use crate::sound::Sound;
-use std::path;
 
 pub type StrResult<T> = Result<T, &'static str>;
 
@@ -608,7 +610,7 @@ pub struct MemoryManagementUnit<'a> {
     gpu_horizon: u32,
     /// The cartridge ROM, shared with the mapper rather than copied, and the
     /// byte offsets of the two windows the CPU sees — see [`Self::read_rom`].
-    rom_share: std::sync::Arc<[u8]>,
+    rom_share: crate::mbc::RomBytes,
     rom_lo: usize,
     rom_hi: usize,
     /// True on Color silicon, where the work RAM has a bus of its own rather
@@ -802,8 +804,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// `gbmode`; keeping it in one place is what stops the DMG and CGB paths
     /// drifting apart.
     fn raw(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mmu_mbc = mbc::get_mbc(data, file)?;
         let cart_rtc = mmu_mbc.has_rtc();
@@ -827,7 +829,7 @@ impl<'a> MemoryManagementUnit<'a> {
             oam_dma_busy: false,
             gpu_owed: 0,
             gpu_horizon: 0,
-            rom_share: std::sync::Arc::from(&[][..]),
+            rom_share: crate::mbc::empty_rom(),
             rom_lo: 0,
             rom_hi: 0,
             wram_own_bus: false,
@@ -881,8 +883,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// [`new_with_model`](Self::new_with_model) with [`Model::Dmg`] to force it
     /// anyway.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mut res = Self::raw(data, file)?;
         if res.rb(0x0143) == 0xC0 {
@@ -896,8 +898,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// Boot a Game Boy Color. A cartridge that does not advertise CGB support
     /// gets the console's compatibility mode ([`GbMode::ColorAsClassic`]).
     pub fn new_cgb(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         Self::new_with_model(data, file, crate::mode::Model::Cgb)
     }
@@ -905,8 +907,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// Boot the console named by `model`. [`Model::Auto`] picks from the
     /// cartridge header (and honours `$GB_MODEL`) — see [`Model::resolve`].
     pub fn new_with_model(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
         model: crate::mode::Model,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         Self::new_with_boot_rom(data, file, model, None)
@@ -926,8 +928,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// environment variable or a path (see the layering note in
     /// [`crate::boot`]).
     pub fn new_with_boot_rom(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
         model: crate::mode::Model,
         boot: Option<crate::boot::BootRom>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
@@ -1464,7 +1466,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// access flushes and takes a fresh one.
     #[inline]
     fn flush_apu(&mut self) {
-        let pending = std::mem::take(&mut self.apu_pending);
+        let pending = core::mem::take(&mut self.apu_pending);
         if let Some(ref mut sound) = self.sound {
             if pending > 0 {
                 sound.do_cycle(pending);
@@ -1493,7 +1495,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// and `$FF6x` registers, a VRAM DMA, and the frontend's own accessors.
     #[inline]
     fn flush_gpu(&mut self) {
-        let owed = std::mem::take(&mut self.gpu_owed);
+        let owed = core::mem::take(&mut self.gpu_owed);
         if owed > 0 {
             self.gpu.do_cycle(owed);
         }
@@ -2176,7 +2178,7 @@ impl<'a> MemoryManagementUnit<'a> {
     #[cold]
     #[inline(never)]
     fn run_pending(&mut self) {
-        let n = std::mem::take(&mut self.pending_ticks);
+        let n = core::mem::take(&mut self.pending_ticks);
         self.pending_out += self.flush_peripherals(n);
         self.run_horizon = self.compute_run_horizon();
     }
@@ -2319,10 +2321,10 @@ impl<'a> MemoryManagementUnit<'a> {
         if self.run_horizon != 0 {
             self.pending_ticks += ticks;
             if self.pending_ticks < self.run_horizon {
-                return std::mem::take(&mut self.pending_out);
+                return core::mem::take(&mut self.pending_out);
             }
-            ticks = std::mem::take(&mut self.pending_ticks);
-            carry = std::mem::take(&mut self.pending_out);
+            ticks = core::mem::take(&mut self.pending_ticks);
+            carry = core::mem::take(&mut self.pending_out);
         }
         let cpudivider = match self.gbspeed {
             GbSpeed::Single => 1,
@@ -2507,7 +2509,7 @@ impl<'a> MemoryManagementUnit<'a> {
             self.flush_gpu();
             // A read and an IDU increment sharing one M-cycle corrupt OAM
             // differently from a plain read — see `share_idu`.
-            let kind = if std::mem::take(&mut self.idu_share) {
+            let kind = if core::mem::take(&mut self.idu_share) {
                 OamBug::ReadWrite
             } else {
                 OamBug::Read
@@ -2694,7 +2696,7 @@ impl<'a> MemoryManagementUnit<'a> {
         // Loud, once. A guard that protects the save silently is a guard the
         // user cannot act on — and the action here (restart; the good `.sav` is
         // untouched) is one only they can take.
-        eprintln!(
+        crate::host_warn!(
             "terminalgb: FAULT — {reason}. The battery save will NOT be written \
              again this session; the existing save file is left untouched. \
              Restart the emulator to recover."
@@ -2938,7 +2940,7 @@ impl<'a> MemoryManagementUnit<'a> {
             _ => {}
         };
         // The rest of the write M-cycle, now that the write has committed.
-        let rest = std::mem::take(&mut self.gpu_defer);
+        let rest = core::mem::take(&mut self.gpu_defer);
         if rest > 0 {
             self.gpu.do_cycle(rest);
             self.intf |= self.gpu.interrupt;
@@ -4302,9 +4304,15 @@ mod ppu_on_bus_tests {
     fn the_mirror_follows_a_live_picture_mode_switch() {
         let mut mem = mmu();
         mem.set_render_mode(RenderMode::Fast);
-        assert!(!mem.ppu_on_bus, "the batched engine is not stepped per access");
+        assert!(
+            !mem.ppu_on_bus,
+            "the batched engine is not stepped per access"
+        );
         mem.set_render_mode(RenderMode::Accurate);
-        assert!(mem.ppu_on_bus, "the per-dot engine must be stepped per access");
+        assert!(
+            mem.ppu_on_bus,
+            "the per-dot engine must be stepped per access"
+        );
         mem.set_render_mode(RenderMode::Fast);
         assert!(!mem.ppu_on_bus, "and back again");
     }
@@ -4316,7 +4324,10 @@ mod ppu_on_bus_tests {
             mem.set_render_mode(mode);
             let accurate = mode == RenderMode::Accurate;
             mem.set_ppu_bus_ticking(true);
-            assert!(mem.ppu_on_bus, "dispatch steps the PPU with the bus in {mode:?}");
+            assert!(
+                mem.ppu_on_bus,
+                "dispatch steps the PPU with the bus in {mode:?}"
+            );
             mem.set_ppu_bus_ticking(false);
             assert_eq!(
                 mem.ppu_on_bus, accurate,

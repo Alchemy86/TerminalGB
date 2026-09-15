@@ -62,7 +62,12 @@
 //! left in place untouched as a backup and never written again. `<rom>.srm` (the
 //! other common battery-RAM extension) is accepted on load too.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
+#[cfg(not(feature = "embedded"))]
 use std::io::prelude::*;
+#[cfg(not(feature = "embedded"))]
 use std::{fs, io, path};
 
 use crate::mbc::StrResult;
@@ -71,10 +76,12 @@ use crate::mbc::StrResult;
 /// One second at 59.7 fps: long enough that a game's multi-frame save burst
 /// becomes a single disk write, short enough that a `kill -9` a moment later
 /// still has the save on disk.
+#[cfg(not(feature = "embedded"))]
 const SETTLE_FRAMES: u32 = 60;
 
 /// Hard ceiling, in frames, on how long dirty RAM may go unwritten. Covers the
 /// rare game that dribbles into SRAM continuously and so never "settles".
+#[cfg(not(feature = "embedded"))]
 const MAX_DIRTY_FRAMES: u32 = 600;
 
 /// The MBC3 real-time clock, in the shape the 48-byte save footer stores.
@@ -102,6 +109,7 @@ pub struct Loaded {
 }
 
 /// Persistence for one cartridge's battery-backed RAM.
+#[cfg(not(feature = "embedded"))]
 pub struct Battery {
     sav: Option<path::PathBuf>,
     /// Other battery-RAM extensions accepted when loading (never written).
@@ -120,6 +128,7 @@ pub struct Battery {
     poisoned: Option<String>,
 }
 
+#[cfg(not(feature = "embedded"))]
 impl Battery {
     /// A battery for `rom` with `ramsize` bytes of cartridge RAM. `has_rtc` is
     /// true only for header types `0x0F`/`0x10`, the MBC3 variants that really
@@ -355,6 +364,7 @@ impl Battery {
     }
 }
 
+#[cfg(not(feature = "embedded"))]
 fn read_file(path: &path::Path) -> StrResult<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -383,6 +393,7 @@ fn read_file(path: &path::Path) -> StrResult<Option<Vec<u8>>> {
 /// overwrite a save it could not read. Compared case-insensitively because the
 /// filesystem this exists for is a FAT memory stick, and because a false "yes"
 /// only ever means one more honest read attempt.
+#[cfg(not(feature = "embedded"))]
 fn listed_in_parent(path: &path::Path) -> bool {
     let Some(name) = path.file_name() else {
         return true;
@@ -403,6 +414,7 @@ fn listed_in_parent(path: &path::Path) -> bool {
 /// sibling temp file is written and fsynced, then `rename`d over the target
 /// (atomic on POSIX and on Windows' `MoveFileEx`-backed `fs::rename`). A
 /// truncated save is worse than no save at all.
+#[cfg(not(feature = "embedded"))]
 fn write_atomic(path: &path::Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
@@ -434,11 +446,14 @@ fn write_atomic(path: &path::Path, bytes: &[u8]) -> io::Result<()> {
 /// The standard MBC3 RTC footer: 10 × `u32` + `u64`, all little-endian.
 /// This is what FlashGBX writes when it dumps a cartridge, and what VBA-M and
 /// BGB read. See the module docs for the field layout.
+#[cfg(not(feature = "embedded"))]
 pub const RTC_BYTES: usize = 48;
 
 /// An older variant with a 32-bit timestamp. Read, never written.
+#[cfg(not(feature = "embedded"))]
 pub const RTC_BYTES_32: usize = 44;
 
+#[cfg(not(feature = "embedded"))]
 fn encode_rtc(state: &RtcState) -> Vec<u8> {
     let mut out = Vec::with_capacity(RTC_BYTES);
     // Each 8-bit register is stored widened to u32, upper three bytes zero.
@@ -451,6 +466,7 @@ fn encode_rtc(state: &RtcState) -> Vec<u8> {
     out
 }
 
+#[cfg(not(feature = "embedded"))]
 fn decode_rtc(bytes: &[u8]) -> Option<RtcState> {
     if bytes.len() != RTC_BYTES && bytes.len() != RTC_BYTES_32 {
         return None;
@@ -483,6 +499,7 @@ fn decode_rtc(bytes: &[u8]) -> Option<RtcState> {
 }
 
 /// Seconds since the UNIX epoch, or 0 if the clock is before it.
+#[cfg(not(feature = "embedded"))]
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -490,7 +507,86 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
+/// **Zero on bare metal, and that is the honest answer rather than a stub.**
+///
+/// This clock has exactly one job (see the module docs): measuring the gap
+/// between a save being written and the same save being read back, so an MBC3
+/// cartridge's clock advances while the emulator is closed. With no filesystem
+/// there is no such gap to measure — the RTC is driven entirely by emulated
+/// T-cycles, which is where every in-session tick already comes from.
+#[cfg(feature = "embedded")]
+pub fn now_secs() -> u64 {
+    0
+}
+
+/// Cartridge RAM with nowhere to go — the bare-metal [`Battery`].
+///
+/// Every method is the "no save file" branch the host implementation already
+/// has, so the mappers are not aware of the difference: `is_active()` is false,
+/// so `loadram()` returns before `load()` and `tick()`/`flush()` are writes into
+/// the void. The cartridge plays identically and its RAM lives and dies with
+/// the session, which is what `--features embedded` says on the tin.
+#[cfg(feature = "embedded")]
+pub struct Battery {
+    ramsize: usize,
+    poisoned: Option<&'static str>,
+}
+
+#[cfg(feature = "embedded")]
+impl Battery {
+    /// Unreachable by construction: [`SavePath`](crate::mbc::SavePath) is
+    /// uninhabited on this build, so there is no value that could call this.
+    pub fn new(rom: &crate::mbc::SavePath, _ramsize: usize, _has_rtc: bool) -> Battery {
+        match *rom {}
+    }
+
+    pub fn none() -> Battery {
+        Battery {
+            ramsize: 0,
+            poisoned: None,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        false
+    }
+
+    pub fn poison(&mut self, reason: &str) {
+        // The host keeps the *first* reason; there is nothing to protect here,
+        // but the flag is still readable so a frontend can report a fault.
+        if self.poisoned.is_none() {
+            self.poisoned = Some("save not written (no filesystem)");
+            let _ = reason;
+        }
+    }
+
+    pub fn poisoned_reason(&self) -> Option<&str> {
+        self.poisoned
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        false
+    }
+
+    pub fn load(&mut self) -> StrResult<Loaded> {
+        Ok(Loaded {
+            ram: vec![0; self.ramsize],
+            rtc: None,
+            legacy_rtc_zero: None,
+            fresh: true,
+        })
+    }
+
+    pub fn touch(&mut self) {}
+
+    pub fn mark_dirty(&mut self) {}
+
+    pub fn tick(&mut self, _ram: &[u8], _rtc: Option<RtcState>) {}
+
+    pub fn flush(&mut self, _ram: &[u8], _rtc: Option<RtcState>) {}
+}
+
+#[cfg(all(test, not(feature = "embedded")))]
 mod tests {
     use super::*;
 

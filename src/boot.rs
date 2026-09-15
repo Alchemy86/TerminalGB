@@ -49,7 +49,11 @@
 //! environment variable and no filesystem path, which is what keeps the
 //! embedding claim in `AGENTS.md` true.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::mode::GbMode;
+#[cfg(not(feature = "embedded"))]
 use std::path::PathBuf;
 
 /// Which console's boot ROM this is, decided by its length — the only thing
@@ -80,8 +84,8 @@ pub enum BootRomError {
     BadLength(usize),
 }
 
-impl std::fmt::Display for BootRomError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for BootRomError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             BootRomError::BadLength(n) => {
                 write!(f, "{n} bytes: a boot ROM is 256 (DMG) or 2304 (CGB) bytes")
@@ -161,6 +165,7 @@ impl BootRom {
 /// "that is the wrong console" is more useful than being silently ignored.
 ///
 /// **Host code only.** Nothing in the emulator core calls this.
+#[cfg(not(feature = "embedded"))]
 pub fn find(mode: GbMode) -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os("GB_BOOT_ROM") {
         let p = PathBuf::from(explicit);
@@ -183,6 +188,7 @@ pub fn find(mode: GbMode) -> Option<PathBuf> {
 /// wants to say something once at startup; the emulator itself never needs it.
 ///
 /// **Host code only.** Nothing in the emulator core calls this.
+#[cfg(not(feature = "embedded"))]
 pub fn load(mode: GbMode) -> Option<BootRom> {
     explain(mode).0
 }
@@ -193,6 +199,7 @@ pub fn load(mode: GbMode) -> Option<BootRom> {
 ///
 /// Nothing to report when there is simply no file: that is the ordinary case,
 /// not a problem, and saying so on every launch would be noise.
+#[cfg(not(feature = "embedded"))]
 pub fn explain(mode: GbMode) -> (Option<BootRom>, Option<String>) {
     let Some(path) = find(mode) else {
         return (None, None);
@@ -230,6 +237,7 @@ pub fn explain(mode: GbMode) -> (Option<BootRom>, Option<String>) {
 /// Deliberately a copy of the rule in `screen::config` rather than a call into
 /// it: that module is a *frontend* and lives behind the `tui` feature, and the
 /// core may not depend on it (`make embed` builds with neither).
+#[cfg(not(feature = "embedded"))]
 fn config_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -241,6 +249,7 @@ fn config_dir() -> Option<PathBuf> {
     ))
 }
 
+#[cfg(not(feature = "embedded"))]
 fn prefer_existing(current: PathBuf, legacy: PathBuf) -> PathBuf {
     if current.exists() || !legacy.exists() {
         current
@@ -249,7 +258,7 @@ fn prefer_existing(current: PathBuf, legacy: PathBuf) -> PathBuf {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "embedded")))]
 mod tests {
     use super::*;
 

@@ -128,6 +128,21 @@
 //! events and callbacks without breaking you.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(feature = "embedded", no_std)]
+
+#[cfg(feature = "embedded")]
+#[macro_use]
+extern crate alloc;
+
+/// The `std` prelude items a `#![no_std]` build loses. See the same module in
+/// the `terminalgb` crate.
+#[cfg(feature = "embedded")]
+pub(crate) mod compat {
+    pub use alloc::borrow::ToOwned;
+    pub use alloc::boxed::Box;
+    pub use alloc::string::{String, ToString};
+    pub use alloc::vec::Vec;
+}
 
 mod capability;
 mod event;

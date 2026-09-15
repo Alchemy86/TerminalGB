@@ -1,3 +1,6 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::cpu::registers::Registers;
 use crate::cpu::{data, ld, misc, stack};
 use crate::mmu::MemoryManagementUnit;
@@ -55,8 +58,8 @@ impl Cpu<'_> {
     /// ROMs that print their boot registers can tell, which is why nine
     /// Mooneye acceptance tests changed verdict when this was added.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> Self {
         Self::new_with_model(data, file, Model::Auto)
     }
@@ -69,8 +72,8 @@ impl Cpu<'_> {
     /// under `[profile.release] panic = 'abort'` a panic here takes the whole
     /// host process down.
     pub fn new_with_model(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
         model: Model,
     ) -> Self {
         Self::try_new_with_model(data, file, model).unwrap()
@@ -79,8 +82,8 @@ impl Cpu<'_> {
     /// [`Cpu::new_with_model`] without the panic: the cartridge is rejected
     /// with the reason instead.
     pub fn try_new_with_model(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
         model: Model,
     ) -> Result<Self, &'static str> {
         Self::try_new_with_boot_rom(data, file, model, None)
@@ -90,8 +93,8 @@ impl Cpu<'_> {
     /// ([`crate::boot`]). Panics on an unmappable cartridge, like
     /// [`Cpu::new_with_model`].
     pub fn new_with_boot_rom(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
         model: Model,
         boot: Option<crate::boot::BootRom>,
     ) -> Self {
@@ -105,8 +108,8 @@ impl Cpu<'_> {
     /// none (or one belonging to the other console) this is byte-for-byte the
     /// machine every baseline in this repository is measured on.
     pub fn try_new_with_boot_rom(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<std::path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
         model: Model,
         boot: Option<crate::boot::BootRom>,
     ) -> Result<Self, &'static str> {

@@ -1,6 +1,48 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 pub type StrResult<T> = Result<T, &'static str>;
 
+#[cfg(not(feature = "embedded"))]
 use std::path;
+
+/// The cartridge image as every mapper holds it.
+///
+/// On a host this is an `Arc<[u8]>`, so N machines share one allocation (see
+/// `docs/throughput.md`). On bare metal there is no second machine to share
+/// with and no allocator worth spending a megabyte of, so it is a plain
+/// `&'static [u8]` — which lets the ROM stay in memory-mapped flash and cost
+/// no RAM at all, and keeps `Arc`'s refcount (an `s32c1i` on Xtensa) out of
+/// external PSRAM entirely.
+#[cfg(not(feature = "embedded"))]
+pub type RomBytes = std::sync::Arc<[u8]>;
+/// See the host definition above.
+#[cfg(feature = "embedded")]
+pub type RomBytes = &'static [u8];
+
+/// Where cartridge RAM is battery-backed to.
+///
+/// **Uninhabited on bare metal**, which is the whole statement: there is no
+/// filesystem, so `Option<SavePath>` can only ever be `None` and the compiler
+/// proves the save arm of every mapper unreachable rather than us promising it.
+#[cfg(not(feature = "embedded"))]
+pub type SavePath = path::PathBuf;
+/// See the host definition above.
+#[cfg(feature = "embedded")]
+pub enum SavePath {}
+
+/// An empty cartridge image, in whichever representation this build uses.
+/// The MMU holds one before a mapper is installed.
+pub fn empty_rom() -> RomBytes {
+    #[cfg(not(feature = "embedded"))]
+    {
+        std::sync::Arc::from(&[][..])
+    }
+    #[cfg(feature = "embedded")]
+    {
+        &[]
+    }
+}
 
 pub mod battery;
 mod mbc0;
@@ -80,7 +122,7 @@ pub trait MemoryBankController: Send {
     ///
     /// `None` from a mapper that cannot express its window as a byte offset
     /// into one slice, which simply keeps the old path.
-    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+    fn rom_share(&self) -> Option<crate::mbc::RomBytes> {
         None
     }
 
@@ -195,14 +237,14 @@ const HEADER_END: usize = 0x0150;
 /// switch. Pan Docs, cartridge header byte `0x0147`:
 /// <https://gbdev.io/pandocs/The_Cartridge_Header.html>
 pub fn get_mbc(
-    data: impl Into<std::sync::Arc<[u8]>>,
-    filepath: Option<path::PathBuf>,
+    data: impl Into<crate::mbc::RomBytes>,
+    filepath: Option<crate::mbc::SavePath>,
 ) -> StrResult<Box<dyn MemoryBankController + 'static>> {
     // **The ROM is immutable, so N machines may share one allocation.** A
     // caller that already holds an `Arc<[u8]>` pays nothing here and nothing in
     // the mapper either — the cartridge stops being per-instance memory. A
     // `Vec` caller pays the one copy it has always paid.
-    let data: std::sync::Arc<[u8]> = data.into();
+    let data: crate::mbc::RomBytes = data.into();
     // An embedder hands us arbitrary bytes. Indexing a short image would panic
     // — an abort under `panic = 'abort'` — so refuse it as an error instead.
     if data.len() < HEADER_END {

@@ -10,4 +10,12 @@ rust-version = "1.83"
 
 # Deliberately empty, and worth keeping that way: a plugin author should be able
 # to depend on this contract without inheriting a build-system problem.
+[features]
+# Bare metal: `#![no_std]` + `alloc`, for `terminalgb --features embedded`.
+# A plugin still attaches, is still capability-checked and still gets every
+# event; what it loses is the NDJSON trace (no filesystem) and the panic guard
+# (`catch_unwind` needs unwinding, and an embedded build aborts — which the
+# host build's own docs already note is true of `panic = "abort"` there too).
+embedded = []
+
 [dependencies]

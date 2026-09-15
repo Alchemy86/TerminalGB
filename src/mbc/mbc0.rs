@@ -1,7 +1,9 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 pub type StrResult<T> = Result<T, &'static str>;
 use crate::mbc::battery::Battery;
 use crate::mbc::{ram_banks, MemoryBankController};
-use std::path;
 
 /// "No MBC" cartridges: header types `0x00` (ROM ONLY), `0x08` (ROM+RAM) and
 /// `0x09` (ROM+RAM+BATTERY). No banking — the ROM is mapped straight through
@@ -11,7 +13,7 @@ pub struct MBC0 {
     /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
     /// so the CPU's opcode fetch need not go through this trait object — one
     /// allocation, two owners, no copy.
-    rom: std::sync::Arc<[u8]>,
+    rom: crate::mbc::RomBytes,
     ram: Vec<u8>,
     battery: Battery,
 }
@@ -20,12 +22,12 @@ impl MBC0 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM lives only in memory.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MBC0> {
         // Free when the caller already shares one; the single copy a
         // `Vec` caller has always paid, when it does not.
-        let data: std::sync::Arc<[u8]> = data.into();
+        let data: crate::mbc::RomBytes = data.into();
         let rambanks = match data[0x147] {
             0x08 | 0x09 => ram_banks(data[0x149]),
             _ => 0,
@@ -67,7 +69,7 @@ impl MemoryBankController for MBC0 {
         // unmapped cartridge space reads as open bus, it does not panic.
         *self.rom.get(a as usize).unwrap_or(&0xFF)
     }
-    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+    fn rom_share(&self) -> Option<crate::mbc::RomBytes> {
         Some(self.rom.clone())
     }
     fn rom_window_bases(&self) -> (usize, usize) {

@@ -33,7 +33,66 @@
 //! See the README's "Embedding the core" section for the honest portability
 //! list.
 
+#![cfg_attr(feature = "embedded", no_std)]
+// `RomBytes::clone` bumps a refcount on a host and copies a `&'static [u8]` on
+// bare metal. The lint is right that the second is a no-op; the code is generic
+// over both, so it is silenced on that build only.
+#![cfg_attr(feature = "embedded", allow(noop_method_call))]
+
+// `vec!` and `format!` crate-wide, so a `#![no_std]` build does not need a
+// second import line in every file that already used them.
+#[cfg(feature = "embedded")]
+#[macro_use]
+extern crate alloc;
+
+/// The `std` prelude items a `#![no_std]` build loses, in one place.
+///
+/// Files that use `Vec`, `Box`, `String` or `Arc` bare — which is most of the
+/// emulation core — open with `use crate::compat::*;` under this feature and
+/// are otherwise untouched. `core`'s prelude supplies everything else.
+#[cfg(feature = "embedded")]
+pub(crate) mod compat {
+    pub use alloc::borrow::ToOwned;
+    pub use alloc::boxed::Box;
+    pub use alloc::collections::VecDeque;
+    pub use alloc::string::{String, ToString};
+    pub use alloc::vec::Vec;
+}
+
+/// One environment variable, where there is an environment.
+///
+/// Every `$GB_*` override in the core goes through this. On bare metal there is
+/// no environment at all, so it answers `None` and each caller falls back to
+/// exactly the default it already had — an embedder passes `Model`,
+/// `RenderMode` and `SpeedFlags` in as arguments instead.
+#[cfg(not(feature = "embedded"))]
+pub(crate) fn env_var(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+}
+
+/// See the host definition above.
+#[cfg(feature = "embedded")]
+pub(crate) fn env_var(_key: &str) -> Option<alloc::string::String> {
+    None
+}
+
+/// A warning to the operator, where there is one.
+///
+/// The core warns on stderr about a mis-spelled `$GB_*` value rather than
+/// silently switching console (see [`mode::Model::resolve`]). Bare metal has no
+/// stderr and no operator to read it — and no environment to mis-spell either,
+/// so every one of these sites is unreachable there.
+macro_rules! host_warn {
+    ($($arg:tt)*) => {{
+        #[cfg(not(feature = "embedded"))]
+        eprintln!($($arg)*);
+    }};
+}
+pub(crate) use host_warn;
+
+#[cfg(not(feature = "embedded"))]
 use std::sync::Mutex;
+#[cfg(not(feature = "embedded"))]
 use std::sync::OnceLock;
 
 #[cfg(target_arch = "wasm32")]
@@ -53,6 +112,7 @@ pub mod boot;
 pub mod chiptune;
 pub mod cpu;
 /// Minimal DEFLATE compressor for terminal transmission — see [`deflate`].
+#[cfg(not(feature = "embedded"))]
 pub mod deflate;
 pub mod gameboy;
 /// Reading a **real** Generation 1 battle out of a running cartridge, so the
@@ -65,6 +125,7 @@ pub mod gen1battle;
 mod gpu;
 mod input;
 /// Two consoles, one wire — see [`link::LinkCable`].
+#[cfg(not(feature = "embedded"))]
 pub mod link;
 /// The World Trade Centre's relay client (see `docs/worldlobby.md`).
 #[cfg(feature = "plugin-gen1-lobby")]
@@ -125,12 +186,13 @@ pub mod portal;
 #[cfg(feature = "profile")]
 pub mod profile;
 pub mod savestate;
-#[cfg(not(feature = "ffi"))]
+#[cfg(all(not(feature = "ffi"), not(feature = "embedded")))]
 pub mod screen;
 pub mod sgb;
 /// Shared-memory frame handoff for the Kitty protocol — see [`shmframe`].
 /// Compiles everywhere; the module itself stubs out where shared memory does
 /// not exist, so callers need no `cfg` of their own.
+#[cfg(not(feature = "embedded"))]
 pub mod shmframe;
 /// The APU — see [`sound`]. Compiled on **every** target, `wasm32` included:
 /// a machine with no sound chip is not a quiet Game Boy, it is a different
@@ -141,16 +203,18 @@ pub mod shmframe;
 /// [`sound::SilentPlayer`] when there is no device at all.
 pub mod sound;
 /// Machine-readable run telemetry (NDJSON) — see [`telemetry`].
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "embedded")))]
 pub mod telemetry;
 /// Capped-resolution terminal image transmission — see [`termimage`].
+#[cfg(not(feature = "embedded"))]
 pub mod termimage;
 /// Test support for plugin authors — see [`testing`]. Off by default.
 #[cfg(feature = "testing")]
 pub mod testing;
+#[cfg(not(feature = "embedded"))]
 pub mod upscale;
 /// Raw video-out: the picture as a stream other tools consume — see [`video`].
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "embedded")))]
 pub mod video;
 
 pub use crate::input::KeypadKey;
@@ -162,6 +226,7 @@ pub async fn start() {
     // TODO: Process GL
 }
 
+#[cfg(not(feature = "embedded"))]
 static GAMEBOY: OnceLock<Mutex<Option<crate::gameboy::Gameboy>>> = OnceLock::new();
 
 #[cfg(target_vendor = "apple")]
@@ -181,6 +246,7 @@ unsafe impl Sync for crate::gameboy::Gameboy {}
 /// # Safety
 ///
 /// This function is not safe due to from_raw_parts.
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub unsafe extern "C" fn load(bytes: *const std::ffi::c_uchar, bytes_length: usize) {
     let bytes = std::slice::from_raw_parts(bytes, bytes_length);
@@ -189,6 +255,7 @@ pub unsafe extern "C" fn load(bytes: *const std::ffi::c_uchar, bytes_length: usi
         .get_or_init(|| Some(crate::gameboy::Gameboy::new(bytes.to_vec(), None)).into());
 }
 
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub extern "C" fn frame() {
     if let Some(gb) = GAMEBOY.get() {
@@ -200,6 +267,7 @@ pub extern "C" fn frame() {
     }
 }
 
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub extern "C" fn keydown(key: KeypadKey) {
     if let Some(gb) = GAMEBOY.get() {
@@ -211,6 +279,7 @@ pub extern "C" fn keydown(key: KeypadKey) {
     }
 }
 
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub extern "C" fn keyup(key: KeypadKey) {
     if let Some(gb) = GAMEBOY.get() {
@@ -222,12 +291,14 @@ pub extern "C" fn keyup(key: KeypadKey) {
     }
 }
 
+#[cfg(not(feature = "embedded"))]
 #[repr(C)]
 pub struct ImageBuffer {
     len: i32,
     data: *const u8,
 }
 
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub extern "C" fn image() -> ImageBuffer {
     if let Some(gb) = GAMEBOY.get() {
@@ -252,11 +323,13 @@ pub extern "C" fn image() -> ImageBuffer {
 
 /// Holds the most recent serialised save state so the returned pointer stays
 /// valid until the next call (mirrors how `image()` hands out a borrowed ptr).
+#[cfg(not(feature = "embedded"))]
 static STATE_BUF: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 
 /// Serialise the running machine. The returned [`ImageBuffer`] points at bytes
 /// owned by [`STATE_BUF`]; copy them out before the next `save_state` call. The
 /// browser can persist these to local storage or offer them as a download.
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub extern "C" fn save_state() -> ImageBuffer {
     if let Some(gb) = GAMEBOY.get() {
@@ -287,6 +360,7 @@ pub extern "C" fn save_state() -> ImageBuffer {
 /// # Safety
 ///
 /// Not safe due to `from_raw_parts`.
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 pub unsafe extern "C" fn load_state(
     bytes: *const std::ffi::c_uchar,
@@ -306,6 +380,7 @@ pub unsafe extern "C" fn load_state(
     -1
 }
 
+#[cfg(not(feature = "embedded"))]
 #[no_mangle]
 #[cfg(feature = "ffi-base64")]
 pub extern "C" fn image_base64() -> *const std::os::raw::c_char {
@@ -366,7 +441,7 @@ pub extern "C" fn image_base64() -> *const std::os::raw::c_char {
     data.into_raw()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "embedded")))]
 mod ffi_tests {
     use super::*;
 

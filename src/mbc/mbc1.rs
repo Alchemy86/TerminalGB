@@ -1,4 +1,5 @@
-use std::path;
+#[cfg(feature = "embedded")]
+use crate::compat::*;
 
 use crate::mbc::battery::Battery;
 use crate::mbc::{ram_banks, rom_banks, MemoryBankController};
@@ -8,7 +9,7 @@ pub struct MBC1 {
     /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
     /// so the CPU's opcode fetch need not go through this trait object — one
     /// allocation, two owners, no copy.
-    rom: std::sync::Arc<[u8]>,
+    rom: crate::mbc::RomBytes,
     ram: Vec<u8>,
     ram_on: bool,
     banking_mode: u8,
@@ -53,7 +54,7 @@ pub const MULTICART_ENV: &str = "GB_MBC1_MULTICART";
 /// cart badly (bank bits 5-6 would move to 4-5, making half the ROM
 /// unreachable), so [`MULTICART_ENV`] can force the answer either way.
 fn is_multicart(data: &[u8]) -> bool {
-    if let Some(forced) = std::env::var(MULTICART_ENV).ok().and_then(|v| {
+    if let Some(forced) = crate::env_var(MULTICART_ENV).and_then(|v| {
         match v.trim().to_ascii_lowercase().as_str() {
             "1" | "true" | "on" | "yes" => Some(true),
             "0" | "false" | "off" | "no" => Some(false),
@@ -74,12 +75,12 @@ impl MBC1 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM lives only in memory.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MBC1> {
         // Free when the caller already shares one; the single copy a
         // `Vec` caller has always paid, when it does not.
-        let data: std::sync::Arc<[u8]> = data.into();
+        let data: crate::mbc::RomBytes = data.into();
         let rambanks = match data[0x147] {
             0x02 | 0x03 => ram_banks(data[0x149]),
             _ => 0,
@@ -92,7 +93,7 @@ impl MBC1 {
     }
 
     fn build(
-        data: std::sync::Arc<[u8]>,
+        data: crate::mbc::RomBytes,
         rambanks: usize,
         battery: Battery,
     ) -> StrResult<MBC1> {
@@ -184,7 +185,7 @@ impl MemoryBankController for MBC1 {
         let idx = (bank * 0x4000) | ((a as usize) & 0x3FFF);
         *self.rom.get(idx).unwrap_or(&0xFF)
     }
-    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+    fn rom_share(&self) -> Option<crate::mbc::RomBytes> {
         Some(self.rom.clone())
     }
     fn rom_window_bases(&self) -> (usize, usize) {

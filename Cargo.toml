@@ -167,6 +167,26 @@ longplay = ["plugin-agent"]
 # no dependency; out of `--no-default-features` so an embedder inherits none of
 # it.
 scenario = ["longplay"]
+# BARE METAL — the emulator core with no operating system under it at all.
+#
+# `--no-default-features` is the *embedding* build and still assumes a host:
+# a filesystem for battery saves, environment variables for `GB_MODEL` and
+# friends, a clock, threads. `--no-default-features --features embedded` drops
+# that last assumption too and makes the crate `#![no_std]` + `alloc`, which is
+# what a microcontroller can actually run. See `platform/m5paper/`.
+#
+# What it costs, stated rather than hidden:
+#   * no battery saves — cartridge RAM lives and dies with the session
+#   * no `$GB_MODEL` / `$GB_PPU` / `$GB_SPEED` / `$GB_CGB_REVISION` overrides;
+#     an embedder passes `Model` to `Gameboy::new_with_model` instead
+#   * no plugins — `crate::plugin` is a no-op host, so `terminalgb-plugin-api`
+#     is not in the graph
+#   * no save states, no terminal/desktop/web frontends, no telemetry
+#   * the ROM is borrowed (`&'static [u8]`), not reference-counted, so it can
+#     live in memory-mapped flash and cost no RAM at all
+#
+# It needs a `#[global_allocator]` from the binary, and nothing else.
+embedded = ["terminalgb-plugin-api/embedded"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by

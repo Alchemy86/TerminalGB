@@ -1,3 +1,6 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 pub type SerialCallback<'a> = Box<dyn FnMut(u8) -> Option<u8> + Send + 'a>;
 
 fn noop(_: u8) -> Option<u8> {
@@ -10,6 +13,10 @@ fn noop(_: u8) -> Option<u8> {
 /// know, and it is derived from `SC` exactly as the hardware's own decode is
 /// (Pan Docs, *Serial Data Transfer*: bit 7 is the transfer-start flag, bit 0
 /// selects the shift clock — 1 internal, 0 external).
+/// The cable is a host feature ([`crate::link`]), which `--features embedded`
+/// does not compile; this is its half of the serial port and is unreachable
+/// there. Kept rather than gated so the two builds share one serial model.
+#[cfg_attr(feature = "embedded", allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkRole {
     /// Nothing armed. An incoming clock is ignored.
@@ -251,6 +258,7 @@ impl<'a> Serial<'a> {
     /// `Master` is derived from the shift register having bits left rather than
     /// from `SC`, because those are the same thing for an internally-clocked
     /// transfer and the register is the thing that actually finishes.
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_role(&self) -> LinkRole {
         if self.bits_left > 0 {
             LinkRole::Master
@@ -264,6 +272,7 @@ impl<'a> Serial<'a> {
     /// The byte this console is holding in its shift register, i.e. the one it
     /// will put on the wire. Both sides load `SB` *before* arming `SC`, so this
     /// is stable for the whole of a transfer.
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_out(&self) -> u8 {
         self.data
     }
@@ -271,6 +280,7 @@ impl<'a> Serial<'a> {
     /// Which internally-clocked transfer this is, counting from power-on. The
     /// cable uses it to avoid answering one transfer twice, or mistaking a
     /// second identical-looking transfer for the one it already paired.
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_seq(&self) -> u32 {
         self.link_seq
     }
@@ -279,6 +289,7 @@ impl<'a> Serial<'a> {
     /// back. It replaces the idle-high `$FF` the transfer started with; the
     /// transfer still finishes on its own eight shift clocks, so the game sees
     /// hardware timing rather than an instantaneous exchange.
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_answer_master(&mut self, received: u8) {
         self.incoming = received;
     }
@@ -290,6 +301,7 @@ impl<'a> Serial<'a> {
     // Gated like its one caller, `link::peer` (`#[cfg(unix)]`) — dead code on
     // wasm and Windows otherwise.
     #[cfg(unix)]
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_set_hold(&mut self, hold: bool) {
         self.link_hold = hold;
     }
@@ -303,6 +315,7 @@ impl<'a> Serial<'a> {
     /// Returns `false` if this console is not in fact armed for an external
     /// clock. That is a **dropped byte**: the two byte streams no longer agree
     /// and the cable must treat it as a desync rather than carry on.
+    #[cfg_attr(feature = "embedded", allow(dead_code))]
     pub(crate) fn link_clock_slave(&mut self, received: u8) -> bool {
         if self.control & 0x81 != 0x80 {
             return false;

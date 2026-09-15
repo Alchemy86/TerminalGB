@@ -1,0 +1,23 @@
+# blip_buf 0.1.5 (Mathijs van de Nes, MIT) with `#![no_std]` added and nothing
+# else changed. See README.md for the exact diff and why it is here.
+[package]
+name = "blip_buf"
+version = "0.1.5"
+authors = ["Mathijs van de Nes <git@mathijs.vd-nes.nl>"]
+license = "MIT"
+repository = "https://github.com/mvdnes/blip_buf-rs"
+description = """
+Blip_buf is a small waveform synthesis library meant for use in classic video game sound chip emulation.
+This copy differs from the crates.io release only by being no_std; see README.md.
+"""
+edition = "2021"
+publish = false
+
+[lib]
+name = "blip_buf"
+path = "src/lib.rs"
+
+[dependencies]
+
+# Not a workspace member: only platform/m5paper patches it in.
+[workspace]

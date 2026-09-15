@@ -1,10 +1,13 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 mod fifo;
 mod oambug;
 
 use crate::mode::{GbMode, PpuRevision};
+use core::cmp::Ordering;
 use fifo::Pipeline;
 pub(crate) use oambug::OamBug;
-use std::cmp::Ordering;
 
 /// Which of the two picture engines the PPU runs — a **user-facing mode**,
 /// named for what you get rather than for how it is built.
@@ -195,12 +198,12 @@ impl RenderMode {
     /// ignored rather than silently switching engine — the same rule
     /// [`crate::mode::Model::resolve`] applies to `$GB_MODEL`.
     pub fn from_env() -> RenderMode {
-        match std::env::var(PPU_ENV) {
-            Err(_) => RenderMode::default(),
-            Ok(v) => match RenderMode::parse(&v) {
+        match crate::env_var(PPU_ENV) {
+            None => RenderMode::default(),
+            Some(v) => match RenderMode::parse(&v) {
                 Some(m) => m,
                 None => {
-                    eprintln!(
+                    crate::host_warn!(
                         "{PPU_ENV}={v:?} is not a picture mode ({}) — ignoring",
                         RenderMode::choices()
                     );
@@ -296,6 +299,25 @@ const DMA_OAM_ARM_DOTS: u8 = 2;
 
 /// [`Gpu::dma_arm`] when nothing is armed.
 const NO_DMA_ARM: u8 = u8::MAX;
+
+/// A zeroed framebuffer on the heap, **without putting one on the stack first**.
+///
+/// `Box::new([0u8; N])` builds the array in the caller's frame and then copies
+/// it in. At 92,160 bytes that is a stack frame no microcontroller has: it
+/// overflowed the M5PaperColor port's stack outright, in a `memcpy` the fault
+/// handler named by its length. Going through `vec!` reaches `alloc_zeroed`,
+/// so the pages are asked for zeroed and nothing is copied at all.
+///
+/// On a host this is the same allocation it always was — `docs/throughput.md`
+/// measured the difference at the quantisation floor — so nothing about the
+/// desktop build changes. The `Box<[u8; N]>` type is unchanged too: the
+/// conversion from `Box<[u8]>` is a pointer cast, not a copy.
+fn blank_framebuffer() -> Box<[u8; WIDTH * HEIGHT * 4]> {
+    let flat: Box<[u8]> = vec![0u8; WIDTH * HEIGHT * 4].into_boxed_slice();
+    // The length is the constant it was allocated with, so this cannot fail.
+    flat.try_into()
+        .unwrap_or_else(|_| unreachable!("allocated with exactly this length"))
+}
 
 #[derive(Debug)]
 pub struct Gpu {
@@ -510,7 +532,7 @@ impl Gpu {
             pal1: [0; 4],
             vram: [0; VRAM_SIZE],
             voam: [0; VOAM_SIZE],
-            data: Box::new([0; HEIGHT * WIDTH * 4]),
+            data: blank_framebuffer(),
             bgprio: [PrioType::Normal; WIDTH],
             updated: false,
             interrupt: 0,
@@ -1749,7 +1771,7 @@ impl Gpu {
     /// spent; the whole argument, with both references, is at
     /// [`Gpu::stat_irq_mid_mcycle`]'s consumer.
     pub(crate) fn take_stat_irq_mid_mcycle(&mut self) -> bool {
-        std::mem::take(&mut self.stat_irq_mid_mcycle)
+        core::mem::take(&mut self.stat_irq_mid_mcycle)
     }
 
     fn change_mode(&mut self, mode: u8) {
@@ -3223,7 +3245,7 @@ mod tests {
     /// Serialise a PPU with its framebuffer blanked, so what comes back is
     /// every field *except* the picture.
     fn state_without_the_picture(gpu: &mut Gpu) -> Vec<u8> {
-        let picture = std::mem::replace(&mut gpu.data, Box::new([0; HEIGHT * WIDTH * 4]));
+        let picture = core::mem::replace(&mut gpu.data, blank_framebuffer());
         let mut w = crate::savestate::Writer::new();
         gpu.save_state(&mut w);
         gpu.data = picture;

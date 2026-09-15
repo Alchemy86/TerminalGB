@@ -30,6 +30,9 @@
 //! surface this is the *attach* face of, and [`crate::telemetry`] for the
 //! *emit* face.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::mmu::MemoryManagementUnit;
 
 pub use terminalgb_plugin_api::{
@@ -105,6 +108,18 @@ impl MachineAccess for MemoryManagementUnit<'_> {
         &self.gpu.data[..]
     }
 
+    /// **Empty on `--features embedded`, and that is a stated cost of the
+    /// feature rather than a failure.** The encoder lives in
+    /// [`crate::termimage`], which is a *terminal* module (it reaches the
+    /// Kitty shared-memory transport) and is not compiled on bare metal.
+    /// [`frame_rgba`](Self::frame_rgba) is the real picture API and works
+    /// everywhere; a plugin that wants a PNG there should check for empty.
+    #[cfg(feature = "embedded")]
+    fn frame_png(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    #[cfg(not(feature = "embedded"))]
     fn frame_png(&self) -> Vec<u8> {
         // The crate's own encoder: no `image` dependency, and it compresses,
         // unlike the stored-deflate path the 60 Hz wire uses.

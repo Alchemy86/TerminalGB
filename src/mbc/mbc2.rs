@@ -1,4 +1,5 @@
-use std::path;
+#[cfg(feature = "embedded")]
+use crate::compat::*;
 
 use crate::mbc::battery::Battery;
 use crate::mbc::{rom_banks, MemoryBankController};
@@ -12,7 +13,7 @@ pub struct MBC2 {
     /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
     /// so the CPU's opcode fetch need not go through this trait object — one
     /// allocation, two owners, no copy.
-    rom: std::sync::Arc<[u8]>,
+    rom: crate::mbc::RomBytes,
     ram: Vec<u8>,
     ram_on: bool,
     rombank: usize,
@@ -24,12 +25,12 @@ impl MBC2 {
     /// `file` is `None` when the embedder asked for no filesystem access; the
     /// cartridge then behaves identically but its RAM lives only in memory.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MBC2> {
         // Free when the caller already shares one; the single copy a
         // `Vec` caller has always paid, when it does not.
-        let data: std::sync::Arc<[u8]> = data.into();
+        let data: crate::mbc::RomBytes = data.into();
         let battery = match (data[0x147], &file) {
             (0x06, Some(f)) => Battery::new(f, MBC2_RAM_SIZE, false),
             _ => Battery::none(),
@@ -72,7 +73,7 @@ impl MemoryBankController for MBC2 {
         let idx = (bank * 0x4000) | ((a as usize) & 0x3FFF);
         *self.rom.get(idx).unwrap_or(&0xFF)
     }
-    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+    fn rom_share(&self) -> Option<crate::mbc::RomBytes> {
         Some(self.rom.clone())
     }
     fn rom_window_bases(&self) -> (usize, usize) {

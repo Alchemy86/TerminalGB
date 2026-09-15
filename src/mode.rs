@@ -168,10 +168,10 @@ impl Model {
     /// Read `$GB_MODEL`. An unset or unparseable value yields `None` (the
     /// caller's own choice stands) — a typo must never silently switch console.
     pub fn from_env() -> Option<Model> {
-        std::env::var(MODEL_ENV).ok().and_then(|v| {
+        crate::env_var(MODEL_ENV).and_then(|v| {
             let m = Model::parse(&v);
             if m.is_none() {
-                eprintln!(
+                crate::host_warn!(
                     "warning: {MODEL_ENV}={v:?} is not one of {} — ignoring",
                     Model::NAMES
                 );
@@ -556,8 +556,8 @@ impl PpuRevision {
     /// mis-spelled tag is `sound::CgbRevision::from_env`'s, which reads the
     /// same variable — printing a second one here would double up.
     pub fn from_env() -> PpuRevision {
-        match std::env::var("GB_CGB_REVISION") {
-            Ok(s) if !s.is_empty() => PpuRevision::from_tag(&s).unwrap_or_default(),
+        match crate::env_var("GB_CGB_REVISION") {
+            Some(s) if !s.is_empty() => PpuRevision::from_tag(&s).unwrap_or_default(),
             _ => PpuRevision::default(),
         }
     }

@@ -1,15 +1,16 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::mbc::battery::{Battery, RtcState};
 use crate::mbc::rtc::Rtc;
 use crate::mbc::{ram_banks, rom_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
-use std::path;
-
 pub struct MBC3 {
     /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
     /// so the CPU's opcode fetch need not go through this trait object — one
     /// allocation, two owners, no copy.
-    rom: std::sync::Arc<[u8]>,
+    rom: crate::mbc::RomBytes,
     ram: Vec<u8>,
     rombank: usize,
     /// How many 16 KiB banks the cartridge actually has. Only read when a game
@@ -31,12 +32,12 @@ impl MBC3 {
     /// cartridge then behaves identically but its RAM (and RTC) live only in
     /// memory.
     pub fn new(
-        data: impl Into<std::sync::Arc<[u8]>>,
-        file: Option<path::PathBuf>,
+        data: impl Into<crate::mbc::RomBytes>,
+        file: Option<crate::mbc::SavePath>,
     ) -> StrResult<MBC3> {
         // Free when the caller already shares one; the single copy a
         // `Vec` caller has always paid, when it does not.
-        let data: std::sync::Arc<[u8]> = data.into();
+        let data: crate::mbc::RomBytes = data.into();
         let subtype = data[0x147];
         let rambanks = match subtype {
             0x10 | 0x12 | 0x13 => ram_banks(data[0x149]),
@@ -54,7 +55,7 @@ impl MBC3 {
     }
 
     fn build(
-        data: std::sync::Arc<[u8]>,
+        data: crate::mbc::RomBytes,
         subtype: u8,
         rambanks: usize,
         ramsize: usize,
@@ -153,7 +154,7 @@ impl MemoryBankController for MBC3 {
         };
         *self.rom.get(idx).unwrap_or(&0xFF)
     }
-    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+    fn rom_share(&self) -> Option<crate::mbc::RomBytes> {
         Some(self.rom.clone())
     }
     fn rom_window_bases(&self) -> (usize, usize) {

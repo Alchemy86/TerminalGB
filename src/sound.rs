@@ -1,3 +1,6 @@
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use blip_buf::BlipBuf;
 
 /// The four square duty patterns, in hardware's own bit order (Pan Docs,
@@ -1369,11 +1372,11 @@ impl CgbRevision {
     /// the default; a typo **warns and is ignored** rather than silently
     /// running a game on buggy silicon — the same rule `$GB_MODEL` follows.
     fn from_env() -> CgbRevision {
-        match std::env::var("GB_CGB_REVISION") {
-            Err(_) => CgbRevision::default(),
-            Ok(s) if s.is_empty() => CgbRevision::default(),
-            Ok(s) => CgbRevision::from_tag(&s).unwrap_or_else(|| {
-                eprintln!(
+        match crate::env_var("GB_CGB_REVISION") {
+            None => CgbRevision::default(),
+            Some(s) if s.is_empty() => CgbRevision::default(),
+            Some(s) => CgbRevision::from_tag(&s).unwrap_or_else(|| {
+                crate::host_warn!(
                     "warning: GB_CGB_REVISION={s:?} is not one of cgb0/cgbB/cgbC — ignoring"
                 );
                 CgbRevision::default()
@@ -3297,6 +3300,7 @@ pub mod web_audio {
 /// [`State::Off`], which is the honest answer for a build with no host player.
 /// Any frontend that attaches its own [`AudioPlayer`] (web, FFI, a custom
 /// backend) may publish its own state here.
+#[cfg(not(feature = "embedded"))]
 pub mod host_status {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
@@ -3409,7 +3413,7 @@ pub mod host_status {
     }
 
     /// Publish "audio was asked for and could not be started", with the reason.
-    pub fn set_failed(reason: impl std::fmt::Display) {
+    pub fn set_failed(reason: impl core::fmt::Display) {
         let reason = reason.to_string();
         with_state(|s| *s = (State::Failed, Some(reason)));
     }
@@ -3424,7 +3428,7 @@ pub mod host_status {
     ///
     /// Called from the audio callback thread: counts unconditionally (atomic),
     /// stores the text only if the lock is free.
-    pub fn note_stream_error(err: impl std::fmt::Display) {
+    pub fn note_stream_error(err: impl core::fmt::Display) {
         STREAM_ERRORS.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut g) = STATE.try_lock() {
             g.1 = Some(err.to_string());
@@ -3434,6 +3438,7 @@ pub mod host_status {
     /// Serialises the tests that mutate this global (here and in
     /// `telemetry`), which `cargo test` otherwise runs in parallel.
     #[cfg(test)]
+    #[cfg(not(feature = "embedded"))]
     pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
         static L: Mutex<()> = Mutex::new(());
         L.lock().unwrap_or_else(|p| p.into_inner())
@@ -3526,7 +3531,9 @@ pub mod host_status {
 /// spaced rather than doing nothing until it collapses: 100 % is unity gain
 /// (exactly today's output), 50 % is −12 dB, 10 % is −40 dB.
 pub mod output_volume {
-    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+    #[cfg(feature = "embedded")]
+    use crate::compat::*;
+    use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
     /// Loudest setting. At this level the gain is exactly 1.0 — the samples
     /// reach the device untouched, i.e. what the emulator did before there was

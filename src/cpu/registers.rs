@@ -1,5 +1,5 @@
 use crate::mode::{GbMode, Model};
-use std::fmt;
+use core::fmt;
 
 #[derive(Debug)]
 pub struct Registers {

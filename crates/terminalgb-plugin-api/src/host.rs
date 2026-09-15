@@ -1,5 +1,8 @@
 //! The [`Plugin`] trait and the [`PluginHost`] that owns and dispatches to them.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::{Capability, Event, Machine, MachineAccess, API_VERSION};
 
 /// What the user is shown about an attached plugin.
@@ -85,12 +88,12 @@ pub trait Plugin: Send {
     ///
     /// An explicit method rather than a `dyn Any` upcast: trait upcasting is
     /// not stable on this crate's pinned 1.83 toolchain (`rust-toolchain`).
-    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any(&self) -> &dyn core::any::Any;
 
     /// Mutable counterpart of [`Plugin::as_any`], so a frontend can configure
     /// the plugin it attached. This is the frontend talking to its own plugin,
     /// not to the emulator: it grants no capability the plugin did not declare.
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn core::any::Any;
 }
 
 /// Registration failure. Deliberately small — there is no plugin manager, only
@@ -108,8 +111,8 @@ pub enum RegisterError {
     ApiVersionMismatch { plugin: u32, host: u32 },
 }
 
-impl std::fmt::Display for RegisterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for RegisterError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             RegisterError::LinkAlreadyClaimed(n) => {
                 write!(f, "the serial link is already driven by plugin '{n}'")
@@ -127,6 +130,7 @@ impl std::fmt::Display for RegisterError {
     }
 }
 
+#[cfg(not(feature = "embedded"))]
 impl std::error::Error for RegisterError {}
 
 struct Slot {
@@ -213,10 +217,17 @@ pub struct PluginHost {
     failures: Vec<String>,
 }
 
+#[cfg(not(feature = "embedded"))]
 struct Trace {
     out: std::io::BufWriter<std::fs::File>,
     buf: String,
 }
+
+/// **Uninhabited on bare metal**: there is no file to trace into, so
+/// `Option<Trace>` can only be `None` and every site that would write one is
+/// compiled out rather than stubbed.
+#[cfg(feature = "embedded")]
+enum Trace {}
 
 /// Run `f`, catching a panic and reporting it as `Err(message)`.
 ///
@@ -224,6 +235,17 @@ struct Trace {
 /// crossing the boundary are the plugin itself and the machine, and the whole
 /// point is that after a panic we *do* treat the plugin's state as suspect —
 /// it is quarantined and never touched again.
+/// **Bare metal cannot catch a panic, so it does not pretend to.**
+///
+/// `catch_unwind` needs an unwinding runtime and an embedded build aborts —
+/// which the note above already says is true of a release `panic = "abort"`
+/// host build too. Quarantine is a development guarantee, not a release one.
+#[cfg(feature = "embedded")]
+fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    Ok(f())
+}
+
+#[cfg(not(feature = "embedded"))]
 fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(v) => Ok(v),
@@ -299,20 +321,25 @@ impl PluginHost {
     /// message on failure so the frontend can tell the user rather than
     /// swallowing it.
     pub fn open_trace_from_env(&mut self) -> Option<String> {
-        let path = std::env::var("GB_PLUGIN_TRACE").ok()?;
-        let p = path.trim();
-        if p.is_empty() || p.eq_ignore_ascii_case("off") || p == "0" {
-            return None;
-        }
-        match std::fs::File::create(p) {
-            Ok(f) => {
-                self.trace = Some(Trace {
-                    out: std::io::BufWriter::new(f),
-                    buf: String::with_capacity(128),
-                });
-                None
+        #[cfg(feature = "embedded")]
+        return None;
+        #[cfg(not(feature = "embedded"))]
+        {
+            let path = std::env::var("GB_PLUGIN_TRACE").ok()?;
+            let p = path.trim();
+            if p.is_empty() || p.eq_ignore_ascii_case("off") || p == "0" {
+                return None;
             }
-            Err(e) => Some(format!("plugin trace: cannot write {p}: {e}")),
+            match std::fs::File::create(p) {
+                Ok(f) => {
+                    self.trace = Some(Trace {
+                        out: std::io::BufWriter::new(f),
+                        buf: String::with_capacity(128),
+                    });
+                    None
+                }
+                Err(e) => Some(format!("plugin trace: cannot write {p}: {e}")),
+            }
         }
     }
 
@@ -382,10 +409,13 @@ impl PluginHost {
     /// frontend to toast. A failure the user is not told about is a failure
     /// they will report as an emulator bug.
     pub fn take_failures(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.failures)
+        core::mem::take(&mut self.failures)
     }
 
     fn emit(&mut self, event: &Event) {
+        #[cfg(feature = "embedded")]
+        let _ = event;
+        #[cfg(not(feature = "embedded"))]
         if let Some(t) = self.trace.as_mut() {
             use std::io::Write as _;
             t.buf.clear();
@@ -511,8 +541,7 @@ impl PluginHost {
             if slot.failed {
                 continue;
             }
-            if let Err(msg) = guard(std::panic::AssertUnwindSafe(|| slot.plugin.reset()))
-            {
+            if let Err(msg) = guard(|| slot.plugin.reset()) {
                 slot.failed = true;
                 self.failures.push(format!(
                     "plugin {} failed and was switched off: {msg}",
@@ -523,6 +552,7 @@ impl PluginHost {
     }
 
     pub fn flush(&mut self) {
+        #[cfg(not(feature = "embedded"))]
         if let Some(t) = self.trace.as_mut() {
             use std::io::Write as _;
             let _ = t.out.flush();

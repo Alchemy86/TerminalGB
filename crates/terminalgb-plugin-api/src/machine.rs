@@ -1,6 +1,9 @@
 //! A plugin's control handle on the running machine, and the seam the emulator
 //! implements to provide it.
 
+#[cfg(feature = "embedded")]
+use crate::compat::*;
+
 use crate::{Capability, KeypadKey};
 
 /// **What the emulator must provide.** The host side of the boundary.
