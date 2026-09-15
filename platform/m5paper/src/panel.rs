@@ -209,7 +209,10 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
     /// The hand-driven path writes them *after* `POWER_ON`, which AUTO does
     /// internally, so there is nowhere to put them but before — whether that
     /// matters is what `panel_auto_probe` measures.
-    pub fn refresh_auto(&mut self, retune: bool) -> Refresh {
+    ///
+    /// `during` runs about once a millisecond for the whole of the wait — see
+    /// [`Ed2208::wait_refresh`]. Pass `&mut || {}` when there is nothing to do.
+    pub fn refresh_auto(&mut self, retune: bool, during: &mut dyn FnMut()) -> Refresh {
         let start = Instant::now();
         self.cs.set_low();
         if retune {
@@ -218,7 +221,7 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
         }
         self.cmd(0x17); // AUTO
         self.data(&[0xA5]);
-        let (settled, drf_ms, saw_busy) = self.wait_refresh(60_000);
+        let (settled, drf_ms, saw_busy) = self.wait_refresh(60_000, during);
         self.cs.set_high();
         Refresh {
             total_ms: start.elapsed().as_millis(),
@@ -337,13 +340,13 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
     ///
     /// How many seconds is [`Ed2208::set_pll`]'s business: 15.954 s at the
     /// vendor's default and 8.741 s at the fastest value measured here.
-    pub fn refresh(&mut self) -> u64 {
-        self.refresh_timed(None, DRF_MODE).total_ms
+    pub fn refresh(&mut self, during: &mut dyn FnMut()) -> u64 {
+        self.refresh_timed(None, DRF_MODE, during).total_ms
     }
 
     /// The same full refresh, with the split timing the probe reports.
     pub fn refresh_full(&mut self) -> Refresh {
-        self.refresh_timed(None, DRF_MODE)
+        self.refresh_timed(None, DRF_MODE, &mut || {})
     }
 
     /// A full refresh with a `DISPLAY_REFRESH` parameter other than the `0x00`
@@ -352,7 +355,7 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
     /// selector is what a parameter is usually for, so the values are swept
     /// rather than guessed at. See `src/bin/panel_probe.rs`.
     pub fn refresh_mode(&mut self, mode: u8) -> Refresh {
-        self.refresh_timed(None, mode)
+        self.refresh_timed(None, mode, &mut || {})
     }
 
     /// A refresh limited to a rectangle, through command `0x83`.
@@ -369,13 +372,18 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
     /// `x`/`y`/`w`/`h` are in panel (portrait) coordinates, not logical ones.
     /// The window is restored to the whole panel afterwards.
     pub fn refresh_window(&mut self, x: u16, y: u16, w: u16, h: u16) -> Refresh {
-        self.refresh_timed(Some(Window { x, y, w, h }), DRF_MODE)
+        self.refresh_timed(Some(Window { x, y, w, h }), DRF_MODE, &mut || {})
     }
 
     /// The shared body. Splits the clock so the waveform can be told apart from
     /// the fixed 400 ms of delays and the power-on handshake around it: a change
     /// that only moved the delays would otherwise read as a win.
-    fn refresh_timed(&mut self, window: Option<Window>, mode: u8) -> Refresh {
+    fn refresh_timed(
+        &mut self,
+        window: Option<Window>,
+        mode: u8,
+        during: &mut dyn FnMut(),
+    ) -> Refresh {
         let start = Instant::now();
         self.cs.set_low();
 
@@ -400,7 +408,7 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
 
         self.cmd(0x12); // DISPLAY_REFRESH
         self.data(&[mode]);
-        let (settled, drf_ms, saw_busy) = self.wait_refresh(60_000);
+        let (settled, drf_ms, saw_busy) = self.wait_refresh(60_000, during);
 
         self.cmd(0x02); // POWER_OFF
         self.data(&[0x00]);
@@ -438,7 +446,21 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
     ///
     /// Returns `(settled, waveform_ms, saw_busy_low)`. `waveform_ms` is the
     /// low-to-high time with none of the settling delay in it.
-    fn wait_refresh(&mut self, timeout_ms: u32) -> (bool, u64, bool) {
+    ///
+    /// `during` is called on every pass of every wait loop here — about once a
+    /// millisecond through the waveform, which is where the seconds are. **It
+    /// is what lets a caller keep sampling something while the panel has the
+    /// CPU**, and the caller that needs it is the free-running loop in
+    /// `main.rs`: a button pressed during a repaint is only a button pressed if
+    /// something looked at the pin while it was down, and a human press is a
+    /// couple of hundred milliseconds against a refresh of eight seconds. It
+    /// must not touch the panel — it shares nothing with this driver and is
+    /// called from inside a bus transaction.
+    fn wait_refresh(
+        &mut self,
+        timeout_ms: u32,
+        during: &mut dyn FnMut(),
+    ) -> (bool, u64, bool) {
         let start = Instant::now();
         // The controller asserts BUSY within microseconds of the command on
         // every sequence measured here, but a mode that refused the command
@@ -446,6 +468,7 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
         // fast refresh.
         let mut saw_busy = false;
         while start.elapsed().as_millis() < 50 {
+            during();
             if self.busy.is_low() {
                 saw_busy = true;
                 break;
@@ -459,6 +482,7 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
             if begin.elapsed().as_millis() > timeout_ms as u64 {
                 return (false, begin.elapsed().as_millis(), true);
             }
+            during();
             self.delay.delay_millis(1);
         }
         let waveform = begin.elapsed().as_millis();

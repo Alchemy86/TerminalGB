@@ -4175,6 +4175,39 @@ RAM**, **1000 frames in 81.051 s (12 fps, 20 % of real time)**, one frame on the
   proven: inverting a ramp's middle two inks fails 2, a transpose instead of a rotation fails 1.
 
 
+### IT FREE-RUNS NOW — and a button is polled inside the panel driver's wait loop
+
+**Full page: [`docs/m5paper-emulator.md`](docs/m5paper-emulator.md) ("The game runs on its own").**
+The loop used to emulate and repaint **only on a button's rising edge**, so between presses the
+machine sat idle with a stale picture. It now runs `STEP_FRAMES` frames, paints, and repeats, for
+ever. Measured over 25 consecutive turns on the captain's device: **a picture every 13.027 s
+(median; 12.844-14.686), of which 7.726 s is the panel and does not vary by four milliseconds.**
+
+- **THE CAPTAIN ASKED FOR "EVERY SECOND" AND IT IS NOT AVAILABLE — say so rather than quoting a
+  number that sounds closer.** 7.72 s is the waveform, i.e. the pigment moving; the refresh
+  section above is nine measured routes to a shorter one that all came back identical. The floor
+  for a whole turn is **~8.1 s** and no `STEP_FRAMES` goes below it. What *was* available was the
+  half of the ask that was a defect: idling between presses.
+- **`STEP_FRAMES = 60` IS ONE GAME-SECOND PER PICTURE, WHICH IS WHY IT IS 60.** The game then
+  advances at **7.7 % of real time** — quote that beside the emulator's own 20 %, because sharing
+  the CPU with the panel is most of the difference. Lowering it repaints sooner and shows less
+  happening; raising it does the reverse.
+- **A PRESS THAT NOTHING SAMPLED NEVER HAPPENED, AND A TURN IS THIRTEEN SECONDS.** So the buttons
+  are polled between every emulated frame **and about once a millisecond inside the panel's own
+  `BUSY` wait** — which is why `Ed2208::refresh_auto`/`refresh` take a `&mut dyn FnMut()`. Measured
+  per turn: **60 samples through the batch (~82 ms apart) and 7,510 through the repaint (~1.03 ms
+  apart)**, leaving 0.368 s (2.8 %) unwatched in the SPI write and settles, which have no wait loop
+  to hang a poll on. A press is **latched, never acted on where it is seen** — the sample that
+  catches it is inside a bus transaction — and spent at the top of the next turn.
+- **THE PRESS PATH WAS CHECKED BY STANDING IN FOR A FINGER, NOT BY PRESSING.** Nobody was in the
+  room, so a throwaway build set the latch from inside the wait loop at poll #2000 of 7,510 and the
+  log shows the next turn spending it (`frame 1180 -> 1252` = 60 + `PRESS_FRAMES`). **The pin read
+  itself is therefore still only confirmed by first boot** — it is one press long for anyone
+  holding the device, and the instrumentation is deliberately not committed.
+- **BUTTON C RUNS NO FRAMES.** A palette preview whose frame had also moved on changes two things
+  at once. A C turn repaints the frame already on the glass at the vendor's slow waveform
+  (`emu 0.000 s, panel 14.939 s`, measured) and a pad press arriving on one stays latched.
+
 ## Web audio, and the APU that was missing on wasm (`src/sound.rs` `mod web_audio`, `src/screen/{webaudio,pace,web}.rs`)
 
 **Full page: [`docs/web-audio.md`](docs/web-audio.md); conformance record in

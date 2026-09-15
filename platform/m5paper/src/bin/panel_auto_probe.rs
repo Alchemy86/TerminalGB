@@ -116,13 +116,13 @@ fn main() -> ! {
 
         fb.clear(if r % 2 == 0 { Ink::White } else { Ink::Black });
         epd.send_framebuffer(&fb);
-        let b = epd.refresh_auto(false);
+        let b = epd.refresh_auto(false, &mut || {});
         line("AUTO, no retune", b);
         auto_plain += b.total_ms;
 
         fb.clear(if r % 2 == 0 { Ink::Black } else { Ink::White });
         epd.send_framebuffer(&fb);
-        let c = epd.refresh_auto(true);
+        let c = epd.refresh_auto(true, &mut || {});
         line("AUTO + booster retune", c);
         auto_tuned += c.total_ms;
     }
@@ -141,7 +141,7 @@ fn main() -> ! {
     println!("--- the test card through AUTO + retune, left on the glass ---");
     geom::draw_test_card(&mut fb);
     epd.send_framebuffer(&fb);
-    let r = epd.refresh_auto(true);
+    let r = epd.refresh_auto(true, &mut || {});
     line("test card via AUTO", r);
 
     println!();

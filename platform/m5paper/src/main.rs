@@ -342,7 +342,8 @@ fn main() -> ! {
         "--- frame {frames_run} onto the panel ({}) ---",
         LOOKS[look_ix].name()
     );
-    let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix], PLAY_PLL);
+    let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix], PLAY_PLL, &mut || {});
+    frames_run += 1; // the frame `show` ran to get the picture
     println!(
         "panel     : {}.{:03} s (PLL 0x{PLAY_PLL:02X} + AUTO; the vendor's own sequence is 15.954 s)",
         ms / 1000,
@@ -367,64 +368,170 @@ fn main() -> ! {
 
     println!();
     println!("--- buttons ---");
-    println!("  A (GPIO10) = Game Boy START, then {STEP_FRAMES} frames and a repaint");
-    println!("  B (GPIO9)  = Game Boy A,     then {STEP_FRAMES} frames and a repaint");
+    println!("  A (GPIO10) = Game Boy START");
+    println!("  B (GPIO9)  = Game Boy A");
     println!(
-        "  C (GPIO1)  = next look ({} of them), same frame repainted",
+        "  C (GPIO1)  = next look ({} of them), held frame, true colour",
         LOOKS.len()
     );
-    println!(
-        "A and B repaint at PLL 0x{PLAY_PLL:02X} (~8 s); C repaints at the vendor's 0x{TRUE_COLOUR_PLL:02X} (~15 s),"
-    );
-    println!("because judging a palette through a faster waveform judges the wrong thing.");
-    println!(
-        "so pressing C is also the A/B: the same picture, slow and true, next to"
-    );
-    println!("the one before it. if the inks only separate under C, 0x{PLAY_PLL:02X} is too fast");
-    println!("and PLAY_PLL in src/main.rs is the constant to move (0x06 is ~10 s).");
+    println!("gameplay repaints run at PLL 0x{PLAY_PLL:02X} (~8 s); C repaints at the vendor's");
+    println!("0x{TRUE_COLOUR_PLL:02X} (~15 s), because judging a palette through a faster waveform judges");
+    println!("the wrong thing. if the inks only separate under C, 0x{PLAY_PLL:02X} is too fast and");
+    println!("PLAY_PLL in src/main.rs is the constant to move (0x06 is ~10 s).");
 
+    println!();
+    println!("--- free-running ---");
+    println!("the game runs on its own from here: {STEP_FRAMES} frames, a repaint, repeat.");
+    println!("no button is needed and none is waited for.");
+
+    free_run(&mut epd, &mut fb, gb, &mut buttons, &mut look_ix, &mut frames_run);
+}
+
+/// **The loop the captain asked for: the game runs, and the paper keeps up with
+/// it as fast as paper can.**
+///
+/// What changed, and why it is not what was asked for word for word. The ask
+/// was *"can we not just it continue to refresh the screen every second"*. One
+/// second is not available and no amount of software makes it available: this
+/// panel is measured at **7.7 s a repaint** at the fastest PLL that still
+/// separates the inks, and `docs/m5paper-refresh.md` is the sweep that says so
+/// — the waveform is the pigment moving, not a number anyone here can choose.
+/// What *was* available is the half of the ask that was a defect rather than a
+/// wish: the loop this replaces only emulated and only repainted on a button's
+/// rising edge, so between presses the machine sat idle with a stale picture on
+/// the glass. Now it never sits idle.
+///
+/// One turn of this loop is:
+///
+/// 1. spend any press that landed while the panel had the CPU,
+/// 2. run [`STEP_FRAMES`] frames, sampling the buttons between each one,
+/// 3. put the frame on the paper, sampling the buttons about once a
+///    millisecond for the whole of the repaint.
+///
+/// **There is no delay anywhere in it.** The cadence is what the work costs —
+/// the frame batch plus the panel — and adding anything on top would only make
+/// the paper later than the paper has to be.
+///
+/// **A button is sampled in both of the places this loop spends time**, which
+/// is the whole reason step 3 takes a closure. Measured on the device: a turn is
+/// **13.027 s** — 4.933 s of frames and 7.726 s of panel — against a press of a
+/// couple of hundred milliseconds, so a loop that only looked between the two
+/// would miss nearly all of them. Sampled through both it is **60 samples in the
+/// batch (~82 ms apart) and 7,510 through the repaint (~1.03 ms apart)**, and
+/// the only window left unwatched is the **0.368 s** of SPI, blit and settling
+/// inside [`show`], which has no wait loop to hang a poll on. See
+/// `docs/m5paper-emulator.md`.
+fn free_run<Dm: esp_hal::DriverMode>(
+    epd: &mut Ed2208<'_, Dm>,
+    fb: &mut FrameBuffer<'_>,
+    gb: &mut Gameboy,
+    buttons: &mut Buttons<'_>,
+    look_ix: &mut usize,
+    frames_run: &mut u32,
+) -> ! {
+    // `was` is the edge detector and `pending` is the latch it feeds. They are
+    // separate because the press is almost never spent where it is seen: the
+    // sample that catches it is usually inside the panel's own wait loop, which
+    // is holding the bus and cannot repaint anything. So the press waits here
+    // until the top of the next turn, which is what "its effect appears in
+    // whichever repaint follows" means.
     let mut was = [false; 3];
+    let mut pending = [false; 3];
+    let mut cycle: u32 = 0;
+
     loop {
-        for i in 0..buttons.len() {
-            let down = buttons[i].2.is_low();
-            if down && !was[i] {
-                println!();
-                match i {
-                    0 => {
-                        println!("button A -> START, {STEP_FRAMES} frames");
-                        tap(gb, KeypadKey::Start);
-                        frames_run += STEP_FRAMES;
-                        run_frames(gb, STEP_FRAMES);
-                    }
-                    1 => {
-                        println!("button B -> A, {STEP_FRAMES} frames");
-                        tap(gb, KeypadKey::A);
-                        frames_run += STEP_FRAMES;
-                        run_frames(gb, STEP_FRAMES);
-                    }
-                    _ => {
-                        look_ix = (look_ix + 1) % LOOKS.len();
-                        println!("button C -> look: {}", LOOKS[look_ix].name());
-                    }
-                }
-                println!(
-                    "frame {frames_run} onto the panel ({})...",
-                    LOOKS[look_ix].name()
-                );
-                // The look preview is the one repaint that must be true
-                // colour; everything else is a gameplay frame and takes the
-                // fast waveform.
-                let pll = if i == 2 { TRUE_COLOUR_PLL } else { PLAY_PLL };
-                let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix], pll);
-                println!(
-                    "panel     : {}.{:03} s (PLL 0x{pll:02X})",
-                    ms / 1000,
-                    ms % 1000
-                );
-            }
-            was[i] = down;
+        cycle += 1;
+        let turn = Instant::now();
+
+        // **Nothing reads the picture until [`show`] asks for it.** Drawing is
+        // over half of an overworld frame (`docs/throughput.md`) and `show`
+        // turns the pixels back on for the one frame that reaches the paper —
+        // which is byte-identical to a machine that never stopped drawing, so
+        // this costs the picture nothing. The same switch a corpus collector
+        // uses, and the same one `run_frames` uses for the boot burst.
+        gb.set_render_pixels(false);
+
+        // --- 1. Spend anything the panel's wait loop caught ------------------
+        poll(buttons, &mut was, &mut pending);
+        let look_press = core::mem::take(&mut pending[2]);
+        if look_press {
+            *look_ix = (*look_ix + 1) % LOOKS.len();
         }
-        delay.delay_millis(20);
+        // A pad press on a preview turn stays latched rather than being spent
+        // here: [`tap`] runs frames, and a frame that moved is not the still
+        // the preview is for. It is spent on the turn after, which is the next
+        // repaint either way.
+        if !look_press {
+            for (i, key) in [(0usize, KeypadKey::Start), (1, KeypadKey::A)] {
+                if core::mem::take(&mut pending[i]) {
+                    println!("button {} -> {:?}", buttons[i].0, key);
+                    tap(gb, key);
+                    *frames_run += PRESS_FRAMES;
+                }
+            }
+        }
+
+        // --- 2. Emulate, unless C is asking for a still ----------------------
+        //
+        // **A look preview holds the frame, and that is the same argument the
+        // slow waveform is there for.** Button C exists to show what the six
+        // inks look like; a frame that has also moved on since the last repaint
+        // changes two things at once, and then the picture answers neither
+        // question. So a C turn runs no frames: the previous turn's frame goes
+        // back on the glass, slowly and in true colour, and the game carries on
+        // from exactly where it was on the turn after.
+        let emu = Instant::now();
+        if !look_press {
+            for _ in 0..STEP_FRAMES {
+                gb.frame();
+                poll(buttons, &mut was, &mut pending);
+            }
+            *frames_run += STEP_FRAMES;
+        }
+        let emu_ms = emu.elapsed().as_millis();
+
+        // --- 3. Paper ---------------------------------------------------------
+        let pll = if look_press { TRUE_COLOUR_PLL } else { PLAY_PLL };
+        let panel_ms = show(epd, fb, gb, LOOKS[*look_ix], pll, &mut || {
+            poll(buttons, &mut was, &mut pending)
+        });
+        // `show` runs one frame of its own to get the picture. Count it, or
+        // the number below drifts a frame behind on every repaint, for ever.
+        *frames_run += 1;
+
+        let total = turn.elapsed().as_millis();
+        println!(
+            "cycle {cycle:>4}  frame {:>7}  emu {}.{:03} s  panel {}.{:03} s  turn {}.{:03} s  ({}, PLL 0x{pll:02X})",
+            *frames_run,
+            emu_ms / 1000,
+            emu_ms % 1000,
+            panel_ms / 1000,
+            panel_ms % 1000,
+            total / 1000,
+            total % 1000,
+            LOOKS[*look_ix].name()
+        );
+    }
+}
+
+/// The three buttons, as `main` builds them.
+type Buttons<'d> = [(&'static str, u8, Flex<'d>); 3];
+
+/// Sample the buttons once and latch any rising edge.
+///
+/// **Latching rather than acting is what makes this callable from inside the
+/// panel driver.** It is run from three places — the top of a turn, between
+/// emulated frames, and about once a millisecond through a repaint — and the
+/// last of those is holding the SPI bus, so the only thing it may do is
+/// remember. `was` is the level last seen and must persist across all three or
+/// a held button reads as a new press on every sample.
+fn poll(buttons: &mut Buttons<'_>, was: &mut [bool; 3], pending: &mut [bool; 3]) {
+    for i in 0..buttons.len() {
+        let down = buttons[i].2.is_low();
+        if down && !was[i] {
+            pending[i] = true;
+        }
+        was[i] = down;
     }
 }
 
@@ -522,12 +629,18 @@ fn tap(gb: &mut Gameboy, key: KeypadKey) {
 
 /// Put the emulator's current picture on the paper, and return how long the
 /// panel took.
+///
+/// `during` is run about once a millisecond for the whole of the panel's wait
+/// — see [`Ed2208::refresh_auto`]. It does not cover the SPI write of 120,000
+/// bytes, the blit, or the settle either side of the waveform, which have no
+/// wait loop to hang it on; those are the 0.368 s a turn spends unwatched.
 fn show<Dm: esp_hal::DriverMode>(
     epd: &mut Ed2208<'_, Dm>,
     fb: &mut FrameBuffer<'_>,
     gb: &mut Gameboy,
     look: Look,
     pll: u8,
+    during: &mut dyn FnMut(),
 ) -> u64 {
     // One frame with the pixels back on. The emulator was fast-forwarded with
     // them off; this is the frame that reaches the paper, and it is exactly the
@@ -538,9 +651,9 @@ fn show<Dm: esp_hal::DriverMode>(
     epd.set_pll(pll);
     epd.send_framebuffer(fb);
     if USE_AUTO_SEQUENCE {
-        epd.refresh_auto(true).total_ms
+        epd.refresh_auto(true, during).total_ms
     } else {
-        epd.refresh()
+        epd.refresh(during)
     }
 }
 
