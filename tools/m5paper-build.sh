@@ -34,10 +34,12 @@ usage: tools/m5paper-build.sh [command]
 
   build      compile the firmware (default)
   flash      compile, then flash over $M5PAPER_PORT (default /dev/ttyACM0)
-  probe      flash the PANEL PROBE instead of the emulator, and watch it run.
-             It times refreshes against command 0x83 to answer whether this
-             panel has anything quicker than its 16 s full refresh. Writes no
-             waveform, voltage or LUT register. See src/bin/panel_probe.rs.
+  probe      flash the PANEL PROBE instead of the emulator, and watch it run
+             (~7 min). It sweeps the PLL (0x30), the addressing window (0x83)
+             and the DISPLAY_REFRESH parameter, timing every refresh, and ends
+             by leaving a six-ink test card on the glass to be judged against
+             `testcard`. Writes no waveform, voltage or LUT register.
+             See src/bin/panel_probe.rs and docs/m5paper-refresh.md.
   monitor    attach to the serial log without resetting the board
   test       run the panel-geometry tests on the host (no device needed)
   testcard   render the expected picture to target/m5paper/ as PPM
