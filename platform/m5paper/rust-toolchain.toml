@@ -1,0 +1,6 @@
+# The `espup` Xtensa fork. Upstream rustc has no Xtensa backend at all:
+#   $ rustc --print cfg --target xtensa-esp32s3-none-elf
+#   'esp32-s3' is not a recognized processor for this target
+# Install with `espup install --targets esp32s3`, then source the export file.
+[toolchain]
+channel = "esp"

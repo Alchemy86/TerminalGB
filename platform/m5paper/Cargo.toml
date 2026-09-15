@@ -1,0 +1,36 @@
+# TerminalGB on the M5Stack PaperColor (ESP32-S3 + 4" E Ink Spectra 6).
+#
+# NOT a workspace member, and it must never become one: it needs the `espup`
+# Xtensa Rust fork, which upstream rustc cannot provide and which the
+# emulator's own build must never depend on. `make embed` and `cargo test`
+# never see this file. It declares its own empty `[workspace]` for that reason.
+#
+# Build and flash with `tools/m5paper-build.sh`. See platform/m5paper/README.md
+# for the measured pinout, the panel sequence and what is proven so far.
+[package]
+name = "terminalgb-m5paper"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+esp-hal = { version = "1.2.1", features = ["esp32s3", "unstable"] }
+esp-println = { version = "0.18.0", default-features = false, features = [
+    "esp32s3",
+    "jtag-serial",
+] }
+esp-backtrace = { version = "0.20.0", features = [
+    "esp32s3",
+    "panic-handler",
+    "println",
+] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32s3"] }
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = 2

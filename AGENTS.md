@@ -4074,6 +4074,53 @@ Emulation went 22.4 → 8.3 ms/frame on the overworld, every frame byte-identica
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+### The M5Stack PaperColor — the Xtensa toolchain works, and the panel is the wall
+
+**Full pages: [`docs/m5paper-first-boot.md`](docs/m5paper-first-boot.md) (measured results, the
+serial logs) and [`platform/m5paper/README.md`](platform/m5paper/README.md) (pinout, code layout,
+how to restore the factory image). Build with `tools/m5paper-build.sh`.** Bring-up only — **no
+emulator runs on it yet**, deliberately.
+
+- **THE TOOLCHAIN WALL IS CLEARED AND IT WAS THE THING THAT HAD STOPPED A CREW.** `espup install
+  --targets esp32s3` installs the Xtensa Rust fork; source `~/.espup-export.sh` and
+  `cargo build --release` works. Upstream rustc still cannot target Xtensa at all, so
+  `platform/m5paper/` is **not a workspace member and must never become one** — the same rule,
+  for the same reason, as `platform/psp/`. It declares its own empty `[workspace]`.
+- **`make embed`, `cargo test` and every gate are unaffected** — checked, not assumed: the
+  dependency tree is still `blip_buf` + first-party, and `make docs-check` is green.
+- **SERIAL NEEDS `sg dialout -c '...'` ON THIS BOX.** `aaron` is in `dialout` in `/etc/group` but
+  the shell predates the change, so a direct open is `Errno 13`. `tools/m5paper-build.sh` tests
+  readability and re-enters the group itself.
+- **THE PANEL TAKES 15.967 s AND DOES NOT VARY WITH THE PICTURE.** Sixteen refreshes, four different
+  pictures, all inside 15.957-15.968 s (11 ms, 0.07 %) — so the Spectra 6 waveform is fixed-length, and M5's
+  "15~30 s depending on colour complexity" is not what this device does. Against a 16.743 ms Game
+  Boy frame that is **954x too slow**. It independently confirms the scout's 16.280 s from the
+  factory firmware; the 0.3 s gap is a different bracketing window, not a disagreement.
+- **THREE HARDWARE FACTS NO DOCUMENT STATES, ALL READ OUT OF M5GFX's OWN `board_M5PaperColor`
+  BRING-UP.** The panel has **no power-enable GPIO** — an M5PM1 PMIC at I2C `0x6E` (SDA `GPIO3`,
+  SCL `GPIO2`) gates it, and until its own GPIO0 is raised every SPI write is discarded **with no
+  error of any kind**. `GPIO43` is data/command, **not** reset (M5GFX's `pin_rst = 43` is dead
+  config — `Panel_ED2208::init` passes `use_reset = false`); the real reset is `GPIO12`. And
+  `GPIO1` rises **milliseconds** slower than `GPIO9`/`GPIO10` through the internal pull-up, which
+  is a hardware debounce capacitor and which read as a dead pin at a 500 us settle.
+- **`OutputConfig::default()` CARRIES `Pull::None`, SO APPLYING IT DROPS A PULL-UP — and a
+  floating input reads as a permanently-held button.** That produced a `C FAILED` self-test and a
+  phantom button press in the same run. Re-apply the input config afterwards, and **print the idle
+  levels again after any self-test** so a disturbed pin is visible rather than inferred.
+- **THE ROTATION MATHS IS TESTED, NOT ASSERTED, BECAUSE NOBODY HERE CAN SEE THE PANEL.** The glass
+  is portrait (400x600) and the captain asked for landscape, so `platform/m5paper/src/geom.rs`
+  carries **no `esp-hal` dependency** and `rustc --test` compiles the very file the firmware runs
+  (`tools/m5paper-build.sh test`, 9 tests). Teeth proven: a transpose instead of a rotation — which
+  still *looks* landscape — fails two, wrong dimensions fails three.
+  `tools/m5paper-build.sh testcard` renders the expected picture from the same code.
+- **BACK THE DEVICE UP BEFORE FLASHING — it had never been.** `tools/m5paper-build.sh backup`,
+  ~90 s. The image taken for this work is `~/m5paper-backup/papercolor-factory-16mb.bin`, sha256
+  `cdfcae99...c514c`, carrying the factory descriptor `48a1057-dirty`. No secure boot and no flash
+  encryption, so `write-flash 0x0` restores it exactly.
+- **PSRAM IS NEVER ALLOCATED FROM**, so the `s32c1i`-on-PSRAM atomics hazard the scouts flagged
+  cannot be hiding in any of these numbers. The 120,000-byte framebuffer is a static in internal
+  SRAM. That hazard is a question for the port, not for bring-up.
+
 ## Web audio, and the APU that was missing on wasm (`src/sound.rs` `mod web_audio`, `src/screen/{webaudio,pace,web}.rs`)
 
 **Full page: [`docs/web-audio.md`](docs/web-audio.md); conformance record in
