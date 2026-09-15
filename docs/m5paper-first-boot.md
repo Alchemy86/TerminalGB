@@ -89,10 +89,12 @@ and sixteen from our own code settle it.
 
 **Sixteen seconds is the vendor's setting, though, not the panel's floor — found
 later.** The waveform is clocked by a PLL divider the init leaves at its slowest
-value, and the same refresh takes **8.741 s** one step faster.
-[`m5paper-refresh.md`](m5paper-refresh.md) has the sweep and the two things that
-looked like they should have helped and did not. Every number on this page is at
-the vendor default, which is what this firmware shipped when they were taken.
+value, and a second more goes on hand-driving a power sequence the controller
+will run itself; together they take the same refresh to **7.721 s**.
+[`m5paper-refresh.md`](m5paper-refresh.md) has both, and the seven other things
+that looked like they should have helped and did not. Every number on this page
+is at the vendor's settings, which is what this firmware shipped when they were
+taken.
 
 Our figure is 0.3 s under the factory firmware's because it brackets a slightly
 different window: the firmware's log spans its own "Refresh start" to "Refresh

@@ -21,12 +21,14 @@ on the paper. Then three buttons: **A** presses Game Boy START, **B** presses
 Game Boy A, and **C** cycles the shade-to-ink mapping and repaints the same
 frame so the five looks can be compared by eye.
 
-Each gameplay repaint takes about **nine** seconds and the look preview sixteen.
-That split is the panel's frame-rate register: the vendor's init leaves it at its
-slowest value, and a gameplay frame runs one step faster while the look preview
-stays at true colour. [`docs/m5paper-refresh.md`](../../docs/m5paper-refresh.md)
-is the sweep, the two surfaces that looked like they should have helped and
-measured identical, and the one check nobody here can make.
+Each gameplay repaint takes about **eight** seconds and the look preview fifteen.
+Two things got it there: the panel's frame-rate register, which the vendor's init
+leaves at its slowest value, and handing the power sequence to the controller
+instead of driving it by hand. The look preview keeps the vendor's settings
+because judging a palette wants true colour.
+[`docs/m5paper-refresh.md`](../../docs/m5paper-refresh.md) has both, the seven
+things that measured identical — a black-and-white waveform among them — and the
+one check nobody here can make.
 
 ## The cartridge
 
@@ -46,9 +48,15 @@ tools/m5paper-build.sh probe        # ~7 min, times everything, leaves a test ca
 like Pimoroni and Seeed — leaves it at the default. Measured here, `POWER_ON`
 through `POWER_OFF`: **15.954 s at the vendor's `0x08`, 8.741 s at `0x07`**, and
 `0x08` lands on `0x03` to two milliseconds because the field is only four bits
-wide. Command `0x83` (the addressing window, which GxEPD2 calls partial refresh)
-and the `DISPLAY_REFRESH` parameter byte were both swept and **both cost exactly
-what a full refresh costs**, so neither is used.
+wide. Command `0x17` (AUTO) then takes **another 1012 ms** by letting the
+controller sequence its own power-up instead of doing it by hand with fixed
+delays; it does not touch the waveform.
+
+Everything else measured identical: the addressing window `0x83` that GxEPD2
+calls partial refresh, the `DISPLAY_REFRESH` parameter byte, a forced
+temperature, and — with the captain's explicit authorisation, twice — the
+`LUT_SEL` bit that would have exposed a black-and-white waveform if this
+controller had one. It does not.
 
 **What no timer here can check is whether the faster picture is still right.** A
 truncated waveform loses ink separation rather than time, and this board has no

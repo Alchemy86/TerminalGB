@@ -182,6 +182,122 @@ impl<'d, Dm: esp_hal::DriverMode> Ed2208<'d, Dm> {
         ]);
     }
 
+    /// Is the controller working? `BUSY` reads low while it is.
+    pub fn busy_is_low(&self) -> bool {
+        self.busy.is_low()
+    }
+
+    /// Block until `BUSY` rises, or the timeout. False on timeout.
+    pub fn wait_until_idle(&mut self, timeout_ms: u32) -> bool {
+        self.wait_busy(timeout_ms)
+    }
+
+    /// Command `0x17` (AUTO): power on, refresh and power off from one
+    /// command, letting the controller sequence itself.
+    ///
+    /// **Worth about a second, and it is pure overhead rather than waveform.**
+    /// The hand-driven sequence spends ~1.5 s around the waveform on two
+    /// 200 ms settles and two `BUSY` handshakes; AUTO spends ~0.5 s. Measured
+    /// 14.943 s against 15.949 s at the vendor's PLL, for the same 14.45 s of
+    /// waveform — so it changes what surrounds the refresh, never the refresh.
+    ///
+    /// Not in any vendor driver for this panel. It is in Patrick Siegl's list
+    /// of commands that respond on this exact 4.0" glass, and `panel_deep_probe`
+    /// confirmed the controller accepts it here.
+    ///
+    /// `retune` replays the booster values M5GFX writes before every refresh.
+    /// The hand-driven path writes them *after* `POWER_ON`, which AUTO does
+    /// internally, so there is nowhere to put them but before — whether that
+    /// matters is what `panel_auto_probe` measures.
+    pub fn refresh_auto(&mut self, retune: bool) -> Refresh {
+        let start = Instant::now();
+        self.cs.set_low();
+        if retune {
+            self.cmd(0x06);
+            self.data(&[0x6F, 0x1F, 0x17, 0x27]);
+        }
+        self.cmd(0x17); // AUTO
+        self.data(&[0xA5]);
+        let (settled, drf_ms, saw_busy) = self.wait_refresh(60_000);
+        self.cs.set_high();
+        Refresh {
+            total_ms: start.elapsed().as_millis(),
+            drf_ms,
+            settled,
+            saw_busy,
+        }
+    }
+
+    /// Send any command with any payload. **For `panel_deep_probe` only.**
+    ///
+    /// Everything else here writes registers whose meaning came out of a
+    /// working driver. This does not, which is the whole point of it: it exists
+    /// so an experiment can reach a register nobody has documented without
+    /// those experiments each growing a method on the shipping driver. Nothing
+    /// in the firmware calls it.
+    pub fn raw(&mut self, cmd: u8, data: &[u8]) {
+        self.cs.set_low();
+        self.cmd(cmd);
+        if !data.is_empty() {
+            self.data(data);
+        }
+        self.cs.set_high();
+    }
+
+    /// Start a refresh and cut the power after `ms`, without waiting for the
+    /// waveform to finish. **For `panel_deep_probe` only.**
+    ///
+    /// The waveform is how long the pigments get to move, so a truncated one
+    /// leaves them part-way: the question this asks is whether part-way is
+    /// legible. It is the one route to a shorter update that needs no
+    /// undocumented register at all — just less patience.
+    ///
+    /// Returns with `settled` false, because it did not settle. The caller is
+    /// expected to reset and re-init afterwards rather than carry on from
+    /// whatever state an interrupted refresh leaves.
+    pub fn refresh_truncated(&mut self, ms: u64) -> Refresh {
+        let start = Instant::now();
+        self.cs.set_low();
+        self.cmd(0x04); // POWER_ON
+        self.wait_busy(20_000);
+        self.delay.delay_millis(200);
+        self.cmd(0x06);
+        self.data(&[0x6F, 0x1F, 0x17, 0x27]);
+        self.delay.delay_millis(200);
+
+        let drf = Instant::now();
+        self.cmd(0x12); // DISPLAY_REFRESH
+        self.data(&[DRF_MODE]);
+        // Wait for BUSY to fall before timing anything. The controller takes a
+        // moment to assert it, and a loop that tests it first reads the line
+        // still high and reports the waveform as already finished — every cut
+        // would come back "not a cut" and the ladder would measure nothing.
+        // Same trap as `wait_refresh`, which exists for the same reason.
+        let mut saw_busy = false;
+        while drf.elapsed().as_millis() < 50 {
+            if self.busy.is_low() {
+                saw_busy = true;
+                break;
+            }
+        }
+        while drf.elapsed().as_millis() < ms && self.busy.is_low() {
+            self.delay.delay_millis(1);
+        }
+        let cut = drf.elapsed().as_millis();
+        let finished = saw_busy && self.busy.is_high();
+
+        self.cmd(0x02); // POWER_OFF
+        self.data(&[0x00]);
+        self.wait_busy(20_000);
+        self.cs.set_high();
+        Refresh {
+            total_ms: start.elapsed().as_millis(),
+            drf_ms: cut,
+            settled: finished,
+            saw_busy,
+        }
+    }
+
     /// Command `0x30` (PLL): the frame rate the waveform is clocked at, and
     /// **the only thing measured on this panel that changes how long a refresh
     /// takes**.

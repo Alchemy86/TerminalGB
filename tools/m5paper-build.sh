@@ -40,6 +40,18 @@ usage: tools/m5paper-build.sh [command]
              by leaving a six-ink test card on the glass to be judged against
              `testcard`. Writes no waveform, voltage or LUT register.
              See src/bin/panel_probe.rs and docs/m5paper-refresh.md.
+  deepprobe  flash the DEEP probe: the experiments the probe above will not
+             do. It writes registers nobody has documented for this controller
+             (LUT_SEL, the PSR mode bits, a forced temperature) and cuts the
+             power part-way through a waveform. It can leave the glass worse
+             than it found it, and the captain authorised it on his own device.
+             Resets and re-inits after every experiment and ends on a clean
+             test card. See src/bin/panel_deep_probe.rs.
+  truncate   flash the TRUNCATION stepper: it cuts the power part-way through
+             a waveform and leaves the picture on the glass, stepped by the
+             buttons. The one experiment here whose answer is a picture rather
+             than a number, so somebody has to be holding the device.
+             See src/bin/panel_truncate.rs.
   monitor    attach to the serial log without resetting the board
   test       run the panel-geometry tests on the host (no device needed)
   testcard   render the expected picture to target/m5paper/ as PPM
@@ -91,6 +103,21 @@ case "$cmd" in
     echo "WARNING: this overwrites whatever firmware is on the device."
     run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify \
       --non-interactive --monitor "$probe_elf"
+    ;;
+  deepprobe)
+    need_toolchain
+    deep_elf="$crate/target/xtensa-esp32s3-none-elf/release/panel_deep_probe"
+    cd "$crate" && cargo build --release --bin panel_deep_probe
+    echo "WARNING: this writes undocumented registers to the panel."
+    run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify \
+      --non-interactive --monitor "$deep_elf"
+    ;;
+  truncate)
+    need_toolchain
+    trunc_elf="$crate/target/xtensa-esp32s3-none-elf/release/panel_truncate"
+    cd "$crate" && cargo build --release --bin panel_truncate
+    run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify \
+      --non-interactive --monitor "$trunc_elf"
     ;;
   monitor)
     run_on_device espflash monitor --port "$port" --non-interactive

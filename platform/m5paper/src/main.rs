@@ -8,14 +8,15 @@
 //!
 //! Three things are worth knowing before reading further.
 //!
-//! **Nobody plays a game on this.** The panel takes 8.734 s to draw a picture
+//! **Nobody plays a game on this.** The panel takes 7.725 s to draw a picture
 //! — measured, on this device, and it does not vary with the picture. That is
-//! already the fast setting: the vendor's own is 15.954 s, and
+//! already two settings faster than the vendor: its own sequence is 15.954 s,
+//! and
 //! [`docs/m5paper-refresh.md`] is how the difference was found and what else
 //! was tried and did not work. Against a 16.743 ms Game Boy frame it is still
-//! **522x too slow**. So the loop here is not a frame loop: it emulates a burst
+//! **461x too slow**. So the loop here is not a frame loop: it emulates a burst
 //! of frames at full speed with nothing attached to the screen, then spends
-//! nine seconds putting **one** of them on the glass.
+//! eight seconds putting **one** of them on the glass.
 //!
 //! [`docs/m5paper-refresh.md`]: ../../../docs/m5paper-refresh.md
 //!
@@ -106,7 +107,7 @@ const ORIENTATION: Rotation = Rotation::Landscape;
 /// Pokémon Blue spends about 900 frames on the copyright and Game Freak intro
 /// before the title screen will even accept a button, so a first picture taken
 /// much earlier than this is a logo. It costs a few seconds of emulation
-/// against nine seconds of panel, so there is no reason to be mean with it.
+/// against eight seconds of panel, so there is no reason to be mean with it.
 const BOOT_FRAMES: u32 = 1_000;
 
 /// Emulated frames per button press — about a second of game time.
@@ -145,6 +146,24 @@ const FRAME_US: u64 = 16_743;
 ///
 /// [`docs/m5paper-refresh.md`]: ../../../docs/m5paper-refresh.md
 const PLAY_PLL: u8 = 0x07;
+
+/// Whether a repaint hands the whole power-on/refresh/power-off sequence to
+/// the controller with command `0x17` (AUTO) instead of driving it by hand.
+///
+/// **Worth a second, and it does not touch the waveform.** The hand-driven
+/// sequence M5GFX uses spends ~1.5 s around the refresh on two 200 ms settles
+/// and two `BUSY` handshakes; AUTO spends ~0.5 s. Measured interleaved, three
+/// rounds each at `PLAY_PLL`: **8.737 s by hand against 7.725 s through AUTO**,
+/// a saving of 1012 ms that did not vary by more than a millisecond. The
+/// hand-driven rounds *between* the AUTO ones kept their own time exactly,
+/// which is what says AUTO really does power the panel down at the end rather
+/// than leaving it on.
+///
+/// Not in any vendor driver for this panel; it is in Patrick Siegl's list of
+/// commands that respond on this glass and `panel_deep_probe` confirmed it
+/// here. The booster values M5GFX rewrites before every refresh are replayed
+/// through it, which costs nothing measurable and keeps that intent.
+const USE_AUTO_SEQUENCE: bool = true;
 
 /// The PLL the vendor init sets, and what the colour preview repaints at.
 ///
@@ -325,7 +344,7 @@ fn main() -> ! {
     );
     let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix], PLAY_PLL);
     println!(
-        "panel     : {}.{:03} s (PLL 0x{PLAY_PLL:02X}; the vendor's 0x{TRUE_COLOUR_PLL:02X} is 15.954 s)",
+        "panel     : {}.{:03} s (PLL 0x{PLAY_PLL:02X} + AUTO; the vendor's own sequence is 15.954 s)",
         ms / 1000,
         ms % 1000
     );
@@ -355,7 +374,7 @@ fn main() -> ! {
         LOOKS.len()
     );
     println!(
-        "A and B repaint at PLL 0x{PLAY_PLL:02X} (~9 s); C repaints at the vendor's 0x{TRUE_COLOUR_PLL:02X} (~16 s),"
+        "A and B repaint at PLL 0x{PLAY_PLL:02X} (~8 s); C repaints at the vendor's 0x{TRUE_COLOUR_PLL:02X} (~15 s),"
     );
     println!("because judging a palette through a faster waveform judges the wrong thing.");
     println!(
@@ -456,7 +475,7 @@ fn build_machine() -> Result<&'static mut Gameboy, &'static str> {
 /// Run `n` frames as fast as the chip can, and report the rate.
 ///
 /// The rate is the interesting number and nothing else on this device measures
-/// it: the panel's own nine seconds say nothing about how fast the emulator
+/// it: the panel's own eight seconds say nothing about how fast the emulator
 /// is, and the PSP anchor in `docs/portability.md` is an anchor, not a
 /// measurement of this chip.
 fn run_frames(gb: &mut Gameboy, n: u32) -> u32 {
@@ -518,7 +537,11 @@ fn show<Dm: esp_hal::DriverMode>(
     gbscreen::blit(fb, gb.image(), look);
     epd.set_pll(pll);
     epd.send_framebuffer(fb);
-    epd.refresh()
+    if USE_AUTO_SEQUENCE {
+        epd.refresh_auto(true).total_ms
+    } else {
+        epd.refresh()
+    }
 }
 
 /// Referenced by the module docs so a reader can find the bring-up colours.
