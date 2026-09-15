@@ -34,6 +34,10 @@ usage: tools/m5paper-build.sh [command]
 
   build      compile the firmware (default)
   flash      compile, then flash over $M5PAPER_PORT (default /dev/ttyACM0)
+  probe      flash the PANEL PROBE instead of the emulator, and watch it run.
+             It times refreshes against command 0x83 to answer whether this
+             panel has anything quicker than its 16 s full refresh. Writes no
+             waveform, voltage or LUT register. See src/bin/panel_probe.rs.
   monitor    attach to the serial log without resetting the board
   test       run the panel-geometry tests on the host (no device needed)
   testcard   render the expected picture to target/m5paper/ as PPM
@@ -77,6 +81,14 @@ case "$cmd" in
     echo "WARNING: this overwrites the factory firmware."
     echo "         run '$0 backup' first if you have not already."
     run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify --non-interactive "$elf"
+    ;;
+  probe)
+    need_toolchain
+    probe_elf="$crate/target/xtensa-esp32s3-none-elf/release/panel_probe"
+    cd "$crate" && cargo build --release --bin panel_probe
+    echo "WARNING: this overwrites whatever firmware is on the device."
+    run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify \
+      --non-interactive --monitor "$probe_elf"
     ;;
   monitor)
     run_on_device espflash monitor --port "$port" --non-interactive

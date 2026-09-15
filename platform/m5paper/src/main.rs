@@ -8,12 +8,16 @@
 //!
 //! Three things are worth knowing before reading further.
 //!
-//! **Nobody plays a game on this.** The panel takes 15.967 s to draw a picture
-//! — measured, on this device, and it does not vary with the picture. Against a
-//! 16.743 ms Game Boy frame that is 954x too slow. So the loop here is not a
-//! frame loop: it emulates a burst of frames at full speed with nothing
-//! attached to the screen, then spends sixteen seconds putting **one** of them
-//! on the glass.
+//! **Nobody plays a game on this.** The panel takes 8.734 s to draw a picture
+//! — measured, on this device, and it does not vary with the picture. That is
+//! already the fast setting: the vendor's own is 15.954 s, and
+//! [`docs/m5paper-refresh.md`] is how the difference was found and what else
+//! was tried and did not work. Against a 16.743 ms Game Boy frame it is still
+//! **522x too slow**. So the loop here is not a frame loop: it emulates a burst
+//! of frames at full speed with nothing attached to the screen, then spends
+//! nine seconds putting **one** of them on the glass.
+//!
+//! [`docs/m5paper-refresh.md`]: ../../../docs/m5paper-refresh.md
 //!
 //! **The cartridge is in flash, not in RAM.** `include_bytes!` puts it in
 //! `.rodata`, which the ESP32-S3 memory-maps out of flash, and the `embedded`
@@ -102,7 +106,7 @@ const ORIENTATION: Rotation = Rotation::Landscape;
 /// Pokémon Blue spends about 900 frames on the copyright and Game Freak intro
 /// before the title screen will even accept a button, so a first picture taken
 /// much earlier than this is a logo. It costs a few seconds of emulation
-/// against sixteen seconds of panel, so there is no reason to be mean with it.
+/// against nine seconds of panel, so there is no reason to be mean with it.
 const BOOT_FRAMES: u32 = 1_000;
 
 /// Emulated frames per button press — about a second of game time.
@@ -115,6 +119,40 @@ const PRESS_FRAMES: u32 = 12;
 
 /// A Game Boy frame, in microseconds: 70224 cycles at 4.194304 MHz.
 const FRAME_US: u64 = 16_743;
+
+/// The PLL (`0x30`) a gameplay repaint runs at, against the vendor's `0x08`.
+///
+/// **This is the only thing found that changes how long a refresh takes**, and
+/// it nearly halves it: 15.954 s at the vendor default against **8.741 s** at
+/// `0x07`, measured by `src/bin/panel_probe.rs` on this device. Command `0x83`
+/// (the addressing window) and the `DISPLAY_REFRESH` parameter byte were both
+/// swept and both cost exactly the same at every value — see
+/// [`docs/m5paper-refresh.md`] for the numbers and the reasoning.
+///
+/// **It does not make this playable and nothing does.** 8.741 s against a
+/// 16.743 ms Game Boy frame is still 522x too slow. What it buys is a button
+/// press that answers in nine seconds rather than sixteen.
+///
+/// **The picture at this value has not been checked by anyone on this
+/// codebase.** A too-fast waveform loses colour separation rather than failing,
+/// and `BUSY` rises just the same, so the timing above cannot see it and this
+/// board has no MISO to read a register back through. The corroboration it does
+/// have is Patrick Siegl's measured sweep of the same 4.0" panel
+/// ([waveshareteam/e-Paper#387](https://github.com/waveshareteam/e-Paper/pull/387)),
+/// which recommends `0x07` for this size having looked at it. If the ink comes
+/// out muddy, this constant is the one thing to move — `0x06` is 10.003 s and
+/// `0x05` is 11.127 s.
+///
+/// [`docs/m5paper-refresh.md`]: ../../../docs/m5paper-refresh.md
+const PLAY_PLL: u8 = 0x07;
+
+/// The PLL the vendor init sets, and what the colour preview repaints at.
+///
+/// **Button C is a palette preview, so it must not be the fast path.** Its
+/// whole job is to show what the six inks look like, and the risk a faster
+/// waveform carries is precisely that the inks stop separating — so judging a
+/// palette through it would be judging the wrong thing.
+const TRUE_COLOUR_PLL: u8 = 0x08;
 
 #[main]
 fn main() -> ! {
@@ -285,8 +323,12 @@ fn main() -> ! {
         "--- frame {frames_run} onto the panel ({}) ---",
         LOOKS[look_ix].name()
     );
-    let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix]);
-    println!("panel     : {}.{:03} s", ms / 1000, ms % 1000);
+    let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix], PLAY_PLL);
+    println!(
+        "panel     : {}.{:03} s (PLL 0x{PLAY_PLL:02X}; the vendor's 0x{TRUE_COLOUR_PLL:02X} is 15.954 s)",
+        ms / 1000,
+        ms % 1000
+    );
     println!();
     println!(
         "emulation is {}x faster than this panel can show it.",
@@ -313,8 +355,14 @@ fn main() -> ! {
         LOOKS.len()
     );
     println!(
-        "each repaint is about sixteen seconds. that is the panel, not the software."
+        "A and B repaint at PLL 0x{PLAY_PLL:02X} (~9 s); C repaints at the vendor's 0x{TRUE_COLOUR_PLL:02X} (~16 s),"
     );
+    println!("because judging a palette through a faster waveform judges the wrong thing.");
+    println!(
+        "so pressing C is also the A/B: the same picture, slow and true, next to"
+    );
+    println!("the one before it. if the inks only separate under C, 0x{PLAY_PLL:02X} is too fast");
+    println!("and PLAY_PLL in src/main.rs is the constant to move (0x06 is ~10 s).");
 
     let mut was = [false; 3];
     loop {
@@ -344,8 +392,16 @@ fn main() -> ! {
                     "frame {frames_run} onto the panel ({})...",
                     LOOKS[look_ix].name()
                 );
-                let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix]);
-                println!("panel     : {}.{:03} s", ms / 1000, ms % 1000);
+                // The look preview is the one repaint that must be true
+                // colour; everything else is a gameplay frame and takes the
+                // fast waveform.
+                let pll = if i == 2 { TRUE_COLOUR_PLL } else { PLAY_PLL };
+                let ms = show(&mut epd, &mut fb, gb, LOOKS[look_ix], pll);
+                println!(
+                    "panel     : {}.{:03} s (PLL 0x{pll:02X})",
+                    ms / 1000,
+                    ms % 1000
+                );
             }
             was[i] = down;
         }
@@ -400,7 +456,7 @@ fn build_machine() -> Result<&'static mut Gameboy, &'static str> {
 /// Run `n` frames as fast as the chip can, and report the rate.
 ///
 /// The rate is the interesting number and nothing else on this device measures
-/// it: the panel's own sixteen seconds say nothing about how fast the emulator
+/// it: the panel's own nine seconds say nothing about how fast the emulator
 /// is, and the PSP anchor in `docs/portability.md` is an anchor, not a
 /// measurement of this chip.
 fn run_frames(gb: &mut Gameboy, n: u32) -> u32 {
@@ -452,6 +508,7 @@ fn show<Dm: esp_hal::DriverMode>(
     fb: &mut FrameBuffer<'_>,
     gb: &mut Gameboy,
     look: Look,
+    pll: u8,
 ) -> u64 {
     // One frame with the pixels back on. The emulator was fast-forwarded with
     // them off; this is the frame that reaches the paper, and it is exactly the
@@ -459,6 +516,7 @@ fn show<Dm: esp_hal::DriverMode>(
     gb.set_render_pixels(true);
     gb.frame();
     gbscreen::blit(fb, gb.image(), look);
+    epd.set_pll(pll);
     epd.send_framebuffer(fb);
     epd.refresh()
 }

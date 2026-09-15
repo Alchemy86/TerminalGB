@@ -21,7 +21,12 @@ on the paper. Then three buttons: **A** presses Game Boy START, **B** presses
 Game Boy A, and **C** cycles the shade-to-ink mapping and repaints the same
 frame so the five looks can be compared by eye.
 
-Each repaint takes about sixteen seconds, which is the panel, not the software.
+Each gameplay repaint takes about **nine** seconds and the look preview sixteen.
+That split is the panel's frame-rate register: the vendor's init leaves it at its
+slowest value, and a gameplay frame runs one step faster while the look preview
+stays at true colour. [`docs/m5paper-refresh.md`](../../docs/m5paper-refresh.md)
+is the sweep, the two surfaces that looked like they should have helped and
+measured identical, and the one check nobody here can make.
 
 ## The cartridge
 
@@ -30,6 +35,26 @@ Each repaint takes about sixteen seconds, which is the panel, not the software.
 costs no RAM at all. **No ROM is committed to this repository**, so the default
 is the MIT dmg-acid2 image in `third_party/` and a fresh clone builds, flashes
 and shows a picture with no game.
+
+## The panel is faster than the vendor ships it
+
+```sh
+tools/m5paper-build.sh probe        # ~7 min, times everything, leaves a test card
+```
+
+`0x30` is a PLL divider that sets how fast the waveform is clocked, and M5GFX —
+like Pimoroni and Seeed — leaves it at the default. Measured here, `POWER_ON`
+through `POWER_OFF`: **15.954 s at the vendor's `0x08`, 8.741 s at `0x07`**, and
+`0x08` lands on `0x03` to two milliseconds because the field is only four bits
+wide. Command `0x83` (the addressing window, which GxEPD2 calls partial refresh)
+and the `DISPLAY_REFRESH` parameter byte were both swept and **both cost exactly
+what a full refresh costs**, so neither is used.
+
+**What no timer here can check is whether the faster picture is still right.** A
+truncated waveform loses ink separation rather than time, and this board has no
+MISO to read anything back. The probe ends by leaving the six-ink test card on
+the glass for that reason; compare it against `tools/m5paper-build.sh testcard`.
+If it is muddy, `PLAY_PLL` in `src/main.rs` is the one constant to move.
 
 ## Two things a porter should know before measuring anything
 

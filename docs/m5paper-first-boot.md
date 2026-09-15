@@ -87,6 +87,13 @@ complexity of the colour distribution" is not what this device does; the scout's
 three factory-firmware samples (16.280, 16.280, 17.380 s) already hinted at that,
 and sixteen from our own code settle it.
 
+**Sixteen seconds is the vendor's setting, though, not the panel's floor — found
+later.** The waveform is clocked by a PLL divider the init leaves at its slowest
+value, and the same refresh takes **8.741 s** one step faster.
+[`m5paper-refresh.md`](m5paper-refresh.md) has the sweep and the two things that
+looked like they should have helped and did not. Every number on this page is at
+the vendor default, which is what this firmware shipped when they were taken.
+
 Our figure is 0.3 s under the factory firmware's because it brackets a slightly
 different window: the firmware's log spans its own "Refresh start" to "Refresh
 complete", ours spans `POWER_ON` through `DISPLAY_REFRESH` to `POWER_OFF`. The

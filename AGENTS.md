@@ -4091,11 +4091,13 @@ emulator runs on it now; see the section below.**
 - **SERIAL NEEDS `sg dialout -c '...'` ON THIS BOX.** `aaron` is in `dialout` in `/etc/group` but
   the shell predates the change, so a direct open is `Errno 13`. `tools/m5paper-build.sh` tests
   readability and re-enters the group itself.
-- **THE PANEL TAKES 15.967 s AND DOES NOT VARY WITH THE PICTURE.** Sixteen refreshes, four different
-  pictures, all inside 15.957-15.968 s (11 ms, 0.07 %) — so the Spectra 6 waveform is fixed-length, and M5's
-  "15~30 s depending on colour complexity" is not what this device does. Against a 16.743 ms Game
-  Boy frame that is **954x too slow**. It independently confirms the scout's 16.280 s from the
-  factory firmware; the 0.3 s gap is a different bracketing window, not a disagreement.
+- ~~**THE PANEL TAKES 15.967 s**~~ — **that is the VENDOR'S PLL SETTING, not the panel's floor;
+  the same refresh is 8.741 s one register step faster. See the refresh section below.** The rest
+  of the bring-up finding stands and is what made the correction findable: sixteen refreshes over
+  four different pictures all inside 15.957-15.968 s (11 ms, 0.07 %), so the Spectra 6 waveform is
+  **fixed-length** and M5's "15~30 s depending on colour complexity" is not what this device does.
+  It independently confirms the scout's 16.280 s from the factory firmware; the 0.3 s gap is a
+  different bracketing window, not a disagreement.
 - **THREE HARDWARE FACTS NO DOCUMENT STATES, ALL READ OUT OF M5GFX's OWN `board_M5PaperColor`
   BRING-UP.** The panel has **no power-enable GPIO** — an M5PM1 PMIC at I2C `0x6E` (SDA `GPIO3`,
   SCL `GPIO2`) gates it, and until its own GPIO0 is raised every SPI write is discarded **with no
@@ -4282,6 +4284,59 @@ price.** Concretely, for anything that reads or decodes a commercial cartridge:
 
 (The FlashGBX GPL note and the licence-hygiene section in `CONTRIBUTING.md` are being added on
 another branch; when those land, this belongs beside them.)
+
+### THE PANEL IS FASTER THAN THE VENDOR SHIPS IT — `0x30` is the frame rate
+
+**Full page: [`docs/m5paper-refresh.md`](docs/m5paper-refresh.md). Instrument:
+`platform/m5paper/src/bin/panel_probe.rs`, run by `tools/m5paper-build.sh probe` (~7 min).**
+**15.954 s a picture -> 8.741 s**, measured on the captain's device, and the emulator's own
+repaint with Pokémon Blue confirms it end to end at 8.734 s.
+
+- **`0x30` (PLL) IS A FRAME-RATE DIVIDER AND EVERY DRIVER SHIPS IT UNTUNED.** M5GFX, Pimoroni and
+  Seeed all leave it at the default. Measured here, `POWER_ON`..`POWER_OFF`: `0x00` 30.415 s,
+  `0x02` 18.294, `0x03` 15.952, **`0x08` (vendor) 15.954**, `0x04` 12.634, `0x05` 11.127,
+  `0x06` 10.003, **`0x07` 8.741**. Monotonic — and `0x08` lands on `0x03` to two milliseconds,
+  because the field is `FRS[3:0]` and `0x08`-`0x0F` alias onto `0x03`. **Sweep both directions**:
+  a value that makes the panel *slower* is what proves the register is the frame rate rather than
+  a fast number being a mismeasurement.
+- **IT DOES NOT MAKE THE DEVICE PLAYABLE AND NOTHING WILL.** 8.741 s against a 16.743 ms frame is
+  still **522x too slow** (was 954x). What it buys is a button press answering in nine seconds
+  instead of sixteen. Do not let the 1.8x be quoted as progress towards a frame rate.
+- **THE STOPWATCH IS HALF THE MEASUREMENT AND THE OTHER HALF IS NOT MADE HERE.** A too-fast
+  waveform loses ink separation rather than time, and `BUSY` rises exactly on schedule regardless
+  — **and this board has no MISO** (`GPIO15` SCLK, `GPIO13` MOSI, nothing else), so no register
+  can be read back to check anything. Every probe is write-then-time-`BUSY`. The probe therefore
+  ends by leaving the six-ink test card on the glass; `tools/m5paper-build.sh testcard` renders
+  the same card on the host to compare against. **Whether `0x07` still renders correctly on this
+  panel has not been confirmed by anyone on this codebase.**
+- **TWO SURFACES THAT LOOK LIKE THEY SHOULD HELP AND MEASURE IDENTICAL — do not re-run these.**
+  Command **`0x83`**, the addressing window GxEPD2 calls partial refresh, costs **14.454 s of
+  waveform at every height from 8 rows to 600** — a 75x range, a 3 ms spread. GxEPD2 itself
+  declares `partial_refresh_time == full_refresh_time`; partial here means only the window
+  flickers, never that it is quicker, and a Zephyr issue measured the same area-independence on a
+  7.3". The **`DISPLAY_REFRESH` (`0x12`) parameter byte** is 14.454-14.456 s at `0x00`, `0x01`,
+  `0x02` and `0x04` alike. `Ed2208::refresh_window` implements `0x83` and nothing uses it; it is
+  kept because the measurement is the point.
+- **M5GFX's `epd_fast` / `epd_fastest` ARE A DITHERING ALGORITHM, NOT A WAVEFORM.** They cost the
+  panel nothing. The name has misled at least one reader.
+- **NO WAVEFORM, DRIVE VOLTAGE OR LUT REGISTER IS WRITTEN, DELIBERATELY.** `0x83` is an address
+  range and `0x30` a documented divider; `BTST1/2/3` (`0x05`/`0x06`/`0x08`) and `PWRR` (`0x01`)
+  are left as the vendor init leaves them, because driving this glass outside its waveform can
+  damage it permanently and a guess is not worth that on hardware you cannot read back.
+  **The one unexplored surface is a LUT-from-register bit** — the SPD1656 and JD79661 cousins put
+  `LUT_SEL` in the second PSR byte, and ours is `0x69` with that bit clear. Setting it is two
+  bytes and could give a black-and-white-only waveform (mono e-paper does ~300 ms), or could drive
+  the panel from whatever those registers happen to hold. E Ink calls the part a "Hardware TCON",
+  which argues there is no register LUT at all. Not attempted; it needs a datasheet nobody has
+  published.
+- **THE CONTROLLER IS UNIDENTIFIED AND THAT IS NOT FOR WANT OF LOOKING.** E Ink says only "an
+  all-in-one IC", Good Display lists it as "NC", Waveshare declined to answer when asked. The
+  JD79661 and SPD1656 datasheets were both checked against this init list and **neither fits** —
+  both lack `CMDH` (`0xAA`), `PWRR` and `POFS`.
+- **THE SPLIT THAT SHIPPED:** gameplay repaints at `PLAY_PLL` (`0x07`), the look preview on button
+  C at `TRUE_COLOUR_PLL` (`0x08`). The preview's whole job is to show what the six inks look like
+  and the risk a faster waveform carries is precisely that they stop separating, so judging a
+  palette through it would judge the wrong thing. Pressing C is therefore also the A/B.
 
 ### Inherited pictures in `resources/` are third-party and mostly unlicensed
 

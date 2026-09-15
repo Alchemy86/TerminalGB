@@ -143,7 +143,9 @@ the flash/PSRAM mode combinations Espressif documents.
 ## What this does not show
 
 **Nobody plays a game on this.** Twelve emulated frames a second is a fifth of
-real time, and each picture then takes sixteen seconds. Pressing START and
+real time, and each picture then takes sixteen seconds — nine, since
+[`m5paper-refresh.md`](m5paper-refresh.md) found the frame-rate register the
+vendor leaves at its slowest. Pressing START and
 seeing what happened is a twenty-two-second round trip. The interesting build
 remains the one where no human is holding it.
 
