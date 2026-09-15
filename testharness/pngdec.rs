@@ -27,6 +27,34 @@ pub struct Image {
     pub height: usize,
     /// `width * height * 3` bytes, row-major, no padding.
     pub rgb: Vec<u8>,
+    /// One opacity byte per pixel, `255` where the file carries no alpha
+    /// channel at all.
+    ///
+    /// **Kept because dropping it silently corrupts an image whose background
+    /// is transparent rather than white.** `pixelgb species` writes its sprites
+    /// that way — a flood-filled page of `(0, 0, 0, 0)` around the figure — so
+    /// a reader that looks only at [`Image::rgb`] sees the page as *black* and
+    /// the picture comes out inverted at its edges, which is exactly how it was
+    /// found. Colour types 4 and 6 fill this; 0, 2 and 3 leave it opaque.
+    pub alpha: Vec<u8>,
+}
+
+impl Image {
+    /// The picture composited over one flat background colour, as RGB.
+    ///
+    /// The honest way to hand an image with a transparent background to
+    /// anything that reasons about luminance ([`quantise_shades`] included):
+    /// a transparent pixel's own RGB is arbitrary, so it has to be *replaced*
+    /// rather than dimmed.
+    pub fn flatten_onto(&self, bg: [u8; 3]) -> Vec<u8> {
+        let mut out = self.rgb.clone();
+        for (i, &a) in self.alpha.iter().enumerate() {
+            if a == 0 {
+                out[i * 3..i * 3 + 3].copy_from_slice(&bg);
+            }
+        }
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +401,7 @@ pub fn decode(bytes: &[u8]) -> Result<Image, String> {
 
     // Expand to 8-bit RGB.
     let mut rgb = vec![0u8; width * height * 3];
+    let mut alpha = vec![255u8; width * height];
     let maxval = (1u32 << depth.min(8)) - 1;
     for y in 0..height {
         for x in 0..width {
@@ -406,9 +435,25 @@ pub fn decode(bytes: &[u8]) -> Result<Image, String> {
             rgb[o] = r;
             rgb[o + 1] = g;
             rgb[o + 2] = b;
+            // The alpha channel is the last one, and only types 4 and 6 have
+            // it. A 16-bit sample is already truncated to its high byte by
+            // `sample`; a sub-8-bit one is scaled the same way grey is.
+            if matches!(colour, 4 | 6) {
+                let a = ch[channels - 1];
+                alpha[y * width + x] = if depth >= 8 {
+                    a
+                } else {
+                    ((a as u32 * 255) / maxval) as u8
+                };
+            }
         }
     }
-    Ok(Image { width, height, rgb })
+    Ok(Image {
+        width,
+        height,
+        rgb,
+        alpha,
+    })
 }
 
 fn paeth(a: u8, b: u8, c: u8) -> u8 {

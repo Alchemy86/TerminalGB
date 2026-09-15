@@ -21,9 +21,12 @@
 // `rustc --test` it needs its own copy, and `cfg(test)` is the only difference.
 #[cfg(not(test))]
 use crate::geom::{FrameBuffer, Ink};
+// `pub` so `sprite.rs`, which includes *this* file the same way, shares one
+// `geom` instance with it. Two `#[path]` includes of geom.rs would be two
+// distinct `Ink` types and nothing would compile against both.
 #[cfg(test)]
 #[path = "geom.rs"]
-mod geom;
+pub mod geom;
 #[cfg(test)]
 use geom::{FrameBuffer, Ink};
 

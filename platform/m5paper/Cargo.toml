@@ -16,6 +16,19 @@ publish = false
 
 [workspace]
 
+[features]
+# **The species still, and it is gated because it cannot build without a
+# picture.** `src/bin/charizard.rs` reads `TERMINALGB_SPRITE` with `env!`, and
+# unlike the cartridge there is no redistributable default to fall back on — so
+# left ungated it would break `cargo build --release` on a fresh clone, which is
+# the one property this crate's README promises about a clone with no game.
+# `tools/m5paper-build.sh charizard` passes this; nothing else does.
+sprite = []
+
+[[bin]]
+name = "charizard"
+required-features = ["sprite"]
+
 [dependencies]
 # THE EMULATOR. `--no-default-features` is the embedding build and `embedded`
 # makes it `#![no_std]` + `alloc` — see the feature's own doc in the root

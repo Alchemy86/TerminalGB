@@ -34,6 +34,17 @@ usage: tools/m5paper-build.sh [command]
 
   build      compile the firmware (default)
   flash      compile, then flash over $M5PAPER_PORT (default /dev/ttyACM0)
+  charizard  flash the SPECIES STILL instead of the emulator: one Pokemon's
+             own front sprite, decompressed from your cartridge by `pixelgb
+             species`, magnified and held on the glass. Needs the picture:
+
+               pixelgb species --rom ~/roms/blue.gb --out /tmp/species
+               TERMINALGB_SPRITE_PNG=/tmp/species/pokemon-blue/sprites/four-shade/1x/pokemon-front-006-charizard.png \
+                 tools/m5paper-build.sh charizard
+
+             No game art is committed here, so there is no default and none can
+             be invented. Button C cycles the look. See src/bin/charizard.rs
+             and docs/m5paper-charizard.md.
   probe      flash the PANEL PROBE instead of the emulator, and watch it run
              (~7 min). It sweeps the PLL (0x30), the addressing window (0x83)
              and the DISPLAY_REFRESH parameter, timing every refresh, and ends
@@ -57,7 +68,7 @@ usage: tools/m5paper-build.sh [command]
   testcard   render the expected picture to target/m5paper/ as PPM
   backup     read the whole 16 MB flash to a file before you overwrite it
 
-  env: M5PAPER_PORT, ESPUP_EXPORT_FILE, TERMINALGB_ROM
+  env: M5PAPER_PORT, ESPUP_EXPORT_FILE, TERMINALGB_ROM, TERMINALGB_SPRITE_PNG
 EOF
 }
 
@@ -96,6 +107,65 @@ case "$cmd" in
     echo "         run '$0 backup' first if you have not already."
     run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify --non-interactive "$elf"
     ;;
+  charizard)
+    need_toolchain
+    # THE PICTURE. Same discipline as TERMINALGB_ROM above and for the same
+    # reason: a cartridge's pixels are not ours to ship, so the sprite is
+    # extracted from the player's own image by `pixelgb species` and named
+    # here. There is no default because there is nothing redistributable to
+    # default to — refuse, and say what to run.
+    if [ -z "${TERMINALGB_SPRITE_PNG:-}" ]; then
+      echo "TERMINALGB_SPRITE_PNG is not set: this build ships no game art." >&2
+      echo >&2
+      echo "  pixelgb species --rom /path/to/your.gb --out /tmp/species" >&2
+      echo "  TERMINALGB_SPRITE_PNG=/tmp/species/pokemon-blue/sprites/four-shade/1x/pokemon-front-006-charizard.png \\" >&2
+      echo "    $0 charizard" >&2
+      exit 1
+    fi
+    if [ ! -r "$TERMINALGB_SPRITE_PNG" ]; then
+      echo "TERMINALGB_SPRITE_PNG is not readable: $TERMINALGB_SPRITE_PNG" >&2
+      exit 1
+    fi
+    png="$(cd "$(dirname "$TERMINALGB_SPRITE_PNG")" && pwd)/$(basename "$TERMINALGB_SPRITE_PNG")"
+
+    # The caption comes from the file name pixelgb chose, so the name on the
+    # paper and the pixels on the paper cannot disagree: a `pokemon-front-NNN-
+    # slug.png` carries both. Anything else is refused rather than captioned
+    # with a guess.
+    stem="$(basename "$png" .png)"
+    case "$stem" in
+      pokemon-front-*|pokemon-back-*)
+        num="$(echo "$stem" | cut -d- -f3)"
+        slug="$(echo "$stem" | cut -d- -f4-)"
+        ;;
+      *)
+        echo "cannot read a species name out of '$stem'." >&2
+        echo "expected a pixelgb name like pokemon-front-006-charizard.png" >&2
+        exit 1
+        ;;
+    esac
+    export TERMINALGB_SPRITE_NAME="$(echo "$slug" | tr 'a-z-' 'A-Z ')"
+    export TERMINALGB_SPRITE_NUMBER="#$num"
+
+    # Convert on the host, with the repository's own PNG reader and the
+    # firmware's own shade quantiser. src/sprite_host.rs explains both
+    # conversions; neither is reimplemented here.
+    mkdir -p "$here/target/m5paper"
+    conv="$(mktemp -d)"
+    rustc --edition 2021 -O -o "$conv/sprite_host" "$crate/src/sprite_host.rs"
+    export TERMINALGB_SPRITE="$here/target/m5paper/sprite.bin"
+    "$conv/sprite_host" "$png" "$TERMINALGB_SPRITE"
+    rm -rf "$conv"
+    echo "caption   : $TERMINALGB_SPRITE_NAME $TERMINALGB_SPRITE_NUMBER"
+
+    # `--features sprite` because the binary is gated: with no picture it
+    # cannot compile at all, and a fresh clone must still build. See Cargo.toml.
+    chz_elf="$crate/target/xtensa-esp32s3-none-elf/release/charizard"
+    cd "$crate" && cargo build --release --features sprite --bin charizard
+    echo "WARNING: this overwrites whatever firmware is on the device."
+    run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify \
+      --non-interactive --monitor "$chz_elf"
+    ;;
   probe)
     need_toolchain
     probe_elf="$crate/target/xtensa-esp32s3-none-elf/release/panel_probe"
@@ -133,6 +203,13 @@ case "$cmd" in
     # in itself under `cfg(test)`, so this runs both files' tests.
     rustc --test --edition 2021 -o "$out/gbscreentest" "$crate/src/gbscreen.rs"
     "$out/gbscreentest"
+    # font.rs is pure (it plots through a closure) so it stands alone;
+    # sprite.rs pulls gbscreen.rs and font.rs in itself, so this runs the
+    # placement, the magnification and the ink mapping for the species still.
+    rustc --test --edition 2021 -o "$out/fonttest" "$crate/src/font.rs"
+    "$out/fonttest"
+    rustc --test --edition 2021 -o "$out/spritetest" "$crate/src/sprite.rs"
+    "$out/spritetest"
     rm -rf "$out"
     ;;
   testcard)

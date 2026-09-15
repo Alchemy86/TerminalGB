@@ -30,6 +30,22 @@ because judging a palette wants true colour.
 things that measured identical — a black-and-white waveform among them — and the
 one check nobody here can make.
 
+## The other thing the panel is for
+
+```sh
+pixelgb species --rom ~/roms/blue.gb --out /tmp/species
+TERMINALGB_SPRITE_PNG=/tmp/species/pokemon-blue/sprites/four-shade/1x/pokemon-front-006-charizard.png \
+  tools/m5paper-build.sh charizard
+```
+
+A separate binary, and a still: one species' own front sprite out of the
+cartridge, magnified six times, held on the glass with the power off. It repaints
+at the **vendor's** slow PLL rather than the emulator's fast one, because
+fidelity is the whole feature there and seconds are not.
+[`docs/m5paper-charizard.md`](../../docs/m5paper-charizard.md) has the
+verification — 0 of 3,136 pixels against `pret/pokered`'s own source art — and
+is plain that the colour is a recolour, since Gen 1 had none.
+
 ## The cartridge
 
 `TERMINALGB_ROM` is an absolute path, read at **build** time and compiled into
@@ -122,7 +138,7 @@ The glass is portrait. Landscape is a coordinate mapping applied on the way in
 the panel, that mapping is **tested rather than asserted**:
 
 ```sh
-tools/m5paper-build.sh test        # 26 tests, no device needed
+tools/m5paper-build.sh test        # 67 tests, no device needed
 tools/m5paper-build.sh testcard    # render what the panel should show
 ```
 
@@ -149,6 +165,10 @@ claiming six.
 | `src/pmic.rs` | the M5PM1 sequence that powers the panel |
 | `src/gbscreen.rs` | four Game Boy shades onto six inks, the ×2 blit, and its host tests |
 | `src/main.rs` | power, init, the machine, the emulation burst, the button loop |
+| `src/sprite.rs` | a species picture onto the panel: magnification, layout, inks, and its host tests |
+| `src/font.rs` | a 5x7 font for the caption, and why it is not `video::card`'s |
+| `src/sprite_host.rs` | PNG to the packed blob the firmware reads, and the page preview |
+| `src/bin/charizard.rs` | the still, as its own firmware |
 | `terminalgb-rlib/` | one manifest, no source: the emulator as an rlib only — see its own comment |
 | `src/testcard_host.rs` | renders the expected picture on the host |
 

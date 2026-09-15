@@ -4974,6 +4974,14 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   docs. **The test when adding more: our interface, doing something, with the game incidental.**
   Not a gallery of game frames, and never anything a program could read back as data.
   `docs/upscale-samples/` stays MIT-ROM-only because those genuinely *are* asset comparisons.
+  **AND THE SHARP EDGE OF THAT TEST IS REVERSIBILITY, WHICH DECIDED A REAL CASE THE OTHER WAY.**
+  `docs/m5paper-charizard.md` wanted to show the panel rendering one species' sprite magnified
+  six times; a whole-number magnification is losslessly reversible — downsample it and the
+  cartridge's own pixels come back — so it is "something a program could read back as data" and
+  is **not** committed, however much it looks like a screenshot of our own frontend. The page
+  ships the command that renders it instead, the way `docs/upscale-samples/` says to for a
+  commercial ROM. *A picture whose subject IS the asset fails the test even when our chrome is
+  around it.*
 - **`--shots <dir>` captures a PNG per stage transition of the headless run**, through the same
   `image`-crate path the `c` / `C` / `F2` keys use — `termimage`'s writer is *stored* deflate
   (right for a 60 Hz wire, wrong for a file someone keeps), so a screenshot must never use it.
@@ -8892,6 +8900,12 @@ aggregation, savestate and battery).
   substitute, and `-crf` is not accepted there. The tool prints that note itself, because
   `Unknown encoder 'libx264'` reads as a broken command rather than a missing codec. `libx265`,
   `libvpx` and AV1 encoders are present.
+- **`platform/m5paper/src/font.rs` is a second 5x7 font, deliberately, and the reason is this
+  trap rather than the licence one.** `video::card` is `#[cfg(not(feature = "embedded"))]`, so
+  it does not exist in the M5Paper firmware's build at all, and it is a nested `mod card` inside
+  a 165 KB `video.rs` that no `#[path]` include can reach. The one thing the new one does
+  differently is return `Option` and report a missing glyph to its caller, so the defect below
+  is a value somebody can act on instead of a hole in a picture.
 - **`video::card`'s 5x7 font has letters, digits, `-`, `.`, `:` and `/` and silently draws
   anything else as a blank.** A `+` in a caption disappears — seen live as `T 01:20` where
   `T+01:20` was written. Check any new glyph against `card::glyph` before shipping a caption.
@@ -14402,6 +14416,37 @@ Instrument: `core_bench`, which reports startup and peak RSS as well as the two 
   there is no reason to.
 - **`src/gameboy.rs` trips grep's binary detection** under a UTF-8 locale, so a plain `grep` over it
   silently prints nothing and reads as "the symbol is not there". Use `grep -a`.
+
+## A species picture on the M5Paper, and the decoder trap under it
+
+**Reader-facing page: [`docs/m5paper-charizard.md`](docs/m5paper-charizard.md).** A second
+firmware for the PaperColor (`tools/m5paper-build.sh charizard`) that shows one Pokémon's own
+front sprite instead of running the game. Separate binary, so it cannot touch the free-running
+emulator or its buttons — the same convention `panel_probe` and `panel_truncate` already set.
+
+- **`pngdec::decode` SUPPORTED COLOUR TYPE 6 AND THREW THE ALPHA CHANNEL AWAY**, which silently
+  inverts any image whose background is transparent rather than white. `pixelgb species` writes
+  its sprites exactly that way — a flood-filled page of `(0, 0, 0, 0)` — so a reader that looks
+  only at `Image::rgb` sees the page as **black**: measured, 970 of 3,136 pixels wrong, and the
+  picture still looks like a picture. `Image::alpha` and `Image::flatten_onto` are the fix, both
+  additive; `ppuengines` (the dmg-acid2 pixel compare, the other consumer) is unmoved at
+  0/23,040. **A transparent pixel's RGB is arbitrary and has to be replaced, never dimmed.**
+- **THE SHADE CONVENTIONS ARE OPPOSITE AND NOTHING FAILS WHEN THEY ARE SWAPPED.**
+  `pret/pokered` and `pixelgb` number shades **0 = white**; `gbscreen` and `sprite.rs` number
+  them **0 = black**, because a ramp's first ink is black. The flip happens by running
+  `gbscreen::shade_of`, which works in luminance and lands on the second convention, rather than
+  by a subtraction somebody could get backwards. The check that catches it is the histogram:
+  the blob's is the exact reverse of the PNG's, `[529, 567, 603, 1437]` against
+  `[1437, 603, 567, 529]`.
+- **Game art reaches flash the way the cartridge does — an env var read at build time
+  (`TERMINALGB_SPRITE`), never a committed file.** There is no redistributable default for a
+  sprite the way `third_party/dmg-acid2` is one for a ROM, so the build **refuses and names the
+  `pixelgb species` command** instead of inventing one.
+- **The one honest gap is unchanged and is the port's, not this feature's: nobody on the
+  development end can see the glass, and the panel has no MISO to read anything back.**
+  `src/sprite_host.rs` renders the composed page through the firmware's own `sprite::draw` so
+  it can at least be looked at on the host before it costs sixteen seconds of panel — the same
+  answer `testcard_host.rs` already gives for the test card.
 
 ## Maintaining this file
 
