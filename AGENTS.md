@@ -14419,10 +14419,18 @@ Instrument: `core_bench`, which reports startup and peak RSS as well as the two 
 
 ## A species picture on the M5Paper, and the decoder trap under it
 
-**Reader-facing page: [`docs/m5paper-charizard.md`](docs/m5paper-charizard.md).** A second
-firmware for the PaperColor (`tools/m5paper-build.sh charizard`) that shows one Pokémon's own
-front sprite instead of running the game. Separate binary, so it cannot touch the free-running
+**Reader-facing page: [`docs/m5paper-pokedex.md`](docs/m5paper-pokedex.md).** A second
+firmware for the PaperColor (`tools/m5paper-build.sh pokedex`) that shows Pokémon front
+sprites instead of running the game. Separate binary, so it cannot touch the free-running
 emulator or its buttons — the same convention `panel_probe` and `panel_truncate` already set.
+**Started as one picture (Charizard only, `charizard.rs`) and was generalised to all 151** —
+`src/pokedex.rs` is a small archive format (magic, count, a directory of number/name/
+offset/length, then the sprite blobs concatenated unmodified) over the *same* per-sprite blob
+`src/sprite_host.rs` already wrote for the single-species build; `src/pokedex_host.rs` is
+`sprite_host.rs`'s conversion called once per `pokemon-front-*.png` instead of once. **C**
+advances to the next Pokédex entry, **A** goes back (free real estate — the old firmware left
+it idle), **B** carries the look-cycling C used to do. The old `charizard` command still works,
+as an alias that derives `TERMINALGB_SPECIES_DIR` from `TERMINALGB_SPRITE_PNG`'s own directory.
 
 - **`pngdec::decode` SUPPORTED COLOUR TYPE 6 AND THREW THE ALPHA CHANNEL AWAY**, which silently
   inverts any image whose background is transparent rather than white. `pixelgb species` writes

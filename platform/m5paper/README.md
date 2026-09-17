@@ -34,17 +34,19 @@ one check nobody here can make.
 
 ```sh
 pixelgb species --rom ~/roms/blue.gb --out /tmp/species
-TERMINALGB_SPRITE_PNG=/tmp/species/pokemon-blue/sprites/four-shade/1x/pokemon-front-006-charizard.png \
-  tools/m5paper-build.sh charizard
+TERMINALGB_SPECIES_DIR=/tmp/species/pokemon-blue/sprites/four-shade/1x \
+  tools/m5paper-build.sh pokedex
 ```
 
-A separate binary, and a still: one species' own front sprite out of the
-cartridge, magnified six times, held on the glass with the power off. It repaints
-at the **vendor's** slow PLL rather than the emulator's fast one, because
-fidelity is the whole feature there and seconds are not.
-[`docs/m5paper-charizard.md`](../../docs/m5paper-charizard.md) has the
-verification — 0 of 3,136 pixels against `pret/pokered`'s own source art — and
-is plain that the colour is a recolour, since Gen 1 had none.
+A separate binary, and a still: every species' own front sprite out of the
+cartridge, magnified whole-number sizes, held on the glass one at a time with
+the power off. **C** advances to the next Pokédex entry, **A** goes back, **B**
+cycles the look. It repaints at the **vendor's** slow PLL rather than the
+emulator's fast one, because fidelity is the whole feature there and seconds
+are not. [`docs/m5paper-pokedex.md`](../../docs/m5paper-pokedex.md) has the
+verification — 0 of 3,136 pixels against `pret/pokered`'s own source art for
+Charizard, the sample it was checked against — and is plain that the colour is
+a recolour, since Gen 1 had none.
 
 ## The cartridge
 
@@ -168,7 +170,9 @@ claiming six.
 | `src/sprite.rs` | a species picture onto the panel: magnification, layout, inks, and its host tests |
 | `src/font.rs` | a 5x7 font for the caption, and why it is not `video::card`'s |
 | `src/sprite_host.rs` | PNG to the packed blob the firmware reads, and the page preview |
-| `src/bin/charizard.rs` | the still, as its own firmware |
+| `src/pokedex.rs` | the archive directory over many sprite blobs, and its host tests |
+| `src/pokedex_host.rs` | a whole `pixelgb species` directory to one archive file |
+| `src/bin/pokedex.rs` | the Pokédex browser, as its own firmware |
 | `terminalgb-rlib/` | one manifest, no source: the emulator as an rlib only — see its own comment |
 | `src/testcard_host.rs` | renders the expected picture on the host |
 

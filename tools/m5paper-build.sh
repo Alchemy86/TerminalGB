@@ -34,17 +34,25 @@ usage: tools/m5paper-build.sh [command]
 
   build      compile the firmware (default)
   flash      compile, then flash over $M5PAPER_PORT (default /dev/ttyACM0)
-  charizard  flash the SPECIES STILL instead of the emulator: one Pokemon's
-             own front sprite, decompressed from your cartridge by `pixelgb
-             species`, magnified and held on the glass. Needs the picture:
+  pokedex    flash the SPECIES BROWSER instead of the emulator: all 151
+             Pokemon front sprites, decompressed from your cartridge by
+             `pixelgb species`, magnified and held on the glass one at a
+             time. Needs the pictures:
 
                pixelgb species --rom ~/roms/blue.gb --out /tmp/species
-               TERMINALGB_SPRITE_PNG=/tmp/species/pokemon-blue/sprites/four-shade/1x/pokemon-front-006-charizard.png \
-                 tools/m5paper-build.sh charizard
+               TERMINALGB_SPECIES_DIR=/tmp/species/pokemon-blue/sprites/four-shade/1x \
+                 tools/m5paper-build.sh pokedex
 
-             No game art is committed here, so there is no default and none can
-             be invented. Button C cycles the look. See src/bin/charizard.rs
-             and docs/m5paper-charizard.md.
+             No game art is committed here, so there is no default and none
+             can be invented. Button C advances to the next Pokédex entry, A
+             goes back, B cycles the look. See src/bin/pokedex.rs and
+             docs/m5paper-pokedex.md.
+  charizard  an alias for `pokedex`, kept for the command this project used
+             before it held more than one species. Accepts the old
+             TERMINALGB_SPRITE_PNG (one file) in place of TERMINALGB_SPECIES_DIR
+             (its directory) — the archive still holds everything pixelgb
+             wrote next to it, so the browser opens with every species, not
+             just the one the old variable named.
   probe      flash the PANEL PROBE instead of the emulator, and watch it run
              (~7 min). It sweeps the PLL (0x30), the addressing window (0x83)
              and the DISPLAY_REFRESH parameter, timing every refresh, and ends
@@ -68,7 +76,7 @@ usage: tools/m5paper-build.sh [command]
   testcard   render the expected picture to target/m5paper/ as PPM
   backup     read the whole 16 MB flash to a file before you overwrite it
 
-  env: M5PAPER_PORT, ESPUP_EXPORT_FILE, TERMINALGB_ROM, TERMINALGB_SPRITE_PNG
+  env: M5PAPER_PORT, ESPUP_EXPORT_FILE, TERMINALGB_ROM, TERMINALGB_SPECIES_DIR
 EOF
 }
 
@@ -107,64 +115,56 @@ case "$cmd" in
     echo "         run '$0 backup' first if you have not already."
     run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify --non-interactive "$elf"
     ;;
-  charizard)
+  pokedex|charizard)
     need_toolchain
-    # THE PICTURE. Same discipline as TERMINALGB_ROM above and for the same
-    # reason: a cartridge's pixels are not ours to ship, so the sprite is
-    # extracted from the player's own image by `pixelgb species` and named
-    # here. There is no default because there is nothing redistributable to
-    # default to — refuse, and say what to run.
-    if [ -z "${TERMINALGB_SPRITE_PNG:-}" ]; then
-      echo "TERMINALGB_SPRITE_PNG is not set: this build ships no game art." >&2
+    # THE PICTURES. Same discipline as TERMINALGB_ROM above and for the same
+    # reason: a cartridge's pixels are not ours to ship, so every front sprite
+    # is extracted from the player's own image by `pixelgb species` and named
+    # from its own file. There is no default because there is nothing
+    # redistributable to default to — refuse, and say what to run.
+    #
+    # `charizard` is the old command name, kept working: it took one file
+    # (TERMINALGB_SPRITE_PNG) where this takes the directory beside it
+    # (TERMINALGB_SPECIES_DIR) — `pixelgb species` with no `--species` filter
+    # always writes every front sprite next to whichever one that variable
+    # named, so the directory is right there and the browser opens with all
+    # of them, not just the one the old variable pointed at.
+    if [ -z "${TERMINALGB_SPECIES_DIR:-}" ] && [ -n "${TERMINALGB_SPRITE_PNG:-}" ]; then
+      TERMINALGB_SPECIES_DIR="$(dirname "$TERMINALGB_SPRITE_PNG")"
+    fi
+    if [ -z "${TERMINALGB_SPECIES_DIR:-}" ]; then
+      echo "TERMINALGB_SPECIES_DIR is not set: this build ships no game art." >&2
       echo >&2
       echo "  pixelgb species --rom /path/to/your.gb --out /tmp/species" >&2
-      echo "  TERMINALGB_SPRITE_PNG=/tmp/species/pokemon-blue/sprites/four-shade/1x/pokemon-front-006-charizard.png \\" >&2
-      echo "    $0 charizard" >&2
+      echo "  TERMINALGB_SPECIES_DIR=/tmp/species/pokemon-blue/sprites/four-shade/1x \\" >&2
+      echo "    $0 pokedex" >&2
       exit 1
     fi
-    if [ ! -r "$TERMINALGB_SPRITE_PNG" ]; then
-      echo "TERMINALGB_SPRITE_PNG is not readable: $TERMINALGB_SPRITE_PNG" >&2
+    if [ ! -d "$TERMINALGB_SPECIES_DIR" ]; then
+      echo "TERMINALGB_SPECIES_DIR is not a directory: $TERMINALGB_SPECIES_DIR" >&2
       exit 1
     fi
-    png="$(cd "$(dirname "$TERMINALGB_SPRITE_PNG")" && pwd)/$(basename "$TERMINALGB_SPRITE_PNG")"
+    species_dir="$(cd "$TERMINALGB_SPECIES_DIR" && pwd)"
 
-    # The caption comes from the file name pixelgb chose, so the name on the
-    # paper and the pixels on the paper cannot disagree: a `pokemon-front-NNN-
-    # slug.png` carries both. Anything else is refused rather than captioned
-    # with a guess.
-    stem="$(basename "$png" .png)"
-    case "$stem" in
-      pokemon-front-*|pokemon-back-*)
-        num="$(echo "$stem" | cut -d- -f3)"
-        slug="$(echo "$stem" | cut -d- -f4-)"
-        ;;
-      *)
-        echo "cannot read a species name out of '$stem'." >&2
-        echo "expected a pixelgb name like pokemon-front-006-charizard.png" >&2
-        exit 1
-        ;;
-    esac
-    export TERMINALGB_SPRITE_NAME="$(echo "$slug" | tr 'a-z-' 'A-Z ')"
-    export TERMINALGB_SPRITE_NUMBER="#$num"
-
-    # Convert on the host, with the repository's own PNG reader and the
-    # firmware's own shade quantiser. src/sprite_host.rs explains both
-    # conversions; neither is reimplemented here.
+    # Build the archive on the host: `src/pokedex_host.rs` runs the same PNG
+    # decode and shade quantiser `src/sprite_host.rs` uses for one file, once
+    # per pokemon-front-*.png it finds, and writes them concatenated with a
+    # directory in front — the format `src/pokedex.rs` reads. Neither
+    # conversion is reimplemented here.
     mkdir -p "$here/target/m5paper"
     conv="$(mktemp -d)"
-    rustc --edition 2021 -O -o "$conv/sprite_host" "$crate/src/sprite_host.rs"
-    export TERMINALGB_SPRITE="$here/target/m5paper/sprite.bin"
-    "$conv/sprite_host" "$png" "$TERMINALGB_SPRITE"
+    rustc --edition 2021 -O -o "$conv/pokedex_host" "$crate/src/pokedex_host.rs"
+    export TERMINALGB_POKEDEX="$here/target/m5paper/pokedex.bin"
+    "$conv/pokedex_host" "$species_dir" "$TERMINALGB_POKEDEX"
     rm -rf "$conv"
-    echo "caption   : $TERMINALGB_SPRITE_NAME $TERMINALGB_SPRITE_NUMBER"
 
-    # `--features sprite` because the binary is gated: with no picture it
+    # `--features sprite` because the binary is gated: with no archive it
     # cannot compile at all, and a fresh clone must still build. See Cargo.toml.
-    chz_elf="$crate/target/xtensa-esp32s3-none-elf/release/charizard"
-    cd "$crate" && cargo build --release --features sprite --bin charizard
+    pd_elf="$crate/target/xtensa-esp32s3-none-elf/release/pokedex"
+    cd "$crate" && cargo build --release --features sprite --bin pokedex
     echo "WARNING: this overwrites whatever firmware is on the device."
     run_on_device espflash flash --chip esp32s3 --port "$port" --no-verify \
-      --non-interactive --monitor "$chz_elf"
+      --non-interactive --monitor "$pd_elf"
     ;;
   probe)
     need_toolchain
@@ -210,6 +210,10 @@ case "$cmd" in
     "$out/fonttest"
     rustc --test --edition 2021 -o "$out/spritetest" "$crate/src/sprite.rs"
     "$out/spritetest"
+    # pokedex.rs pulls sprite.rs in the same way sprite.rs pulls gbscreen.rs —
+    # this is the archive directory's own parser, checked without a device.
+    rustc --test --edition 2021 -o "$out/pokedextest" "$crate/src/pokedex.rs"
+    "$out/pokedextest"
     rm -rf "$out"
     ;;
   testcard)

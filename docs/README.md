@@ -139,7 +139,7 @@ and that had quietly happened to more than half of this directory.
 | [portability](portability.md) | what the core actually runs on, byte-identically — including a PSP that plays Pokémon |
 | [first boot on the PaperColor](m5paper-first-boot.md) | custom Rust on an ESP32-S3 e-paper device: the toolchain, one colour on the panel timed at 15.967 s, and a button read back |
 | [Pokémon Blue on the PaperColor](m5paper-emulator.md) | the emulator itself on an ESP32-S3: a 1 MiB cartridge in flash costing no RAM, 12 fps, and where 335 KiB of DRAM went |
-| [a Charizard from the cartridge, held on E Ink](m5paper-charizard.md) | the other thing the panel is for: one species' real front sprite, verified 0 of 3,136 pixels against pret/pokered, magnified six times and held with the power off |
+| [the Pokédex, held on E Ink](m5paper-pokedex.md) | the other thing the panel is for: all 151 species' real front sprites, one archive, one button to browse them, verified against pret/pokered and held with the power off |
 | [making the PaperColor's panel faster](m5paper-refresh.md) | 15.954 s a picture down to 7.721 s, by the two things that moved it — and the seven, "partial refresh" and a black-and-white waveform among them, that measured identical |
 | [throughput](throughput.md) | how fast the core is in both units, what the build profile was costing, skippable rendering — and the three optimisations that measured worse |
 | [brand assets](brand/README.md) | the mark, and the rule that it is generated from a script with no font embedded |
