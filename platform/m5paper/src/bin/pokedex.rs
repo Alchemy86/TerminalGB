@@ -193,7 +193,17 @@ fn main() -> ! {
         let mut number_buf = [0u8; 4];
         let number = number_caption(entry.number, &mut number_buf);
         let look = LOOKS[look_ix];
-        let ms = paint(&mut epd, &mut fb, &entry.sprite, entry.name, number, look);
+        let ms = paint(
+            &mut epd,
+            &mut fb,
+            &entry.sprite,
+            entry.name,
+            number,
+            entry.type1,
+            entry.type2,
+            &entry.stats,
+            look,
+        );
         println!(
             "painted   : {} {number}, look {}, PLL 0x{TRUE_COLOUR_PLL:02X}, {}.{:03} s",
             entry.name,
@@ -239,6 +249,74 @@ fn number_caption(n: u16, buf: &mut [u8; 4]) -> &str {
     core::str::from_utf8(buf).expect("all-ASCII by construction")
 }
 
+/// A short, fixed-width abbreviation for `BaseStats`' own type byte — this
+/// project's own choice of label, the way `LOOKS`' names ("red/yellow") are,
+/// not text the cartridge carries. Kept to four letters or fewer so a dual
+/// type never risks the caption column's own width, which
+/// `tools/m5paper-build.sh test` checks against every combination that
+/// actually occurs on the cartridge.
+fn type_abbrev(t: u8) -> &'static str {
+    match t {
+        0x00 => "NORM",
+        0x01 => "FIGH",
+        0x02 => "FLY",
+        0x03 => "POIS",
+        0x04 => "GRND",
+        0x05 => "ROCK",
+        0x06 => "BIRD", // an unused beta type byte; kept so nothing panics on it
+        0x07 => "BUG",
+        0x08 => "GHST",
+        0x14 => "FIRE",
+        0x15 => "WATR",
+        0x16 => "GRAS",
+        0x17 => "ELEC",
+        0x18 => "PSYC",
+        0x19 => "ICE",
+        0x1A => "DRGN",
+        _ => "????",
+    }
+}
+
+/// `"TYPE1"`, or `"TYPE1/TYPE2"` when the two type bytes differ — `BaseStats`
+/// itself repeats the same byte twice for a single-typed species, so `type1
+/// == type2` is the check, not a separate flag.
+fn type_caption<'a>(type1: u8, type2: u8, buf: &'a mut [u8; 9]) -> &'a str {
+    let a = type_abbrev(type1).as_bytes();
+    if type1 == type2 {
+        let s = &mut buf[..a.len()];
+        s.copy_from_slice(a);
+        core::str::from_utf8(s).unwrap()
+    } else {
+        let b = type_abbrev(type2).as_bytes();
+        let mut pos = 0;
+        buf[..a.len()].copy_from_slice(a);
+        pos += a.len();
+        buf[pos] = b'/';
+        pos += 1;
+        buf[pos..pos + b.len()].copy_from_slice(b);
+        pos += b.len();
+        core::str::from_utf8(&buf[..pos]).unwrap()
+    }
+}
+
+/// `label` + up to three ASCII digits of `n`, no leading zeros, into `buf`
+/// starting at `pos`. Returns the new `pos`.
+fn write_stat(buf: &mut [u8], mut pos: usize, label: &str, n: u8) -> usize {
+    buf[pos..pos + label.len()].copy_from_slice(label.as_bytes());
+    pos += label.len();
+    let n = n as u16;
+    if n >= 100 {
+        buf[pos] = b'0' + (n / 100) as u8;
+        pos += 1;
+    }
+    if n >= 10 {
+        buf[pos] = b'0' + (n / 10 % 10) as u8;
+        pos += 1;
+    }
+    buf[pos] = b'0' + (n % 10) as u8;
+    pos + 1
+}
+
 /// Compose the page and put it on the glass. Returns the refresh's wall time.
 fn paint<Dm: esp_hal::DriverMode>(
     epd: &mut Ed2208<'_, Dm>,
@@ -246,12 +324,32 @@ fn paint<Dm: esp_hal::DriverMode>(
     sprite: &sprite::Sprite<'_>,
     name: &str,
     number: &str,
+    type1: u8,
+    type2: u8,
+    stats: &pokedex::Stats,
     look: gbscreen::Look,
 ) -> u64 {
+    let mut type_buf = [0u8; 9];
+    let type_line = type_caption(type1, type2, &mut type_buf);
+
+    let mut line_a = [0u8; 14];
+    let mut pos = write_stat(&mut line_a, 0, "HP", stats.hp);
+    line_a[pos] = b' ';
+    pos = write_stat(&mut line_a, pos + 1, "AT", stats.attack);
+    line_a[pos] = b' ';
+    pos = write_stat(&mut line_a, pos + 1, "DF", stats.defense);
+    let line_a = core::str::from_utf8(&line_a[..pos]).unwrap();
+
+    let mut line_b = [0u8; 10];
+    let mut pos = write_stat(&mut line_b, 0, "SP", stats.speed);
+    line_b[pos] = b' ';
+    pos = write_stat(&mut line_b, pos + 1, "SC", stats.special);
+    let line_b = core::str::from_utf8(&line_b[..pos]).unwrap();
+
     let cap = sprite::Caption {
         name,
         number,
-        lines: &["POKEMON BLUE", "FRONT SPRITE"],
+        lines: &[type_line, line_a, line_b],
     };
     if !sprite::draw(fb, sprite, look, &cap) {
         // The font reports a missing glyph rather than leaving a hole nobody
