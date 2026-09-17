@@ -20,24 +20,12 @@
 //! directory, `count` entries of ENTRY_SIZE bytes each, right after the header:
 //!   [0..2)   pokedex number: u16 LE
 //!   [2..14)  name, ASCII, space-padded to NAME_LEN
-//!   [14]     type1: the cartridge's own `BaseStats` type byte
-//!   [15]     type2: same byte as type1 for a single-typed species
-//!   [16..21) hp, attack, defense, speed, special: one byte each, `BaseStats`
-//!            order, straight off the cartridge
-//!   [21..25) offset: u32 LE, from the START OF THE PAYLOAD (not of the file)
-//!   [25..29) length: u32 LE
+//!   [14..18) offset: u32 LE, from the START OF THE PAYLOAD (not of the file)
+//!   [18..22) length: u32 LE
 //! payload: `count` sprite blobs, concatenated, each one exactly what
 //!   `src/sprite_host.rs` already writes and [`crate::sprite::Sprite::parse`]
 //!   already reads — this module never touches a pixel.
 //! ```
-//!
-//! The type and stat bytes are `src/pokedex_host.rs`'s own second job,
-//! alongside the pictures: five numbers and a type byte per species, read
-//! straight out of `BaseStats` (`crates/terminalgb-gen1-battle/src/data.rs`
-//! already reads the same table for the battle engine, so the offsets here
-//! are the ones that crate already trusts, not a fresh guess) — never the
-//! Pokédex's own written description, which stays exactly as declined
-//! earlier: Game Freak's prose, not ours to put on a device.
 //!
 //! One file, one `include_bytes!`, the same trick `TERMINALGB_SPRITE` and
 //! `TERMINALGB_ROM` already use: it lands in `.rodata`, the ESP32-S3
@@ -63,34 +51,17 @@ pub const MAGIC: &[u8; 4] = b"GBPX";
 /// the longest is 10 characters — and `src/pokedex_host.rs` refuses to build
 /// an archive with a name that does not fit rather than silently truncating it.
 pub const NAME_LEN: usize = 12;
-/// Bytes per directory entry: number (2) + name (`NAME_LEN`) + type1 (1) +
-/// type2 (1) + five stat bytes (5) + offset (4) + length (4).
-pub const ENTRY_SIZE: usize = 2 + NAME_LEN + 1 + 1 + 5 + 4 + 4;
+/// Bytes per directory entry: number (2) + name (`NAME_LEN`) + offset (4) + length (4).
+pub const ENTRY_SIZE: usize = 2 + NAME_LEN + 4 + 4;
 /// Bytes before the directory: magic (4) + count (2).
 pub const HEADER: usize = 6;
 
-/// Five stats, `BaseStats`' own order — never renamed, so a reader who
-/// already knows that table's field order recognises it here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stats {
-    pub hp: u8,
-    pub attack: u8,
-    pub defense: u8,
-    pub speed: u8,
-    pub special: u8,
-}
-
-/// One species, read out of the archive: its Pokédex number, its name, its
-/// type(s), its base stats, and the picture itself. `name` borrows straight
-/// out of the archive's own bytes — trimmed of its padding, nothing copied.
+/// One species, read out of the archive: its Pokédex number, its name, and
+/// the picture itself. `name` borrows straight out of the archive's own
+/// bytes — trimmed of its padding, nothing copied.
 pub struct Entry<'a> {
     pub number: u16,
     pub name: &'a str,
-    /// The cartridge's own `BaseStats` type byte. `type1 == type2` for a
-    /// single-typed species, the same convention `BaseStats` itself uses.
-    pub type1: u8,
-    pub type2: u8,
-    pub stats: Stats,
     pub sprite: Sprite<'a>,
 }
 
@@ -125,7 +96,7 @@ impl<'a> Archive<'a> {
         }
         let payload = &bytes[dir_end..];
         for i in 0..count {
-            let (_, _, _, _, _, offset, length) = Self::raw_entry(bytes, i);
+            let (_, _, offset, length) = Self::raw_entry(bytes, i);
             let slice = payload
                 .get(offset..offset + length)
                 .ok_or("pokedex: an entry's offset/length falls outside the payload")?;
@@ -141,26 +112,23 @@ impl<'a> Archive<'a> {
     /// The directory fields for entry `i`, with the name trimmed of its
     /// trailing padding. Assumes `i < count` and the archive already
     /// validated — both true of anything [`Archive::parse`] returned `Ok` for.
-    #[allow(clippy::type_complexity)]
-    fn raw_entry(bytes: &'a [u8], i: usize) -> (u16, &'a [u8], u8, u8, Stats, usize, usize) {
+    fn raw_entry(bytes: &'a [u8], i: usize) -> (u16, &'a [u8], usize, usize) {
         let pos = HEADER + i * ENTRY_SIZE;
         let number = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
         let name = &bytes[pos + 2..pos + 2 + NAME_LEN];
-        let s = pos + 2 + NAME_LEN;
-        let type1 = bytes[s];
-        let type2 = bytes[s + 1];
-        let stats = Stats {
-            hp: bytes[s + 2],
-            attack: bytes[s + 3],
-            defense: bytes[s + 4],
-            speed: bytes[s + 5],
-            special: bytes[s + 6],
-        };
-        let o = s + 7;
-        let offset = u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]) as usize;
-        let length =
-            u32::from_le_bytes([bytes[o + 4], bytes[o + 5], bytes[o + 6], bytes[o + 7]]) as usize;
-        (number, name, type1, type2, stats, offset, length)
+        let offset = u32::from_le_bytes([
+            bytes[pos + 2 + NAME_LEN],
+            bytes[pos + 3 + NAME_LEN],
+            bytes[pos + 4 + NAME_LEN],
+            bytes[pos + 5 + NAME_LEN],
+        ]) as usize;
+        let length = u32::from_le_bytes([
+            bytes[pos + 6 + NAME_LEN],
+            bytes[pos + 7 + NAME_LEN],
+            bytes[pos + 8 + NAME_LEN],
+            bytes[pos + 9 + NAME_LEN],
+        ]) as usize;
+        (number, name, offset, length)
     }
 
     /// Entry `i`, or `None` if the archive has fewer than `i + 1` species.
@@ -168,8 +136,7 @@ impl<'a> Archive<'a> {
         if i >= self.count {
             return None;
         }
-        let (number, name_bytes, type1, type2, stats, offset, length) =
-            Self::raw_entry(self.bytes, i);
+        let (number, name_bytes, offset, length) = Self::raw_entry(self.bytes, i);
         let dir_end = HEADER + self.count * ENTRY_SIZE;
         let payload = &self.bytes[dir_end..];
         // Both slice and parse were already proved to succeed in `parse()`.
@@ -177,7 +144,7 @@ impl<'a> Archive<'a> {
         let sprite = Sprite::parse(slice).expect("validated in Archive::parse");
         let name_len = name_bytes.iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
         let name = core::str::from_utf8(&name_bytes[..name_len]).unwrap_or("?");
-        Some(Entry { number, name, type1, type2, stats, sprite })
+        Some(Entry { number, name, sprite })
     }
 
     /// The index of the species with this Pokédex number, if it is in the
@@ -213,13 +180,11 @@ mod tests {
 
     /// Build a tiny archive by hand, the way `src/pokedex_host.rs` would for
     /// three species, so the parser is checked against a known layout rather
-    /// than against its own writer. `(number, name, w, h, type1, type2,
-    /// stats)`.
-    #[allow(clippy::type_complexity)]
-    fn archive(entries: &[(u16, &str, usize, usize, u8, u8, Stats)]) -> Vec<u8> {
+    /// than against its own writer.
+    fn archive(entries: &[(u16, &str, usize, usize)]) -> Vec<u8> {
         let mut payload = Vec::new();
         let mut spans = Vec::new();
-        for &(_, _, w, h, _, _, _) in entries {
+        for &(_, _, w, h) in entries {
             let start = payload.len();
             payload.extend_from_slice(&MAGIC_SPRITE[..]);
             payload.extend_from_slice(&(w as u16).to_le_bytes());
@@ -231,20 +196,11 @@ mod tests {
 
         let mut out = Vec::from(&MAGIC[..]);
         out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-        for (&(number, name, _, _, type1, type2, stats), &(offset, length)) in
-            entries.iter().zip(&spans)
-        {
+        for (&(number, name, _, _), &(offset, length)) in entries.iter().zip(&spans) {
             out.extend_from_slice(&number.to_le_bytes());
             let mut field = [b' '; NAME_LEN];
             field[..name.len()].copy_from_slice(name.as_bytes());
             out.extend_from_slice(&field);
-            out.push(type1);
-            out.push(type2);
-            out.push(stats.hp);
-            out.push(stats.attack);
-            out.push(stats.defense);
-            out.push(stats.speed);
-            out.push(stats.special);
             out.extend_from_slice(&(offset as u32).to_le_bytes());
             out.extend_from_slice(&(length as u32).to_le_bytes());
         }
@@ -254,47 +210,20 @@ mod tests {
 
     const MAGIC_SPRITE: [u8; 4] = *b"GBSP";
 
-    const ZERO_STATS: Stats = Stats { hp: 0, attack: 0, defense: 0, speed: 0, special: 0 };
-    const CHARIZARD_STATS: Stats =
-        Stats { hp: 78, attack: 84, defense: 78, speed: 100, special: 85 };
-
-    #[allow(clippy::type_complexity)]
-    const THREE: &[(u16, &str, usize, usize, u8, u8, Stats)] = &[
-        (1, "ONE", 4, 4, 0, 0, ZERO_STATS),
-        (2, "TWO", 8, 8, 0x14, 0x02, CHARIZARD_STATS), // FIRE/FLYING, Charizard's own stats
-        (150, "ONE FIFTY", 2, 2, 0x17, 0x17, ZERO_STATS), // mono ELECTRIC
-    ];
+    const THREE: &[(u16, &str, usize, usize)] =
+        &[(1, "ONE", 4, 4), (2, "TWO", 8, 8), (150, "ONE FIFTY", 2, 2)];
 
     #[test]
     fn every_entry_round_trips_number_name_and_size() {
         let bytes = archive(THREE);
         let a = Archive::parse(&bytes).unwrap();
         assert_eq!(a.len(), 3);
-        for (i, &(number, name, w, h, _, _, _)) in THREE.iter().enumerate() {
+        for (i, &(number, name, w, h)) in THREE.iter().enumerate() {
             let e = a.entry(i).unwrap();
             assert_eq!(e.number, number);
             assert_eq!(e.name, name);
             assert_eq!((e.sprite.width(), e.sprite.height()), (w, h));
         }
-    }
-
-    #[test]
-    fn every_entry_round_trips_type_and_stats() {
-        let bytes = archive(THREE);
-        let a = Archive::parse(&bytes).unwrap();
-        for (i, &(_, _, _, _, type1, type2, stats)) in THREE.iter().enumerate() {
-            let e = a.entry(i).unwrap();
-            assert_eq!((e.type1, e.type2), (type1, type2), "entry {i}");
-            assert_eq!(e.stats, stats, "entry {i}");
-        }
-    }
-
-    #[test]
-    fn a_single_typed_species_has_the_same_byte_twice() {
-        let bytes = archive(THREE);
-        let a = Archive::parse(&bytes).unwrap();
-        let e = a.entry(2).unwrap(); // "ONE FIFTY", mono ELECTRIC
-        assert_eq!(e.type1, e.type2);
     }
 
     #[test]
@@ -340,10 +269,9 @@ mod tests {
 
     #[test]
     fn an_offset_that_overruns_the_payload_is_refused() {
-        let mut bytes = archive(&[(1, "ONE", 4, 4, 0, 0, ZERO_STATS)]);
-        // The one entry's length field: number (2) + NAME_LEN + type1/type2/5
-        // stat bytes (7) + offset (4), then the length field itself.
-        let len_pos = HEADER + 2 + NAME_LEN + 7 + 4;
+        let mut bytes = archive(&[(1, "ONE", 4, 4)]);
+        // The one entry's length field, at HEADER + 2 (number) + NAME_LEN + 4 (offset).
+        let len_pos = HEADER + 2 + NAME_LEN + 4;
         let huge = 0xFFFF_FFFFu32;
         bytes[len_pos..len_pos + 4].copy_from_slice(&huge.to_le_bytes());
         assert!(Archive::parse(&bytes).is_err());
