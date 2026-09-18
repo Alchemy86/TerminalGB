@@ -3152,6 +3152,24 @@ and the virtual camera's idle card) before the codebase used it; the rename made
 - **The launcher `~/.local/bin/gameboy` lives outside this repo** and is the command the
   captain types. Nothing here renames it and nothing here should; if a `terminalgb` command is
   ever added, `gameboy` must keep working.
+  **Its auto-update step authenticates as the WRONG GITHUB ACCOUNT unless it is told not to,
+  and the failure is silent.** This repository is **private**, and the `github.com` credential
+  helper in `~/.gitconfig` is `gh auth git-credential`, which uses gh's *active* account — on
+  this box that is `RT-Aaron`, who has no access. GitHub then answers **`Repository not
+  found`**, its standard reply for a private repo the caller cannot even see the existence of,
+  so the error does not say "denied" and reads like a wrong URL. The launcher's
+  `git fetch --quiet origin || true` threw the status away and the `git merge --ff-only` after
+  it was silenced with `2>/dev/null`, so the whole update could fail and still look like it had
+  worked — **you then play a stale build with nothing on screen saying so**. Fixed in the
+  launcher (2026-09-18): the owner is parsed out of the remote and the token comes from
+  `gh auth token --user <owner>`, handed over in the **environment** (`GH_TOKEN`), never in the
+  remote URL or on a command line — argv is world-readable in `ps`, `/proc/<pid>/environ` is
+  not — and every failure now prints the git error, the account to check, and that it is
+  building what is already there. **Do not "fix" this with a local `credential.helper` in one
+  checkout's `.git/config`**: that is untracked, invisible, lost on a fresh clone, and does
+  nothing about the silence. One was added by hand on 2026-09-18 and is now redundant.
+  **And do not reproduce the broken state by fetching with no credentials at all** — git falls
+  through to `gnome-ssh-askpass` and pops a GitHub login dialog on the captain's real screen.
 - Sweeping a rename like this: protect the not-ours tokens *first* (`Alchemy86/gameboy`,
   `raphamorim/gameboy`, `crate::gameboy`, `CableClubLeftGameboy`, the XDG paths), then apply
   the token rules, then **read every survivor**. Two traps this one hit: a `gameboy.h` rule
