@@ -33,6 +33,20 @@ failures stop being reproducible.
 path. Copy the ROM *and* any save into `target/` first. A real save has been destroyed here
 once already.
 
+**The `.sav` checksum is over `sGameData..sGameDataEnd` (`$A598..$B522`), not over
+`sMainData`.** Both ranges look plausible and only one is right. A wrong checksum is not
+reported as one: the game simply offers **NEW GAME instead of CONTINUE**, which reads as a
+corrupt save. `CalcCheckSum` (`pokered engine/menus/save.asm`) is the complement of the byte sum.
+[`tools/gen1-save/gen1_save.py`](../../tools/gen1-save/gen1_save.py) reads a save — player,
+Pokedex, story flags, checksum verdict — and moves a single event flag with the checksum repaired
+for you; booting the result and looking for CONTINUE is the cheap confirmation.
+
+**A save assembled by a harness can be in a state the game's own scripts assume is impossible,
+and it loads fine.** Seen on a real save: `EVENT_GOT_POKEDEX` set while Oak's Parcel was still in
+the bag, which `scripts/OaksLab.asm` sets on consecutive lines of one cutscene, so no playthrough
+reaches it. The checksum was valid and Oak refused the parcel for ever. When an NPC "won't do the
+thing", suspect the flag pair before the script.
+
 **The legacy `.gbsave` format put an 8-byte RTC epoch *in front* of the RAM**, silently shifting
 every offset by 8 — including for cartridge types that have no clock, so every foreign save
 loaded wrong. `.sav` (raw cartridge RAM, no header) is the only format this emulator writes now;

@@ -14456,6 +14456,54 @@ as an alias that derives `TERMINALGB_SPECIES_DIR` from `TERMINALGB_SPRITE_PNG`'s
   it can at least be looked at on the host before it costs sixteen seconds of panel — the same
   answer `testcard_host.rs` already gives for the test card.
 
+## Reading and editing a battery `.sav` (`tools/gen1-save/gen1_save.py`)
+
+**There is a `.sav` inspector/editor now, and there was not one before.** `pewter_chain states`
+reads `.gbss` save states, `gen1_tables.py` reads the cartridge, and the only code that edited a
+battery file was private to `testharness/trainer.rs`. No arguments prints what the launcher's own
+default save holds — player, money, position, Pokédex, story flags, checksum verdict;
+`clear <EVENT> --yes` / `set <EVENT> --yes` move one flag and repair the checksum.
+
+- **THE CHECKSUM IS OVER `sGameData..sGameDataEnd` (`$A598..$B522`), NOT OVER `sMainData`.** Both
+  ranges look plausible and only one is right; get it wrong and the game silently offers **NEW
+  GAME instead of CONTINUE**, which reads as a corrupt save rather than as a bad checksum.
+  `CalcCheckSum` (`pokered engine/menus/save.asm`) is the complement of the byte sum, and
+  `testharness/trainer.rs::inject`'s doc comment is the in-repo statement of it. **The cheap check
+  is to boot the edited save and look for CONTINUE.**
+- **The built-in event table is a hand-copy, so the tool checks it against the real source rather
+  than trusting it.** `--pokered <checkout>` loads all 507 names *and* cross-checks the built-in
+  subset, failing loudly on any disagreement — which is how two wrong indices in the first draft
+  were caught. Event numbering is `const_def`/`const_skip`/`const_next` arithmetic, never
+  literals, so **derive an index, never write one down from memory.**
+- **It edits event flags and nothing else, deliberately.** Party, bag and boxes have consistency
+  rules between structures (the game compares a party mon's OT against `wPlayerID`; box banks
+  carry their own checksums), and writing them without the rules produces a save that passes its
+  checksum and hangs. That is `testharness/trainer.rs`'s job, under test.
+
+### A SAVE CAN BE INTERNALLY INCONSISTENT IN A WAY VANILLA CANNOT PRODUCE, AND IT LOADS FINE
+
+Found on the captain's own Blue save: `EVENT_GOT_POKEDEX` set while Oak's Parcel was still in the
+bag and `EVENT_OAK_GOT_PARCEL` clear. `scripts/OaksLab.asm` sets those two flags on **consecutive
+lines** of one cutscene, so no playthrough reaches that state — but the checksum was valid and the
+game loaded it happily, and Oak then refused the parcel for ever. **Any save assembled by a
+harness rather than by the game can be in a state the game's own scripts assume is impossible**;
+when an NPC "won't do the thing", suspect the flag pair before the script.
+
+*The gate itself is a cartridge fact and belongs to*
+[AtlasGB](https://github.com/Alchemy86/AtlasGB) *under `docs/where-things-live.md`; the operational
+point for this repository is that `EVENT_GOT_POKEDEX` gates the parcel and the Pokédex owned
+**count** is only the other half of the same `if`.* Both this repo's `scenarios/pewter/09-*.json`
+and AgentGB judge on the flag, which is correct — neither uses the count as a proxy.
+
+### Driving a `.sav` through `terminalgb-mcp`: press by SCREEN, never by frame count
+
+A fixed press-A-every-N-frames boot sequence lands in the **attract-mode demo**, where `observe`
+reports `in_game: true`, `player: "NINTEN"`, map 0 and an empty party — a convincing-looking state
+that is not the save at all. Step until the screen text actually contains `CONTINUE`, press A, then
+step until `position.map_loaded` is true. Same rule the Gen 1 bots already follow, applied to the
+title screen. And **stage the ROM and the save into scratch first** — the MBC writes `.sav` beside
+the ROM, so pointing a harness at `~/roms` overwrites the player's save.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
