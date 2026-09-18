@@ -1217,6 +1217,15 @@ struct App {
     config: Config,
     recent: Recent,
     picker: Picker,
+    /// What [`build_picker`] *detected*, before any `protocol =` override and
+    /// before `{` moved it.
+    ///
+    /// Kept so the live cycle can say which rung is the one the terminal was
+    /// asked about and answered for, which is the only sense in which `auto`
+    /// still exists once a concrete protocol has been forced: there is no
+    /// `ProtocolType::Auto`, so a fifth cycle position would be a label with no
+    /// picture behind it. See [`App::cycle_protocol`].
+    detected_protocol: ProtocolType,
     palette: Palette,
     /// Pixel-art upscaler applied to every frame before the image protocol
     /// (see [`crate::upscale`]); `]` cycles the algorithm, `}` the factor.
@@ -1527,6 +1536,9 @@ impl App {
         video_template: Option<video::VideoSpec>,
     ) -> App {
         let mut picker = picker;
+        // Before the `cell_scale` rebuild and before the `protocol =`
+        // override: this is the rung the terminal actually answered for.
+        let detected_protocol = picker.protocol_type();
         // HiDPI correction: on a display scaled by S, a pixel-addressed protocol
         // (iTerm2/sixel) renders our image in *physical* device pixels while the
         // terminal reported its cell size in *logical* pixels, so an image sized
@@ -1595,6 +1607,7 @@ impl App {
             config,
             recent,
             picker,
+            detected_protocol,
             palette,
             upscaler,
             upscale_factor: config_factor,
@@ -3463,6 +3476,15 @@ impl App {
                     self.set_toast(format!("Upscale {label}"));
                     return;
                 }
+                // Graphics protocol: the fourth bracket key. Guarded, unlike
+                // its three neighbours, because the four pad keys are
+                // configurable and any character can be one — a player who
+                // bound `key_a = {` must still get an A press, and this match
+                // runs before the pad mapping.
+                KeyCode::Char('{') if !self.is_game_button(&key.code) => {
+                    self.cycle_protocol();
+                    return;
+                }
                 // Video stream on/off. `v` for video — free, and the one key
                 // nobody has to look up. `V` records a file instead, so the two
                 // intents are separately reachable however `video_out` is set
@@ -5161,6 +5183,125 @@ impl App {
         }
     }
 
+    /// `{` — switch the graphics protocol live.
+    ///
+    /// **The `protocol` config key was the only way to choose a transport, and
+    /// it needed a restart** — which makes the one thing anybody uses it for,
+    /// comparing two transports in the same terminal on the same picture, a
+    /// chore. Everything else in the "How it looks" group already cycles in
+    /// place; this is the fourth bracket key and the last of that family.
+    ///
+    /// ## Why the cycle has four positions and not five
+    ///
+    /// `protocol = auto` is a *config* value meaning "use what the probe found",
+    /// and there is no `ProtocolType::Auto` behind it: by the time a frame is
+    /// drawn, `auto` has already resolved to one of these four. A fifth cycle
+    /// position would therefore be a word in the Status row with no change in
+    /// the picture — the exact "a state nobody can see is a state nobody can
+    /// debug" trap the `Proto` row exists to avoid. Instead the toast names the
+    /// rung the probe picked when you land on it, so "what would auto have
+    /// given me?" is answerable without inventing a state to answer it with.
+    ///
+    /// The order is [`termcaps::Graphics`]'s own, best first, so cycling walks
+    /// the ladder `docs/picture.md` §2 documents rather than an arbitrary ring.
+    fn cycle_protocol(&mut self) {
+        const CYCLE: [ProtocolType; 4] = [
+            ProtocolType::Kitty,
+            ProtocolType::Sixel,
+            ProtocolType::Iterm2,
+            ProtocolType::Halfblocks,
+        ];
+        let now = self.picker.protocol_type();
+        let i = CYCLE.iter().position(|p| *p == now).unwrap_or(0);
+        self.set_protocol(CYCLE[(i + 1) % CYCLE.len()]);
+    }
+
+    /// Point every picture at a different protocol, and say what that will do.
+    ///
+    /// Three things have to happen together, and leaving any of them out is a
+    /// silent failure rather than a visible one:
+    ///
+    /// 1. **The old picture has to be taken off the screen.** A Kitty placement
+    ///    lives until it is deleted — redrawing the cells under it does not
+    ///    remove it — so switching away from Kitty without an `a=d,d=i` leaves
+    ///    the old frame hanging over whatever draws next. Same rule, same
+    ///    reason, as the trainer panel retiring a sprite gutter.
+    /// 2. **Every encoder has to be rebuilt**, because [`App::new_term_image`]
+    ///    reads the protocol once and bakes the [`Wire`] into the encoder; and
+    ///    the legacy `ratatui-image` state is built from the picker, so it is
+    ///    dropped too. The sprite and team slots keep their own ids.
+    /// 3. **The next draw has to be a full repaint.** The cells a placed image
+    ///    covers are marked `skip`, and `ratatui` will not repaint a cell it
+    ///    believes is already right — so a half-block picture arriving where a
+    ///    Kitty one was would be drawn into cells the diff skips.
+    ///
+    /// Forcing a protocol the terminal never advertised is allowed on purpose —
+    /// it is how you find out what a terminal really does, and the probe cannot
+    /// speak for iTerm2 at all ([`termcaps::TermCaps::best`] returns `None` for
+    /// it by design). But a blank picture with a confident Status row is the
+    /// failure mode this frontend has been bitten by more than once, so the
+    /// toast says when the terminal did not advertise what you just asked for.
+    fn set_protocol(&mut self, proto: ProtocolType) {
+        self.picker.set_protocol_type(proto);
+
+        if let Some(s) = self.session.as_mut() {
+            // (1) retire the outgoing placements before the encoders holding
+            //     their ids are replaced.
+            for img in [
+                s.term_image.as_mut(),
+                s.sprite_image.as_mut(),
+                s.team_image.as_mut(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let seq = img.erase().to_string();
+                s.pending_wire.push_str(&seq);
+            }
+            s.sprite_shown = false;
+            s.team_shown = false;
+        }
+
+        // (2) rebuild. Split from the loop above because these read `self`.
+        let term_image = self.new_term_image();
+        let sprite_image = self.new_sprite_image();
+        let team_image = self.new_team_image();
+        if let Some(s) = self.session.as_mut() {
+            s.term_image = term_image;
+            s.sprite_image = sprite_image;
+            s.team_image = team_image;
+            s.image = None;
+            // The caches are keyed on content, not on protocol, so an
+            // unchanged frame would otherwise re-place nothing at all through
+            // the new encoder and the screen would stay empty.
+            s.legacy_hash = 0;
+            s.sprite_key = None;
+            s.team_key = None;
+        }
+
+        // (3)
+        self.full_redraw = true;
+        self.ui_sig = None;
+
+        let name = protocol_name(proto);
+        let caps = probed_caps();
+        let advertised = match proto {
+            ProtocolType::Kitty => caps.kitty,
+            ProtocolType::Sixel => caps.sixel,
+            // Half-blocks is the floor and always works; iTerm2 cannot be
+            // asked about at all, so "not advertised" would be noise.
+            ProtocolType::Iterm2 | ProtocolType::Halfblocks => true,
+        };
+        let mut msg = format!("Protocol {name}");
+        if proto == self.detected_protocol {
+            msg.push_str(" (detected)");
+        }
+        if !advertised {
+            msg.push_str(" — this terminal did not advertise it; { for the next");
+        }
+        self.set_toast(msg);
+    }
+
     fn render_display(&mut self, f: &mut Frame<'_>, area: Rect) {
         let (font_w, font_h) = self.picker.font_size();
         // Kitty addresses placeholder rows/columns with a fixed table of
@@ -5785,7 +5926,14 @@ impl App {
             // not scroll and is already longer than its popup, so a line added
             // here silently deletes one at the bottom.
             Line::from("  f/esc     fullscreen on / off      [   palette"),
-            Line::from("  ]         upscaler    }       upscale factor"),
+            // `{` folds onto this line rather than taking one of its own: this
+            // overlay does not scroll and is already longer than its popup, so
+            // a line added here silently deletes one at the bottom. It carries
+            // no `(now: …)` for the same reason — that would push it past the
+            // popup's inner width on a ~130-column terminal and cost the row
+            // anyway; the Status panel's `Proto` row says which one is live,
+            // permanently, and the toast says it on the press.
+            Line::from("  ]         upscaler    }       upscale factor    {   protocol"),
             Line::from(format!(
                 "  P         picture: identical / standard    (now: {})",
                 self.ppu_mode().name()
@@ -12242,6 +12390,93 @@ mod tests {
 
     /// A plain terminal reports every key as `Press` — no `Repeat`, no
     /// `Release`. That is the whole difference the fallback has to cover.
+    /// **`{` has to change what is actually drawn, not just a label.**
+    ///
+    /// The protocol decides which encoder a session holds — `new_term_image`
+    /// bakes the [`Wire`] in at construction and returns `None` for the two
+    /// protocols that have no cell-addressed placement — so a switch that
+    /// moved the picker and left the session alone would report a new protocol
+    /// in the Status row and keep drawing through the old one. That is the
+    /// exact "a state nobody can see" failure the `Proto` row exists to
+    /// prevent, and it is invisible to any test that only reads the picker.
+    ///
+    /// So this asserts the *encoder*, both ways round, and that the next draw
+    /// is forced to repaint (the cells a placement covers are marked `skip`,
+    /// and `ratatui` will not repaint a cell it thinks is already right).
+    #[test]
+    fn the_protocol_key_rebuilds_the_encoder_and_not_just_the_label() {
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let wire = |a: &App| {
+            a.session
+                .as_ref()
+                .and_then(|s| s.term_image.as_ref())
+                .map(TermImage::wire)
+        };
+        assert_eq!(wire(&app), Some(Wire::Kitty), "the fixture starts on kitty");
+
+        // kitty -> sixel: sixel has no cell-addressed placement, so the fast
+        // encoder must be gone entirely, not merely re-pointed.
+        app.handle_game_key(basic_press(KeyCode::Char('{')));
+        assert_eq!(app.picker.protocol_type(), ProtocolType::Sixel);
+        assert_eq!(
+            wire(&app),
+            None,
+            "sixel must drop the cell-addressed encoder"
+        );
+        assert!(
+            app.full_redraw,
+            "a protocol switch must force a full repaint"
+        );
+        // Leaving kitty must delete the placement: it lives until it is
+        // deleted, and redrawing the cells under it does not remove it.
+        let sent = app
+            .session
+            .as_ref()
+            .map(|s| s.pending_wire.clone())
+            .unwrap_or_default();
+        assert!(
+            sent.contains("a=d,d=i"),
+            "switching away from kitty left its placement on screen: {sent:?}"
+        );
+
+        // sixel -> iterm2 brings a cell-addressed encoder back.
+        app.handle_game_key(basic_press(KeyCode::Char('{')));
+        assert_eq!(app.picker.protocol_type(), ProtocolType::Iterm2);
+        assert_eq!(wire(&app), Some(Wire::Iterm2));
+
+        // iterm2 -> halfblocks -> kitty closes the ring.
+        app.handle_game_key(basic_press(KeyCode::Char('{')));
+        assert_eq!(app.picker.protocol_type(), ProtocolType::Halfblocks);
+        app.handle_game_key(basic_press(KeyCode::Char('{')));
+        assert_eq!(
+            app.picker.protocol_type(),
+            ProtocolType::Kitty,
+            "the cycle must return to where it started"
+        );
+        assert_eq!(wire(&app), Some(Wire::Kitty));
+    }
+
+    /// The pad wins. Every one of the four buttons is configurable and any
+    /// character can be one, and this match runs *before* the pad mapping —
+    /// so a player who bound `key_a = {` must get an A press, not a silently
+    /// changed transport.
+    #[test]
+    fn a_protocol_key_bound_as_a_game_button_is_that_button() {
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.config.keys.a = '{';
+        app.handle_game_key(basic_press(KeyCode::Char('{')));
+        assert_eq!(
+            app.picker.protocol_type(),
+            ProtocolType::Kitty,
+            "`key_a = {{` must press A, not cycle the graphics protocol"
+        );
+        assert!(is_down(&app, KeypadKey::A), "`key_a = {{` must press A");
+    }
+
     fn basic_press(code: KeyCode) -> KeyEvent {
         key(code, KeyEventKind::Press)
     }

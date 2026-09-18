@@ -188,6 +188,28 @@ rather than "we did not wait long enough". `protocol = kitty|sixel|iterm2|halfbl
 `config.toml` forces one and **disables detection**, which is how a terminal ends up worse than
 it can do.
 
+### Trying one without restarting — <kbd>{</kbd>
+
+The three captures below were originally made by editing `config.toml` and relaunching three
+times, which is a silly way to answer "does this terminal do sixel properly?". **<kbd>{</kbd>
+cycles the transport live**, in the running game, next to the palette and the upscalers it
+belongs with: `kitty → sixel → iterm2 → half-blocks → kitty`, the ladder above in order, best
+first.
+
+It is the same four values the `protocol` key takes, so it is subject to the same rule: pinning
+one **turns detection off**, and a terminal that cannot draw what you asked for draws nothing.
+That is not a bug to route around — trying a transport a terminal never advertised is exactly
+how you find out what it really does, and the probe cannot speak for iTerm2 at all. But a blank
+picture under a confident Status row is the worst failure this frontend has, so the toast says
+so when it happens (`Protocol sixel — this terminal did not advertise it; { for the next`) and
+<kbd>{</kbd> again moves on.
+
+There is no fifth position for `auto`. `auto` is a *config* value meaning "use what the probe
+found", and by the time a frame is drawn it has already resolved to one of these four — a fifth
+cycle position would be a word in the Status row with no change in the picture. The toast marks
+the rung the probe picked instead (`Protocol kitty (detected)`), so "what would `auto` have
+given me?" is still answerable.
+
 ### How to find out which one you got
 
 The Status panel's **`Proto`** row, always. Three real captures, same machine, same

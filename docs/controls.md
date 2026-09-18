@@ -91,6 +91,7 @@ Everything here is cosmetic except `P`, which changes how the hardware is emulat
 | <kbd>[</kbd> | cycle the palette | [Palettes and scaling](display.md) |
 | <kbd>]</kbd> | cycle the pixel-art upscaler | [The upscalers](upscaling.md) |
 | <kbd>}</kbd> | cycle the upscale factor — each algorithm allows its own factors, so this clamps | [The upscalers](upscaling.md) |
+| <kbd>{</kbd> | cycle the graphics protocol — kitty → sixel → iterm2 → half-blocks, the same four values `protocol` takes in `config.toml`, without a restart. Forcing one **turns detection off**, so a terminal that cannot draw the one you picked shows nothing at all — the toast says when the terminal never advertised it, and `{` again moves on | [The four transports](picture.md#how-to-find-out-which-one-you-got) |
 | <kbd>P</kbd> | picture mode: `identical` ⇄ `standard` — **this one is not cosmetic**: `identical` is the default and draws the picture dot by dot as the hardware does; `standard` draws a whole scanline at a time for about an eighth of the PPU cost. Most games look the same either way | [Picture modes](picture-modes.md) |
 
 ### Capturing it

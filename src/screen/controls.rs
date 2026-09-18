@@ -599,6 +599,31 @@ pub const CONTROLS: &[Control] = &[
             None,
         )
     },
+    // The fourth bracket key, and the one the family was missing. `protocol`
+    // was config-file-only and needed a restart, which makes comparing two
+    // transports in the same terminal a chore — and comparing them is the
+    // whole reason anyone touches that key. See `App::cycle_protocol`.
+    Control {
+        note: Some(
+            "kitty → sixel → iterm2 → half-blocks, the same four values \
+             `protocol` takes in `config.toml`, without a restart. Forcing one \
+             **turns detection off**, so a terminal that cannot draw the one \
+             you picked shows nothing at all — the toast says when the terminal \
+             never advertised it, and `{` again moves on",
+        ),
+        help: Some("{   protocol"),
+        ..c(
+            "{",
+            Group::Picture,
+            "cycle the graphics protocol",
+            Some((
+                "The four transports",
+                "picture.md#how-to-find-out-which-one-you-got",
+            )),
+            Slot::Half("{ protocol"),
+            None,
+        )
+    },
     Control {
         note: Some(
             "**this one is not cosmetic**: `identical` is the default and draws \
