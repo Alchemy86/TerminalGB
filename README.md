@@ -289,6 +289,10 @@ hygiene**, in one line: formats and hardware facts are learned from any source a
 incompatible code and game assets never enter this tree. See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+**Found a security flaw?** Report it privately — the link server, the portal token, the MCP
+server, the C ABI and the parsing of untrusted ROMs and saves are all in scope. See
+[SECURITY.md](SECURITY.md).
+
 ---
 
 ## Credits & lineage
