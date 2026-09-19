@@ -6,8 +6,9 @@ account the brief itself asked for, in the order the brief asked for it:
 the licence finding first, then the measured analysis, then what was
 actually taken versus written fresh.
 
-**Ship: `ember-dmg-opening.mp3`** (the WAV sits beside it — the exact audio
-under review is committed, not regenerated at review time). 31.25s.
+**Ship: `ember-dmg-opening.mp3`** — the final output, and the only audio
+committed here; the source WAV is regenerated on demand (see
+[§5 Reproducing / regenerating](#5-reproducing--regenerating)). 31.25s.
 
 ## 1. The licence — established, not assumed
 

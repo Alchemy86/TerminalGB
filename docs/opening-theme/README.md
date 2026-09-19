@@ -8,9 +8,10 @@ for — exactly what each variant borrowed from the era versus what was
 written fresh — plus how to reproduce or re-render them.
 
 **Ship: `variant-a-generic.mp3`, `variant-b-fanfare.mp3`,
-`variant-c-dmg-authentic.mp3` (the WAVs sit beside them — kept in the repo
-so the exact audio under review is committed, not regenerated at review
-time). Pick one; all three are ready to cut against.**
+`variant-c-dmg-authentic.mp3` — the final output, and the only audio
+committed here. The source WAVs are regenerated on demand (see
+[Reproducing / regenerating](#reproducing--regenerating)). Pick one; all
+three are ready to cut against.**
 
 ## The line this whole exercise sits on
 
