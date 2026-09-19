@@ -5234,8 +5234,8 @@ that holds it to the retail cartridge, agents that play it, and an evaluation pr
   their own directions. The engine crate is **dependency-free and does not depend on
   `terminalgb`** — the oracle and the CLI live there, so the edge would otherwise be a cycle
   (the `terminalgb-plugin-api` / `terminalgb-chiptune` arrangement, for the same reason).
-  `make embed` is unmoved: `gen1-battle` is in `default`, out of `--no-default-features`, and
-  first-party.
+  `make embed` is unmoved: `gen1-battle` is in `gen1` (NOT `default`), out of
+  `--no-default-features`, and first-party.
 - **THE CARTRIDGE IS THE ORACLE, AND IT EARNED THAT FIVE TIMES IN ONE SITTING.** Every
   correction below came from a refusal or a disagreement on the retail Blue image, not from
   reasoning, and each is now a named constant or a modelled behaviour with a citation:
@@ -7455,6 +7455,41 @@ Evidence tool: `cargo run --release --features plugin-agent --example screen_tex
   *Conformance candidate*: **a decode that cannot be sure must say so, not guess** — the same
   principle as "a missing optional report must degrade only the thing it reports".
 
+## `default` IS THE EMULATOR; `gen1` IS EVERYTHING POKÉMON (2026-09-19)
+
+**A plain `cargo build` carries no cartridge-specific code, and that is now gated rather than
+arranged.** `default` = `desktop`, `tui`, `chiptune`, `music`, `bgblink`. The whole Generation 1
+layer — `standard-plugins` (all six plugins), `gen1-battle`, `portal`, `longplay`, `scenario` —
+is behind one opt-in feature, **`gen1`**. Nothing moved, was renamed, or became harder to reach:
+every `plugin-*` feature still selects exactly what it did.
+
+- **Three gates, and they are the reason this cannot rot.** CI fails if any cartridge-specific
+  crate reaches the dependency graph of a plain `cargo build` (a `cargo tree | grep`, no compile);
+  `make no-plugins` builds the frontends with every plugin off and runs the library tests against
+  them; and **`make lint` and `make test` both run TWICE, default and `--features gen1`** — a
+  bundle leaving `default` would otherwise silently shrink what is linted and tested, which is the
+  failure mode to fear here.
+- **`make no-plugins`' grep had never named `gen1-shinyhunt`, `gen1-lobby` or
+  `terminalgb-gen1-battle`**, so three crates could have become hard dependencies with the gate
+  still green. It names them now. **Add a plugin crate, add it to that grep.**
+- **A default build still KNOWS THE NAMES.** `REGISTRY` and the controls/help text list every
+  plugin and key, so an unbuilt plugin is told apart from an unknown one and the message says
+  which feature to rebuild with. Verified by `strings` on the default binary: the plugin names,
+  the key list and the config keys are there; `Pokémon` and `wCurMap` are not.
+- **Three `App` fields are `#[cfg(feature = "plugin-trainer")]` now** — `trainer_fighting`,
+  `last_encounter_seq`, `last_cable_club_seq` are read only inside trainer-gated functions, and
+  without the gate the new default build fails `clippy -D warnings` on dead code. **`make
+  no-plugins` alone would not have caught it**: it builds, it does not lint.
+- **A debug build cannot pass `testharness/scenario.rs`** — one check asserts a replay exceeds
+  **10x real time** and an unoptimised build reaches ~7x. 14/15 in debug, 15/15 optimised. Do not
+  read that one as a regression; the Makefile and CI both run it `--release` for this reason.
+- **The M5Paper Pokédex is NOT core platform code and cannot be a plugin.**
+  `platform/m5paper/src/pokedex.rs` / `pokedex_host.rs` / `sprite.rs` are `mod`-included by
+  `src/bin/pokedex.rs`, which is `required-features = ["sprite"]`; `main.rs` declares only
+  `gbscreen`, `geom`, `panel`, `pmic`. So the shipping firmware contains none of it — and that
+  crate builds `--no-default-features --features embedded`, where `crate::plugin` is a no-op host
+  and `terminalgb-plugin-api` is not in the graph, so a plugin is not an available shape there.
+
 ## Embeddability — the core stands alone (`--no-default-features`)
 
 The captain's requirement: someone must be able to pull this crate into their own UI, tool
@@ -9165,8 +9200,8 @@ captain's call**. What is now load-bearing:
 A 40x28 Cable Club room built at run time in unsaved WRAM, several independent emulator
 processes in it at once, each walking under its own control and seeing the others. A real
 trade and a real link battle both completed **inside** it. The way in is
-**`gameboy --lobby`** (see below); `plugin-gen1-lobby` has been in `default` via
-`standard-plugins` since the room landed, so nothing needs rebuilding with extra features.
+**`gameboy --lobby`** (see below); `plugin-gen1-lobby` rides `gen1` via `standard-plugins`, so
+`cargo build --features gen1` contains it — it is **not** in a plain `cargo build`.
 
 - **RUN IT TWICE AND THE SECOND WINDOW JOINS THE FIRST — that is the product, and it did
   not work when it shipped.** Every `--lobby` run opened its own relay on `127.0.0.1:0`, an
@@ -9551,7 +9586,7 @@ plugin READMEs and each other; a stranger landing on `plugins/agent/` is now poi
   every documented action verb and alias **driven through the real parser**, every tool in the
   captured `tools/list`, and — recomputed from the vendored cartridge —
   `agent-environment.md`'s frame hash and save-state size. It runs inside a plain
-  `cargo test --release` (`plugin-agent` is a default feature); `make test-agent-docs` runs it
+  `cargo test --release --features gen1` (which reaches `plugin-agent`); `make test-agent-docs` runs it
   alone. Known and documented limitation: a *second, stale* mention of a value it already
   found elsewhere is not caught.
 - **Measured for those pages, so nobody re-derives them:** headless throughput through the
@@ -9671,7 +9706,7 @@ emulates).
 **Full page: [`docs/longplay.md`](docs/longplay.md).** An agent plays unattended for hours at
 headless speed and reports in; and an **episode** — a start save state, a success condition, a
 failure/timeout — is reset and repeated so an agent becomes measurable instead of anecdotal.
-Behind the `longplay` feature (in `default`, out of `--no-default-features`), and it adds **no
+Behind the `longplay` feature (in `gen1`, NOT in `default`), and it adds **no
 third-party crate**: the JSON codec is the agent plugin's and the ntfy push is delegated to the
 system `curl`, the same bar `portal` meets.
 
@@ -9978,7 +10013,7 @@ is listed as screenshots and links to the page that explains it?"* — had the a
 **Reader-facing page: [`docs/scenarios.md`](docs/scenarios.md); gate:
 `testharness/scenario.rs` (15 checks, no commercial ROM, in a plain `cargo test`); front end:
 `examples/scenario.rs`.** Behind the `scenario` cargo feature (`longplay` plus this module),
-in `default`, out of `--no-default-features`, **no third-party crate** (`make embed` still
+in `gen1` rather than `default`, **no third-party crate** (`make embed` still
 reports `blip_buf` + first-party `terminalgb-plugin-api`).
 
 - **A RULE IN A PROMPT IS A REQUEST; A RULE THE HOST CAN CHECK IS A RULE.** Every rule is
