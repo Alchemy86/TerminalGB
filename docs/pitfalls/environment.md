@@ -257,3 +257,45 @@ grep` and read the result before acting on it.
 
 **Side effects and blast radius.** None. It is one of those traps that costs an hour exactly
 once per person, which is the definition of something that belongs in a document like this.
+
+---
+
+## `git merge-base A B` prints nothing when there is no merge base
+
+**Symptom.** `git log -1 $(git merge-base A B)` reports a commit that is plainly not a common
+ancestor — usually the tip of whatever you have checked out.
+
+**What it looks like.** "The merge-base is `main`'s tip, so the branch is fully merged." The
+exact opposite can be true: the two refs may share no history at all.
+
+**Root cause.** When two refs have no common ancestor `git merge-base` writes **nothing** to
+stdout and exits **1**. Inside `$(...)` that empty output disappears, `git log -1` is left with
+no revision argument, and it falls back to `HEAD`. The failure is invisible because command
+substitution discards the exit status.
+
+Unrelated histories are not exotic here: this repository's `main` was rebuilt from an orphan
+root, so every branch cut before that rewrite is on a wholly separate graph. For those branches
+`git merge-base --is-ancestor` reports not-an-ancestor and `git rev-list --count $b..main`
+reports the whole of `main` as "behind" — both true, both telling you nothing.
+
+**Resolution.** Check the exit code, never the string:
+
+```sh
+if base=$(git merge-base A B); then
+    git log -1 "$base"
+else
+    echo "no merge base — unrelated histories"
+fi
+```
+
+When there is no merge base, ancestry cannot answer "did this land?" — only **content** can.
+Two independent content tests that agree are enough: look the branch tip's commit *subject* up
+in `git log --format=%s main`, and grep `main`'s tree for a distinctive symbol the branch
+introduced.
+
+**Side effects and blast radius.** None to the code; it changes how you read the tooling. The
+cost of getting it wrong is the whole point — a first pass at a "is anything stranded?" sweep
+read the fallback `HEAD` as the merge-base and concluded the opposite of the truth.
+
+**How we found it.** A branch audit whose two methods disagreed: `merge-base` implied everything
+was merged into the tip, while `git rev-list --max-parents=0` showed two different root commits.

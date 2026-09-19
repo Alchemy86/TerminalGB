@@ -70,6 +70,7 @@ Search this page for the error text you have. Strings are quoted verbatim.
 | a save file the emulator refuses to see | [the extension is replaced, not appended](environment.md#a-save-is-rom-stemsav--the-extension-is-replaced-not-appended) |
 | state lost on exit despite a `Drop` impl that writes it | [`Drop` is not a shutdown hook](environment.md#drop-is-not-a-shutdown-hook) |
 | `pkill`/`pgrep` killing or reporting the wrong process | [a pattern that matches your own command line](environment.md#pgrep--f-matches-your-own-command-line) |
+| `git log -1 $(git merge-base A B)` showing a commit that cannot be a common ancestor | [`merge-base` prints nothing when there is none](environment.md#git-merge-base-a-b-prints-nothing-when-there-is-no-merge-base) |
 | a picture that "looks soft" and no threshold you pick settles the argument | [make the check categorical](techniques.md#make-the-check-categorical-not-a-threshold) — count colours that cannot exist, not pixels that differ |
 
 ### Accuracy work
