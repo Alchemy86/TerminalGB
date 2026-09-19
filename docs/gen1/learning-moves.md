@@ -189,7 +189,7 @@ opinion, which is the right shape for a permanent, irreversible choice.
 
 ## 4. Where the answer really needs party context
 
-The captain's case — *"do I already hold a water attack?"* — is real, and the
+The maintainer's case — *"do I already hold a water attack?"* — is real, and the
 question is whether it is a small minority or not. It is measurable, because it
 is exactly the class where the rule drops a damaging move that was the holder's
 **last** of its type:
@@ -213,7 +213,7 @@ route that needs it would not. **On the other 98.7% the party cannot change the
 answer**, because the victim is a status move the holder has a spare of, or the
 offer is simply worse than everything held.
 
-So the captain's framing holds with a measured margin: this is a closed lookup
+So the maintainer's framing holds with a measured margin: this is a closed lookup
 with a 1.3% tail that wants context. A student that got that 1.3% wrong would
 still be right 98.7% of the time on a decision that occurs a couple of dozen
 times in a whole playthrough.
@@ -386,7 +386,7 @@ time the animation asks.
 
 ## 6a. A route idea, checked against the cartridge
 
-The captain raised one: *a Magikarp is obtainable around Mt Moon, it evolves to
+The maintainer raised one: *a Magikarp is obtainable around Mt Moon, it evolves to
 Gyarados at level 20, and a BubbleBeam TM is available there — so train it up
 and teach it BubbleBeam.* Four claims, and they do not all survive.
 

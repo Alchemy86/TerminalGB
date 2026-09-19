@@ -6,7 +6,7 @@ comparison each. This page is the whole of our submission — what the runner
 requires, what we had to build to satisfy it, what we would score, and the
 files to drop into a fork of `gbdev/GBEmulatorShootout`.
 
-**Nothing here is opened without the captain's word.** It is outward-facing and
+**Nothing here is opened without the maintainer's word.** It is outward-facing and
 carries the project's name.
 
 ---
@@ -393,7 +393,7 @@ Verified by putting them in a real checkout and driving them through their own
 accepts `"TerminalGB"` and `"TerminalGB — nearest x1 — vol 50%"` and rejects
 `"SameBoy"`, and `startProcess` returns a correct argv for all three models.
 
-### Steps, when the captain says go
+### Steps, when the maintainer says go
 
 1. **Tag a release** (`v0.3.0` or whatever the version is by then). The
    Release workflow builds Windows and Linux zips and publishes them. Check the
@@ -409,7 +409,7 @@ accepts `"TerminalGB"` and `"TerminalGB — nearest x1 — vol 50%"` and rejects
 ### The name on the board
 
 **`TerminalGB`.** This branch originally used `gameboy` and flagged the choice
-as the captain's, because a board entry called "gameboy" sits next to SameBoy,
+as the maintainer's, because a board entry called "gameboy" sits next to SameBoy,
 bgb, mGBA and Emulicious and a reader cannot tell it from the console. The
 rename landed on `main` while this was in progress (`def8db4`), which settles
 it: the submission files say `TerminalGB` throughout, and so does
@@ -458,7 +458,7 @@ costs a day at most.
 * **No PR is opened.** By instruction, and correctly: it carries the project's
   name.
 * **No release is tagged.** Tagging publishes binaries under our name; that is
-  the captain's act, not a crew's. The workflow's manual trigger produces a
+  the maintainer's act, not a crew's. The workflow's manual trigger produces a
   **draft** release for exactly this reason.
 * **The Windows binary has not been run on Windows.** There is no Windows
   machine here. The cross-target check is clean and the smoke test in the

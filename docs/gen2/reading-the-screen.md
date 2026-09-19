@@ -27,7 +27,7 @@ The obvious way to answer "does the game have control yet, or is a menu still up
 list — wait until the screen stops saying `CONTINUE` and `NEW GAME` and `BADGES`. **Measured,
 that loses**, and it lost expensively:
 
-> Continuing the captain's real Gold save put up a `PLAYER <name>` box, then *"The clock's time
+> Continuing the maintainer's real Gold save put up a `PLAYER <name>` box, then *"The clock's time
 > may be wrong."* (its RTC consistency check failing against the emulator-restored clock), then
 > the entire clock-set screen (*"Set with the Control Pad."*, `engine/rtc/restart_clock.asm`) —
 > three screens in a row containing **none** of the listed words, while `wMapGroup` and

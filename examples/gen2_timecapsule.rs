@@ -166,7 +166,7 @@ fn main() {
         return;
     }
     if let Some(fixture) = capsule_trade {
-        // Any Gold save works here, the captain's included: `patch` is
+        // Any Gold save works here, the maintainer's included: `patch` is
         // idempotent on the two Time Capsule gates and replaces the party with
         // one the receptionist accepts — on the STAGED COPY only.
         let mut sram = std::fs::read(&fixture).expect("gold save fixture");
@@ -859,7 +859,7 @@ fn warp_tile_for(group: u8, number: u8) -> Option<(u8, u8)> {
         // (`maps/PlayersHouse2F.asm`) — the crafted fixture's bedroom.
         (24, 7) => Some((7, 0)),
         // NEW_BARK_TOWN: the player's own front door, `warp_event 13, 5,
-        // PLAYERS_HOUSE_1F` (`maps/NewBarkTown.asm`) — where the captain's
+        // PLAYERS_HOUSE_1F` (`maps/NewBarkTown.asm`) — where the maintainer's
         // real save is standing, one tile below it at (13, 6).
         (24, 4) => Some((13, 5)),
         _ => None,

@@ -28,7 +28,7 @@
 //!    door.** `data/maps/objects/TradeCenter.asm` declares `def_warp_events`
 //!    with no entries, so `wNumberOfWarps` reads 0 at run time and there is no
 //!    tile to walk out through. `ReturnToCableClubRoom` reloads the *same*
-//!    map. This is the half the captain actually hit, and it is why Gold —
+//!    map. This is the half the maintainer actually hit, and it is why Gold —
 //!    whose Time Capsule room is an ordinary Pokémon Center 2F with a
 //!    staircase — walks out while Blue cannot.
 //!
@@ -257,7 +257,7 @@ enum Phase {
     #[default]
     ToCancelA,
     /// A presses A on CANCEL, over and over, while B does nothing. This is the
-    /// captain's screen.
+    /// maintainer's screen.
     AloneOnCancel,
     /// Now B walks onto CANCEL too.
     ToCancelB,

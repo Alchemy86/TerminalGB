@@ -43,7 +43,7 @@
 //!
 //! ## What changed, and why
 //!
-//! Three things the captain asked for, against the panel this replaces:
+//! Three things the maintainer asked for, against the panel this replaces:
 //!
 //! * **Every party member is visible at all times, with its own picture.** The
 //!   party used to be two lines of text per Pokémon and *nothing* in the detail
@@ -1978,7 +1978,7 @@ impl Body<'_> {
 
 /// Compose the body, choosing the tier that fits the rows available.
 ///
-/// **The order of sacrifice, and it is the captain's requirement made
+/// **The order of sacrifice, and it is the maintainer's requirement made
 /// mechanical:** the six party slots are never the thing that goes. What goes,
 /// in order, is
 ///
@@ -2484,7 +2484,7 @@ mod tests {
     ///
     /// This is the reproduction of the fault the redesign found: `sprite_image`
     /// is `None` for anything but Kitty and iTerm2, so on a VTE-family
-    /// terminal — the captain's own, and the one Fedora builds without sixel —
+    /// terminal — the maintainer's own, and the one Fedora builds without sixel —
     /// the trainer panel drew no Pokémon at all and said nothing about it.
     ///
     /// The two halves of the answer are both asserted, because either alone is
@@ -2704,7 +2704,7 @@ mod tests {
 
     /// A battle must not push the party off the panel. The body has to fit the
     /// rows a 40x30 terminal leaves it — which is the smallest window the
-    /// captain plays in — with every party member still named.
+    /// maintainer plays in — with every party member still named.
     #[test]
     fn a_battle_still_shows_the_whole_party() {
         let mut st = battling();
@@ -3196,7 +3196,7 @@ mod tests {
     ///
     /// It used to be a strip of pictures across the panel, granted only in a
     /// trainer battle on a panel wide *and* tall enough. There is one picture
-    /// budget and the captain's ask was the player's own six, always — so the
+    /// budget and the maintainer's ask was the player's own six, always — so the
     /// roster keeps the marker line and the names, which is exactly the
     /// fallback it already took on most window sizes, and it keeps them
     /// **unconditionally** instead. Fainted, standing and unreadable stay
@@ -3469,7 +3469,7 @@ mod link_line_tests {
         assert_ne!(idle, busy);
     }
 
-    /// The panel is dense and the captain splits it narrow. The row must lose
+    /// The panel is dense and the maintainer splits it narrow. The row must lose
     /// its *tail*, never its label — a clipped line that no longer says LINK is
     /// indistinguishable from some other row.
     #[test]

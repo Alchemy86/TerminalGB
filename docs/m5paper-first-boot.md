@@ -2,7 +2,7 @@
 
 **Custom Rust firmware runs on the device, drives the e-paper panel, and reads
 its buttons. The panel takes 15.967 seconds to draw one picture — measured from
-our own code, on the captain's own device, not quoted from anywhere.**
+our own code, on the maintainer's own device, not quoted from anywhere.**
 
 That number is the whole story of what this hardware can and cannot be, and it
 is the reason this page exists before any emulator port does. A Game Boy frame
@@ -107,7 +107,7 @@ to.
 
 ## Landscape
 
-The captain asked for landscape. The glass is physically portrait — 400 wide by
+The maintainer asked for landscape. The glass is physically portrait — 400 wide by
 600 tall — so landscape is a coordinate mapping, and the logical screen is
 600x400.
 

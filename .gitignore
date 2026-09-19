@@ -4,7 +4,16 @@ target
 # `target/`, which is what CI does so the compiler cache does not swallow them.
 .test-suites
 node_modules
-Cargo.lock
+
+# **The ROOT `Cargo.lock` is tracked and must stay so**: this crate ships
+# binaries, CI and `docs/quickstart.md` both build `--locked` against it, and an
+# ignored lockfile means a dependency bump never shows up in `git status`. A
+# bare `Cargo.lock` line used to sit here, inherited from upstream, while the
+# file was committed anyway. Lockfiles BELOW the root belong to crates that are
+# deliberately not workspace members (`platform/m5paper`,
+# `third_party/blip_buf-nostd`) and are build artefacts — they stay ignored.
+**/Cargo.lock
+!/Cargo.lock
 
 **/*.a
 **/*.gb
@@ -40,3 +49,16 @@ scenarios/*/guidance/
 # Every one of them is reproducible from a fresh cartridge by playing the chain
 # forward; see docs/agent/pewter-chain.md.
 scenarios/pewter/states/
+
+# Secrets never belong in the tree. Nothing here reads a dotenv file today;
+# this is the guard for the day something does.
+.env
+.env.*
+!.env.example
+
+# Doc-preview artefacts. `AGENTS.md` describes rendering a page through
+# GitHub's own /markdown API to check it before committing; the output of that
+# is scratch and must not ship.
+.preview/
+*.preview.html
+readme-*.html

@@ -2,7 +2,7 @@
 """Measure where the cartridge draws the player relative to its own tile.
 
     python3 tools/pewter-chain/measure_anchor.py --rom <blue.gb> \
-        [--atlas /home/aaron/pokemon-run/atlas/atlas.json]
+        [--atlas ~/pokemon-run/atlas/atlas.json]
 
 `swarm_film.py` has to decide, per agent, which pixel of the atlas a sprite
 goes on. That decision was wrong — every agent sat half a tile up and to the
@@ -119,7 +119,7 @@ def capture(server, rom, out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rom", required=True)
-    ap.add_argument("--atlas", default="/home/aaron/pokemon-run/atlas/atlas.json")
+    ap.add_argument("--atlas", default=os.path.expanduser("~/pokemon-run/atlas/atlas.json"))
     ap.add_argument("--server", default="target/release/terminalgb-mcp")
     ap.add_argument("--out", default="target/anchor")
     a = ap.parse_args()

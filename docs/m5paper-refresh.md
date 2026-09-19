@@ -33,7 +33,7 @@ are claimed to work by people who never timed them.
 | cutting the power part-way through the waveform | the panel survives it; the picture is an open question |
 
 Every number is from the three probes in
-[`platform/m5paper/src/bin/`](../platform/m5paper/src/bin/) on the captain's own
+[`platform/m5paper/src/bin/`](../platform/m5paper/src/bin/) on the maintainer's own
 device. `tools/m5paper-build.sh probe` is the safe one and takes about seven
 minutes; `deepprobe` writes the undocumented registers; `autoprobe` interleaves
 the AUTO comparison. All three end by leaving a test card on the glass.
@@ -95,7 +95,7 @@ that intent, since the vendor writes a different last byte for a refresh
 
 ## The registers that did nothing
 
-The captain authorised writing registers nobody has documented for this
+The maintainer authorised writing registers nobody has documented for this
 controller — *"All options are ok to test. It's my test board."* — so they were,
 twice, and the answers replicate to within a few milliseconds of each other.
 

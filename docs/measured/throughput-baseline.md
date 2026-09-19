@@ -2,7 +2,7 @@
 
 <!-- codemap:asof -->
 
-> Nobody had ever written the headless throughput down, which is why the captain had to ask for
+> Nobody had ever written the headless throughput down, which is why the maintainer had to ask for
 > it. This page is the answer, the method, and — because the two are very different pieces of
 > engineering — **which of the two possible 1000× targets each number belongs to.**
 

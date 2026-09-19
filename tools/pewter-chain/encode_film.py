@@ -18,7 +18,7 @@ nothing on screen moves at all. Every published film here was encoded with
   sample per 2x2 block of luma, so **a colour edge is halved in resolution
   before a single bit is spent on it**. On camera footage that is invisible;
   on a one-pixel-wide sprite outline against a flat floor it is the blur the
-  captain reported, and no bitrate removes it.
+  maintainer reported, and no bitrate removes it.
 * **`-b:v 6M` is a bitrate target, not a quality target.** It spends 6 Mbps on a
   frame where nothing moved and still cannot afford the hard edges on a frame
   where the whole camera panned. Constant-quality rate control is what flat,
@@ -120,7 +120,7 @@ RGB_COLOUR = ["-color_primaries", "bt709", "-color_trc", "bt709",
 # is unshippable: **`yuv444p` VP9 is VP9 Profile 1, which most players and
 # essentially all hardware decoders do not implement.** A decoder that does not
 # implement it does not refuse the file — it reads the planes as 4:2:0 anyway
-# and produces exactly what was reported off the captain's own player: layout
+# and produces exactly what was reported off the maintainer's own player: layout
 # and text perfect, and the atlas's greys rendered green, pink and orange. AV1
 # at 4:4:4 is its Professional profile and carries the same trap.
 #
@@ -134,7 +134,7 @@ RGB_COLOUR = ["-color_primaries", "bt709", "-color_trc", "bt709",
 #
 # Two consequences, and they are the shape of the whole page:
 #
-# * **Compatibility beats chroma fidelity.** A film the captain can open on a
+# * **Compatibility beats chroma fidelity.** A film the maintainer can open on a
 #   phone and on a GNOME desktop is the product; a sharper file he cannot
 #   watch is worth nothing.
 # * **Sharpness comes from INTEGER-SCALE RENDERING, not from exotic chroma.**

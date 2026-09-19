@@ -614,7 +614,7 @@ const PALLET_TOWN: u8 = 0x00;
 const EVENT_FLAGS: u16 = 0xD747;
 
 /// Drive a **new** game into a real wild encounter and check the verdict the
-/// captain will act on against a DV calculation done here, from the bytes in
+/// maintainer will act on against a DV calculation done here, from the bytes in
 /// the enemy structure.
 ///
 /// This is the check the feature stands or falls on. Everything else in this
@@ -885,7 +885,7 @@ fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
     // A shiny-if-traded wild Pokémon is 1 in 8192, so no run of this harness
     // will meet one. What *can* be checked here is that the same encounter,
     // with the canonical shiny DV pair substituted, flips the verdict and
-    // produces the banner the captain is meant not to miss. The bytes-to-DVs
+    // produces the banner the maintainer is meant not to miss. The bytes-to-DVs
     // half of the chain is proven by the live encounters above; this is the
     // DVs-to-verdict half, on a real encounter struct rather than a mock.
     if let Some(mut enc) = last {
@@ -1036,7 +1036,7 @@ fn verify_encounter(
 }
 
 /// Render the banner exactly as the terminal frontend would, so the log carries
-/// the thing the captain will actually see.
+/// the thing the maintainer will actually see.
 fn banner_text(
     enc: &terminalgb_plugin_trainer::encounter::WildEncounter,
     width: usize,

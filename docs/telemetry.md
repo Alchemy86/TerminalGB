@@ -2,7 +2,7 @@
 
 > **Key:** `t` shows the same numbers as an overlay. [Every control →](controls.md)
 
-> The captain: *"as with our whole desire to have things plug and play with our player — show
+> The maintainer: *"as with our whole desire to have things plug and play with our player — show
 > stats, framerate etc — it should be the case that these details are also visible to something
 > like YOU when running. So ensure this is the case, so testing should be a breeze with our own
 > built-in features and data points."*

@@ -988,7 +988,7 @@ fn demo(
 }
 
 // ---------------------------------------------------------------------------
-// human: the captain plays one console at his own terminal, through the
+// human: the maintainer plays one console at his own terminal, through the
 // ordinary TUI, with a driven player walking about the same room.
 // ---------------------------------------------------------------------------
 
@@ -1005,7 +1005,7 @@ fn demo(
 ///
 /// The two differences from a shipped launch, both deliberate:
 ///
-/// * `stage_self` — a capture run must not be able to write to the captain's
+/// * `stage_self` — a capture run must not be able to write to the maintainer's
 ///   own cartridge at all, so this seat plays a copy out of `target/`. The
 ///   shipped `--lobby` plays the real save, because it is an ordinary launch of
 ///   somebody's own game.

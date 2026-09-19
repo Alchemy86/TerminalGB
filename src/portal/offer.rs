@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(p.current().unwrap().nickname, "GLIMMER");
         p.filter.clear();
         // Typing `shiny` filters to the would-be-shiny ones — the flag the
-        // captain asked to be filterable.
+        // maintainer asked to be filterable.
         for c in "shiny".chars() {
             p.type_char(c);
         }

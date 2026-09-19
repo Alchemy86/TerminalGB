@@ -15,7 +15,7 @@
 //! # every preset resolves against this cartridge (names, moves, classes)
 //! cargo run --release --example gen1_battle -- --check
 //!
-//! # the captain's clip, with screenshots
+//! # the maintainer's clip, with screenshots
 //! cargo run --release --example gen1_battle -- --preset charizard-flamethrower \
 //!     --shots target/battle-shots
 //!
@@ -302,7 +302,7 @@ fn find_rom() -> Option<PathBuf> {
 ///
 /// The MBC writes its battery save **next to the ROM path**, so running a
 /// cartridge in place drops `.sav` files into whatever directory it came from —
-/// and for the captain's `~/roms` that directory holds a real save with a
+/// and for the maintainer's `~/roms` that directory holds a real save with a
 /// traded Mewtwo in it. Copying first is not caution, it is the rule.
 fn stage(src: &Path, rom: &[u8]) -> Result<PathBuf, String> {
     let dir = PathBuf::from("target/gen1-battle");

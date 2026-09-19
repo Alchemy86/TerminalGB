@@ -16,7 +16,7 @@ Two lines are drilled, Charmander's and Bulbasaur's, and the pair is the point: 
 
 ## 1. The two numbers, first
 
-Measured on the captain's retail Pokémon Blue, both lines walked from level 1 with every
+Measured on the maintainer's retail Pokémon Blue, both lines walked from level 1 with every
 evolution taken.
 
 | | CHARMANDER → CHARMELEON → CHARIZARD | BULBASAUR → IVYSAUR → VENUSAUR |
@@ -57,7 +57,7 @@ decisions. Both species start with two moves and fill the third and fourth for f
 | Bulbasaur | 65 | VENUSAUR | SOLARBEAM | forget **GROWL** | GROWL deals no damage the table can price and SOLARBEAM does |
 
 **Three of the nine are declines and every one of them was exercised**, which was the case the
-captain named explicitly. A decline is not a skipped prompt: the game asks
+maintainer named explicitly. A decline is not a skipped prompt: the game asks
 `Delete an older move to make room for X?`, the answer is NO, it then asks
 `Abandon learning X?`, the answer is YES, and it prints `LEARNER did not learn FIRE SPIN!`. Two
 button decisions, both recorded.
@@ -333,7 +333,7 @@ Consequences worth knowing:
 ## 7. What is not here
 
 - **Magikarp.** Training one by switching it in from the box until it learns BITE at level 20 is
-  the captain's idea and is explicitly parked. Two things this drill built would serve it: the
+  the maintainer's idea and is explicitly parked. Two things this drill built would serve it: the
   direct-experience trigger of §2 works at any level on any species, and the plan emitter already
   reports MAGIKARP's line. Neither has been pointed at it.
 - **TMs and HMs.** Out of scope here exactly as they are in

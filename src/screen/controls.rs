@@ -456,7 +456,7 @@ pub const CONTROLS: &[Control] = &[
     // `L` and `M` are a pair, and they are adjacent here so the panel packs
     // them onto one row. `L` used to be labelled "load ROM", which is what it
     // leads to rather than what it does, and hid that it is the way back to
-    // the picker — the captain read the panel, could not find a route to the
+    // the picker — the maintainer read the panel, could not find a route to the
     // shelf, and had to be told that `L` was it.
     Control {
         note: Some("music mode is `M`, from here or from the picker"),

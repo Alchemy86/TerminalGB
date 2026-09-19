@@ -141,7 +141,7 @@ and then the most channels**. After the fix the probe reports:
 >>> CpalPlayer negotiated sample_rate = 44100     (stereo, from the device default)
 ```
 
-> **On the captain's machine the negotiated rate was 44100, matching the real
+> **On the maintainer's machine the negotiated rate was 44100, matching the real
 > stream rate** — so the negotiation bug was *not* the pitch culprit there (it
 > was silently costing the right channel). The pitch culprit is §5.
 
@@ -159,7 +159,7 @@ Producer and consumer share a mutex-guarded queue:
 ### Post-mortem: why "~180 ms cap" made it *worse*
 
 An earlier fix bounded the queue at 4 blocks (~180 ms) to kill the 1-second
-latency of the original code. The captain then reported the music as **"blocky
+latency of the original code. The maintainer then reported the music as **"blocky
 and broken"** — a regression. The measured causes (see §5a for the numbers):
 
 1. **The producer ran systematically slow.** Both frontends reset their frame
@@ -186,7 +186,7 @@ hardware (§5a) — not picked as "a nicer buffer number":
 |---|---|
 | **Prime to `start_fill()` = 1792 samples (~41 ms) before draining** | The cushion's promise: the frontend may drop **one whole frame** without an audible glitch. A dropped frame costs more than a frame of audio — the queue drains continuously, so the gap is the missed frame *plus* the normal 16.7 ms period — so one frame + the measured 8 ms of scheduler jitter is ~41 ms. See §4b for why this used to be 7000 (~159 ms). |
 | **On underrun: hold the last sample and fade it (~0.999/sample), then re-prime** | A step to zero is itself a click ("play silence" is SDL's *baseline* behaviour, not the best). Re-priming turns one hiccup into one smooth gap instead of an on/off machine-gun. |
-| **Above `high_water()` = 2816 (~64 ms), discard the oldest samples down to `start_fill()` — never wait** | The producer runs *inside* `Cpu::do_cycle`, so a wait is charged to the emulated frame. It used to wait here; see §4c, which is the bug that made the captain's session emulate at 17.93 ms/frame and display 6 fps. |
+| **Above `high_water()` = 2816 (~64 ms), discard the oldest samples down to `start_fill()` — never wait** | The producer runs *inside* `Cpu::do_cycle`, so a wait is charged to the emulated frame. It used to wait here; see §4c, which is the bug that made the maintainer's session emulate at 17.93 ms/frame and display 6 fps. |
 | **Clip back to `start_fill()`, not to the ceiling** | Draining to the ceiling leaves zero headroom, so the next production burst clips again and every frame sheds a few samples for ever (measured: 668 over a 120 s soak with a perfectly healthy consumer). |
 | **Discards before the device's first callback are counted separately** | Opening a cpal stream takes ~150–250 ms, during which the emulator is already synthesising. Dropping that backlog is what makes playback start from *current* audio instead of a fifth of a second behind, and it is not a glitch — `dropped_before_playback`. |
 | **Everything is counted** | `underruns`, `held`, `dropped`, depth min/max, and now device-side latency. `GB_AUDIO_STATS=1` logs a line every 5 s; `examples/audio_latency.rs` reports the full path. |
@@ -199,7 +199,7 @@ with jitter and stalls.
 
 ## 4b. "Sounds appear just AFTER they should" — the latency fix
 
-The queue fix above removed the stuttering. The captain then reported the next
+The queue fix above removed the stuttering. The maintainer then reported the next
 problem precisely:
 
 > "sounds appear to be playing just AFTER they should. Like a click to scroll
@@ -313,7 +313,7 @@ GB_AUDIO_HIGH_WATER=12000    # latency ceiling, samples
 
 ## 4c. "The game lags with sound on" — the producer was pacing the emulator
 
-The captain's report, and the one that had been misdiagnosed four times: with
+The maintainer's report, and the one that had been misdiagnosed four times: with
 `--features audio` the terminal frontend displayed **6 fps**. Same binary, same
 window, same ROM; the only variable was the feature.
 
@@ -500,7 +500,7 @@ produces **~46,145 samples/s while the sound card drains 44,100/s**. The extra
 ~2,000 samples/s pile into the queue until the cap, then get dropped — **~21 tiny
 skips a second**. That is *exactly* "rough": grainy, aged. And because content is
 being skipped and the game logic itself runs 4.64 % fast, the music plays
-**slightly fast in tempo** — *exactly* the captain's ear.
+**slightly fast in tempo** — *exactly* the maintainer's ear.
 
 **One cause, both symptoms.** The fix is to pace at the true frame period
 ([`src/gameboy.rs`](../src/gameboy.rs), `render_desktop`):
@@ -726,7 +726,7 @@ sound card**, so it runs in CI:
 ```bash
 make test-audio-perf     # cargo test --release --features audio --test audioperf
 # Attaches the real producer half with no consumer, so the queue saturates and
-# stays saturated — the state the captain's machine was in. Fails if a frame
+# stays saturated — the state the maintainer's machine was in. Fails if a frame
 # costs more than 4 ms, or if emulation runs slower than 4x real time, or if the
 # queue grows past high_water. Against the old wait-at-the-watermark policy it
 # reports 29.6 ms/frame at 0.57x and fails.

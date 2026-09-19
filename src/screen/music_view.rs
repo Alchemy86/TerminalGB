@@ -458,7 +458,7 @@ mod tests {
         }
     }
 
-    /// **The captain's line: say which mode you got.** Every wording path is
+    /// **The maintainer's line: say which mode you got.** Every wording path is
     /// rendered and checked, because this is the claim the feature rests on.
     #[test]
     fn the_panel_never_promises_more_than_a_title_theme() {

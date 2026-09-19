@@ -20,7 +20,7 @@ the same bytes the cartridge holds. `pret` projects make that checkable: each sh
 
 **Measured here:** `pret/pokegold` built at RGBDS **1.0.3** produces a Gold ROM with SHA-1
 `d8b8a3600a465308c9953dfa04f0081c05bdcb94`, which matches the entry in the disassembly's own
-`roms.sha1` and matches the captain's cartridge. So `pokegold.sym` is exact for it, and every
+`roms.sha1` and matches the maintainer's cartridge. So `pokegold.sym` is exact for it, and every
 symbol-file address on these pages inherits that.
 
 The same is true of `pret/pokered` for Red and Blue — the Gen 1 area's addresses rest on the

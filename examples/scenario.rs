@@ -16,7 +16,7 @@
 //! # Two of the five subcommands cost nothing and need no cartridge
 //!
 //! `check` validates a scenario and prints its **cost ceiling before anything
-//! is spent** — the captain's money, so the number is on screen first rather
+//! is spent** — the maintainer's money, so the number is on screen first rather
 //! than discoverable afterwards from a bill. `knowledge` answers a question out
 //! of the vendored AtlasGB snapshot. Neither loads a ROM.
 //!

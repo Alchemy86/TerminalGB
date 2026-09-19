@@ -10,7 +10,7 @@
 # See docs/gen1/battle-control.md.
 
 # ---------------------------------------------------------------------------
-# The captain's example: a Charizard flamethrowering a Pidgey, as a clip.
+# The maintainer's example: a Charizard flamethrowering a Pidgey, as a clip.
 #
 # Nothing here is left to the dice, and that is deliberate — see
 # docs/gen1/battle-control.md "Making a cinematic reproducible". A level 50 Charizard

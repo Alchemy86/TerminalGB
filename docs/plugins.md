@@ -617,7 +617,7 @@ deliberately while the contract is open.
 
 **What GB-Link is.** Not an emulator. The game runs on a real Game Boy with a real cartridge; the
 adapter bridges its link port to USB, and the browser is the UI. `gb-pokemon-web` is a JS port
-of Lorenzooone's Python. `gblink-distributor` is *literally the captain's idea* — event Pokémon
+of Lorenzooone's Python. `gblink-distributor` is *literally the maintainer's idea* — event Pokémon
 by a genuine Cable Club trade, "nothing is injected into your save file" — but for hardware.
 Ours is the emulator equivalent of the same idea.
 

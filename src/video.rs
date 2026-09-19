@@ -3600,7 +3600,7 @@ mod tests {
         }
     }
 
-    /// The crop the captain saw is the *consumer's*, and this warning is the
+    /// The crop the maintainer saw is the *consumer's*, and this warning is the
     /// only place it can be caught — the frame on the wire is already correct.
     #[test]
     fn a_camera_that_is_not_sixteen_by_nine_is_warned_about() {
@@ -3880,7 +3880,7 @@ mod tests {
         scrub(&path);
     }
 
-    /// The captain's order of operations: emulator first, bridge second. The
+    /// The maintainer's order of operations: emulator first, bridge second. The
     /// stream must go live on its own when the consumer turns up.
     #[test]
     #[cfg(all(unix, feature = "libc"))]

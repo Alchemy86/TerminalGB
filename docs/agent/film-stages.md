@@ -1,6 +1,6 @@
 # The chain film shows the walking and hides the story
 
-The captain: *"The journey makes no sense to me. We're supposed to be building up in stages, so where
+The maintainer: *"The journey makes no sense to me. We're supposed to be building up in stages, so where
 are the clips from, say, in the lab with Oak? Like what his videos do. Did we have some larger goal
 that just said 'fuck off north to town'?"*
 

@@ -16,7 +16,7 @@
 //!
 //! Everything below the first line already existed. [`crate::longplay::episode`]
 //! is the reset-and-repeat primitive with success and failure conditions; this
-//! module adds the two things the captain asked for on top of it — **rules that
+//! module adds the two things the maintainer asked for on top of it — **rules that
 //! are enforced rather than suggested**, and a run that is a **reusable
 //! artefact** rather than a log.
 //!
@@ -668,7 +668,7 @@ mod tests {
         assert!(e.contains("could never be acted on"), "{e}");
     }
 
-    /// The captain's money. Every ceiling must be on screen before the first
+    /// The maintainer's money. Every ceiling must be on screen before the first
     /// call, not discoverable afterwards from a bill.
     #[test]
     fn the_briefing_states_the_cost_ceiling_before_anything_is_spent() {

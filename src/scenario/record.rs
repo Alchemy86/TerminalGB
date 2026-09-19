@@ -29,7 +29,7 @@
 //! through the **same** parse, clamp and execute path a real model's reply
 //! does — that is why it exists — so a replay is not an approximation of the
 //! run, it is the run. And with nothing to wait for, it goes at the emulator's
-//! own speed rather than the network's. That is the captain's *"millions of
+//! own speed rather than the network's. That is the maintainer's *"millions of
 //! times at record speed"*: the expensive part was paid once.
 //!
 //! # Determinism is tested, not assumed

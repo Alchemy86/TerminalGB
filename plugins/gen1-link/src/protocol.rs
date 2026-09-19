@@ -1002,7 +1002,7 @@ mod tests {
         }
     }
 
-    /// The captain's report, end to end at the protocol level: trade, then
+    /// The maintainer's report, end to end at the protocol level: trade, then
     /// leave. The post-trade rounds put the partner in `Connected`, and the
     /// cancel that follows has to be answered from there.
     #[test]

@@ -2,7 +2,7 @@
 
 > **Keys:** `v` live feed on/off · `V` record a file. [Every control →](controls.md)
 
-> The captain: *"can we confirm it's also possible for our terminal to PROVIDE A VIDEO STREAM
+> The maintainer: *"can we confirm it's also possible for our terminal to PROVIDE A VIDEO STREAM
 > OUT for things to plumb into and play, or even a webcam to PICK IT UP DIRECTLY!! like a
 > camera feed!"*
 
@@ -397,7 +397,7 @@ for free. Non-blocking is the property; deferring the open is not a substitute f
 ## 5b. Configuring a destination is not deciding to stream
 
 The two are separate decisions and the emulator used to conflate them: **naming a destination
-started the stream**, at launch, before the user had pressed anything. The captain's Status row
+started the stream**, at launch, before the user had pressed anything. The maintainer's Status row
 read `Video ◌ wait gameboy-cam.…` the moment his terminal came up.
 
 That is wrong on its own terms — "where do frames go" and "send frames" are different
@@ -447,7 +447,7 @@ survives being pressed repeatedly — which is not free, see below.
 
 `v` off used to *close* whatever was open, and that turned out to be two separate faults at once.
 
-**It killed the camera.** The captain, mid-call: *"when we press `v` it doesn't just stop streaming
+**It killed the camera.** The maintainer, mid-call: *"when we press `v` it doesn't just stop streaming
 the screen, it KILLS the cam, so Google loses it if we WERE streaming."* A viewer had to go back to
 the camera picker and choose the device again — unacceptable mid-call, and impossible mid-Twitch-stream.
 
@@ -465,7 +465,7 @@ switches only what is being *sent*. Never releasing it dissolves the re-acquire 
 working around it: there is nothing left to re-acquire.
 
 **Idle is not silence.** A third fault made that necessary rather than merely tidy: with the game feed
-stopped, a consumer kept displaying the **last frame indefinitely**. The captain's Meet call sat on a
+stopped, a consumer kept displaying the **last frame indefinitely**. The maintainer's Meet call sat on a
 title screen while the emulator was in a Rattata battle — a dead feed that looks live, which on a public
 stream is actively misleading. So while the game is off the destination keeps receiving an **idle card**
 at [`IDLE_PERIOD`](../src/video.rs) (2 Hz):
@@ -501,7 +501,7 @@ a camera is idling *does* release the camera; the `?` overlay says so when it ha
 
 A V4L2 output node accepts writes whether or not anybody is watching — that is the whole point of one —
 so unlike a FIFO it is never blocked on a reader, and the sink never waits for one. But the *words* were
-shared: any `Waiting` stream said `◌ waiting for a consumer on /dev/video10`, which sent the captain
+shared: any `Waiting` stream said `◌ waiting for a consumer on /dev/video10`, which sent the maintainer
 hunting for a consumer problem when the real one was a second emulator instance still holding the device.
 A camera that is not live now reports the device's own reason (`already being fed by another program`,
 `v4l2loopback is not loaded`, `that is a real webcam`), because that is always what it is.

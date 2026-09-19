@@ -1,6 +1,6 @@
 //! **Does a remote avatar stand still in the world while you walk?**
 //!
-//! The captain's report was that the other player "moves with you and then
+//! The maintainer's report was that the other player "moves with you and then
 //! auto-corrects". The mechanism is the one the cartridge already solves for
 //! its own NPCs: `AdvancePlayerSprite`'s `.spriteShiftLoop`
 //! (`pret/pokered`, `home/overworld.asm`) shifts every sprite the engine

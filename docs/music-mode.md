@@ -294,7 +294,7 @@ must be tested on what it selects, not only on what the emulator produced.**
 **For as long as music mode existed, the cover was blank outside Kitty and
 iTerm2** — and the panel beside it still printed `▦ cover 1/4 · … · c to
 change`, so the shelf offered a picture it had no way to draw. Reported as a
-regression; it never worked. The captain is on Ptyxis, which is VTE-family:
+regression; it never worked. The maintainer is on Ptyxis, which is VTE-family:
 no kitty graphics, and Fedora builds VTE without sixel.
 
 The cause is one branch. [`App::new_cover_image`](../src/screen/tui.rs) returns

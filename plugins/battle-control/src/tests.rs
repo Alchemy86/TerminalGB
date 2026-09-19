@@ -824,7 +824,7 @@ fn presets_can_be_cycled_and_chosen_by_name() {
 
 /// Every built-in preset must resolve against a cartridge — a shipped preset
 /// that names a Pokémon or a move the game does not have would only fail when
-/// the captain pressed the key.
+/// the maintainer pressed the key.
 #[test]
 fn every_built_in_preset_builds_a_plan() {
     // The synthetic cartridge only knows a handful of species, so this checks

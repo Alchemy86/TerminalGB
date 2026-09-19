@@ -131,7 +131,7 @@ Two dead ends were measured on the way, and both are worth not repeating:
 
 So the two rules the recipe is now built on:
 
-* **Compatibility beats chroma fidelity.** A film the captain can open on a
+* **Compatibility beats chroma fidelity.** A film the maintainer can open on a
   phone and on a GNOME desktop is the product; a sharper file he cannot watch
   is worth nothing.
 * **Sharpness comes from integer-scale rendering, not from exotic chroma.**

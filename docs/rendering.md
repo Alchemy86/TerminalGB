@@ -7,7 +7,7 @@
 > [Display scaling](display.md) · [Telemetry](telemetry.md) ·
 > [Frontends](components/frontends.md) · [🗺️ Code map](codemap.md)
 
-> The captain, playing in WezTerm with the stats overlay up:
+> The maintainer, playing in WezTerm with the stats overlay up:
 >
 > ```
 > Scale     8.4x
@@ -189,7 +189,7 @@ rather than a guess:
   cell contents.
 
 It is worth building for terminals with no graphics support. It is not on the critical path
-for the captain, whose terminal answers `OK` to both rungs above it.
+for the maintainer, whose terminal answers `OK` to both rungs above it.
 
 ---
 
@@ -412,7 +412,7 @@ The Kitty graphics protocol has two ways to say *where* an image goes:
 graphics protocol but not the placeholders**, so the grid renders as rows of missing-glyph
 boxes and no picture at all. The natural conclusion — "WezTerm can't do Kitty graphics" — is
 wrong, and it pushed this project onto the iTerm2 protocol as a fallback, which is where the
-captain still was when the frame-rate bug was reported.
+maintainer still was when the frame-rate bug was reported.
 
 Asking WezTerm directly settles it in one command:
 
@@ -485,7 +485,7 @@ GB_TERM_IMAGE=rgb cargo run --release --example render_bench -- --tty --frames 1
 
 Measured in a real WezTerm window on this machine, 213 × 55 cells.
 
-**Synthetic worst case** (`--motion`, every frame forced to change — the case the captain's
+**Synthetic worst case** (`--motion`, every frame forced to change — the case the maintainer's
 6 fps report actually was, since his overlay showed 91 KB being *sent* every frame, meaning
 nothing was being deduplicated):
 
@@ -515,7 +515,7 @@ process somewhere even `timeout` cannot reach.)
 **Be careful with that "before" row — it does not show a collapse.** At 150 frames of walking
 the old path still managed 155 fps, because differencing skipped 55 % of the frames and the
 burst was short. The old path collapses when the picture changes *every* frame and the run is
-*sustained*: that is the synthetic table above, and it is the captain's reported case.
+*sustained*: that is the synthetic table above, and it is the maintainer's reported case.
 So the honest claim is not "6 fps became 184 fps everywhere" — it is:
 
 * **Bytes on the wire fell ~1,000×** (93,112 → 87 per transmitted frame). That is unambiguous
@@ -532,7 +532,7 @@ regardless of what we send it. Byte counts are exact; the saturation is unambigu
 
 ---
 
-## 8. What the captain should see
+## 8. What the maintainer should see
 
 In the terminal frontend, press **`t`** for the stats overlay, or read the Status panel:
 
@@ -752,7 +752,7 @@ optimise it away.
 the screen.** Reaching a 16.74 ms budget at 0.42 ms/Mpx would take ~40 megapixels of picture,
 about 5.6× this display. Free-running at 59.7 fps into a fullscreen window leaves the
 terminal 7.8 ms behind (`--free-run --fence-every 30`), not backlogged. So on *this* box the
-captain's fullscreen report does not reproduce — said plainly, because the useful outcome is
+maintainer's fullscreen report does not reproduce — said plainly, because the useful outcome is
 not a fix here but an instrument that answers the question **on his** box, and paces to the
 answer if it is below 59.7.
 

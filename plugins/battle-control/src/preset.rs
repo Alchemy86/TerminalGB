@@ -204,7 +204,7 @@ impl PresetFile {
     /// The presets that ship with the plugin, so `one keypress` works before
     /// anybody has written a file.
     ///
-    /// The first is the captain's own example, and it is first on purpose: it
+    /// The first is the maintainer's own example, and it is first on purpose: it
     /// is the one that has to work.
     pub fn builtin() -> PresetFile {
         let text = include_str!("builtin.preset");
@@ -515,7 +515,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_built_in_presets_parse_and_lead_with_the_captains_example() {
+    fn the_built_in_presets_parse_and_lead_with_the_maintainers_example() {
         let f = PresetFile::builtin();
         assert!(f.presets.len() >= 3, "{:?}", f.names());
         let first = &f.presets[0];

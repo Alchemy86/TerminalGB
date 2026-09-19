@@ -391,7 +391,7 @@ impl Outcome {
 
 /// Where one cell's wall clock went.
 ///
-/// **The captain's standing condition on this rig is that it is only worth
+/// **The maintainer's standing condition on this rig is that it is only worth
 /// having if it is fast**, so it says which part to attack rather than leaving
 /// anyone to guess. Three buckets that add up to the wall clock of the attempts
 /// themselves:
@@ -745,7 +745,7 @@ pub fn gap_on(reference: &Cell, arm: &Cell, o: Outcome) -> Option<Gap> {
 
 /// Do two subjects' gaps differ, or is the difference inside the noise?
 ///
-/// **This is the captain's question about the species pair and it deserves its
+/// **This is the maintainer's question about the species pair and it deserves its
 /// own answer rather than an eyeball on two intervals.** If the gap is the same
 /// on two fights whose absolute rates differ, the distillation is
 /// species-independent and the fights merely have different ceilings. If the
@@ -818,7 +818,7 @@ pub struct Expectation {
     /// arrived with, so a player that does nothing at all scores it — which
     /// makes it the half of the task a summary can flatter. Pooled with the
     /// replacements it is invisible; the three declines in the level-up pool
-    /// were the captain's own named requirement for exactly that reason.
+    /// were the maintainer's own named requirement for exactly that reason.
     pub decline: bool,
 }
 

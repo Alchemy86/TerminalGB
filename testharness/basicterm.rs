@@ -74,7 +74,7 @@ fn child_main() -> ! {
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Fake {
     /// A VTE-family terminal: answers DA and CPR, ignores the kitty keyboard
-    /// query. This is the captain's GNOME Terminal / Ptyxis.
+    /// query. This is the maintainer's GNOME Terminal / Ptyxis.
     Basic,
     /// Answers the kitty keyboard query too.
     Kitty,
@@ -280,7 +280,7 @@ fn drive(
         // between them — but `sleep(30ms)` on a busy box is however long the
         // scheduler feels like, so the harness would itself deliver presses far
         // enough apart to *be* separate presses, and the emulator was then
-        // right to act on them. Measured by the captain: 2 failures in 3 runs
+        // right to act on them. Measured by the maintainer: 2 failures in 3 runs
         // at load average 8-15, green on a quiet machine. A burst on the wire
         // is what auto-repeat is; how fast this process can pace one is not
         // part of the claim, so it is taken out of the measurement rather than

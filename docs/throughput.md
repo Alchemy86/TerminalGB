@@ -287,7 +287,7 @@ turbo bins a 20-core part gives up when all twenty are busy.
 
 ### Against the field, fairly
 
-`docs/measured/` and `/home/aaron/pokemon-run/THROUGHPUT.md` record a GPU implementation of Pokémon
+`docs/measured/` and `~/pokemon-run/THROUGHPUT.md` record a GPU implementation of Pokémon
 Red reporting roughly **160k fps across 8,192 environments**, against our previously-published
 ~84k. On the numbers above we are now past that on a CPU — and **that comparison should be made
 carefully, or not at all**:
@@ -1020,7 +1020,7 @@ nothing.
 
 ### 14.4 The two-budget rule this round is the first to use
 
-The captain's framing, and it is what made the table above a decision rather than an argument:
+The maintainer's framing, and it is what made the table above a decision rather than an argument:
 **`identical` is where every last row is chased, and the performance path may take liberties so
 long as nothing a game can see changes.** Both halves are load-bearing here. Under one budget
 the mode-0 batch would have been a judgement call about ten rows against fifteen per cent; under

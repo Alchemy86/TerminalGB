@@ -187,7 +187,7 @@ class Camera:
 
     # **Rule 9: the zoom TRAVELS. It never cuts.**
     #
-    # Reported in the captain's own words: *"the videos are supposed to follow
+    # Reported in the maintainer's own words: *"the videos are supposed to follow
     # the majority and be smooth but it suddenly jerks OUT when more
     # entertaining say mt moon, instead of either panning out and across
     # nicely"*. Rule 7 fixed the shape rule 3 could not handle — a swarm split

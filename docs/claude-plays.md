@@ -182,7 +182,7 @@ Two of these rules were written after watching a real run fail:
 
 ### 2.3 The commentary panel
 
-This is the part that makes it a stream, and the captain's brief narrows it: the
+This is the part that makes it a stream, and the maintainer's brief narrows it: the
 destination is **Twitch via OBS**, on a fixed 16:9 canvas, and the audience is
 strangers with no context who cannot pause and cannot zoom.
 
@@ -509,7 +509,7 @@ party**. Everything else is for the operator and belongs off-canvas.
 ```
 
 The commentary panel is full width along the bottom, which is both what the
-captain asked for and what gives it enough columns to stay readable at the large
+maintainer asked for and what gives it enough columns to stay readable at the large
 font a stream needs.
 
 ### Canvas and encoder (Twitch)
@@ -881,7 +881,7 @@ nothing else.
 ## 11. The third session — watched live, stopped on purpose
 
 Two runs from power-on with no save, **in the TUI in a visible window with the
-captain watching** — which is itself why this session produced more fixes than
+maintainer watching** — which is itself why this session produced more fixes than
 the first two: a watching human reads stalls, wasted presses and blindness off
 the screen faster than any log.
 
@@ -897,7 +897,7 @@ ones were the TUI's own too-tight timeout, fixed below).
 
 **Run 2 — Claude Sonnet, after the fixes.** Same route in a third of the game
 time: overworld by frame ~6,800, lab at frame ~12,700, at the table when the
-captain called the demo. 25 decisions, **0 timeouts**, median 5.1 s / max
+maintainer called the demo. 25 decisions, **0 timeouts**, median 5.1 s / max
 8.7 s per call, **$1.22 reported**. Sonnet's play was visibly sharper (it
 announced START on the naming screen unprompted, with the enforced rule as a
 backstop) — and it was exactly as blind at the table, because the blindness is
@@ -945,7 +945,7 @@ that is **not** background-tilemap text:
 
 ## 12. The screen as a first-class output — what it already was, and what it is now
 
-The captain, after watching §11: *"we need the game to output its screen text
+The maintainer, after watching §11: *"we need the game to output its screen text
 like it does other stats directly so ai can get a better handle upon whats
 happening."*
 

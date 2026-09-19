@@ -16,7 +16,7 @@
 
 ## The idea
 
-The captain's ask: once our own emulator is correct against the standard test suites, turn the
+The maintainer's ask: once our own emulator is correct against the standard test suites, turn the
 **test harness itself into a tool other people can point at *their* emulator** — to see what
 works, what is missing, and *why* — and eventually extract it into its own crate/repo so it can
 live independently of this codebase.

@@ -578,7 +578,7 @@ impl TrainerPlugin {
         }
 
         st.catch_rate = catch_rate;
-        // The direction of travel, which is the half of this the captain asked
+        // The direction of travel, which is the half of this the maintainer asked
         // for: a number that moves is only useful if you can see it move.
         let now = st
             .best_catch_chance()

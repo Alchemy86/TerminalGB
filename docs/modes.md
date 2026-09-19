@@ -179,7 +179,7 @@ that workload.
 
 ### 4b. The horizon batch, certified
 
-The bar is the captain's: **a speed flag may drop cycle accuracy; what it may
+The bar is the maintainer's: **a speed flag may drop cycle accuracy; what it may
 not do is move the Pokémon frames.** `horizon-batch` is measured against the
 flag that was already in the preset, because that is the honest comparison — it
 *includes* that liberty and the question is what it adds to it.

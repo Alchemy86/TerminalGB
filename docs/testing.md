@@ -11,7 +11,7 @@
 
 ## Why this page exists
 
-The captain's ask: *"pull up Game Boy logic and design / known quirks and tests so we can
+The maintainer's ask: *"pull up Game Boy logic and design / known quirks and tests so we can
 WRITE expected KNOWN outcomes as TESTS BEFORE we look to improve or correct the running of
 games."* This page names the **yardstick** — the published, deterministic test suites the
 Game Boy emulator community treats as ground truth — so that every "expected behaviour" in
@@ -39,7 +39,7 @@ because adopting the wrong yardstick would be worse than none:
   contain a **real Game Boy CPU on a chip**. They are hardware, not emulators, so they
   can't legitimately headline an emulator benchmark.
 
-The useful answer — the one the captain actually wants — is below: the suites the community
+The useful answer — the one the maintainer actually wants — is below: the suites the community
 does use, and which real emulators (SameBoy, BGB, Gambatte, mGBA) are the references.
 Community aggregation points: [gbdev GBEmulatorShootout](https://gbdev.io/GBEmulatorShootout/)
 (9 suites × 17 emulators; no Nintendo emulator in it) and

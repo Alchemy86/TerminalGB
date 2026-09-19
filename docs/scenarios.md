@@ -326,7 +326,7 @@ replay. `faithful()` requires the final state hash, the frame count, the ending
 
 ---
 
-## 5. Measured, on the captain's own Pokémon Blue
+## 5. Measured, on the maintainer's own Pokémon Blue
 
 A start state was made by booting his cartridge and choosing CONTINUE — the
 game's own save, entered the game's own way. The scenario is

@@ -1,7 +1,7 @@
 # Pool sweep, 2026-08-25 — nothing is stranded
 
-Every worktree under `/home/aaron/.treehouse/gameboy-795d23/` and
-`/home/aaron/.treehouse/gameboy-b03097/`, and every `fm/gameboy-*` branch, checked
+Every worktree under `~/.treehouse/gameboy-795d23/` and
+`~/.treehouse/gameboy-b03097/`, and every `fm/gameboy-*` branch, checked
 against the **real** `main` at `c575bb4`. **Result: no lost work.** Everything below is
 already on `main`, most of it in a more developed form than the copy in the pool.
 

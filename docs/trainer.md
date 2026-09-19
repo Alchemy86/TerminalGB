@@ -202,7 +202,7 @@ anything is dropped ([`fit_bar`](../src/screen/tui.rs)), so a narrow window gets
 `? help` rather than losing the controls, and never a *clipped* hint — which a
 reader cannot tell from a complete one. The full key reference stays behind `?`.
 
-**Not a menu.** The captain asked for "controls across the top, menu bits or
+**Not a menu.** The maintainer asked for "controls across the top, menu bits or
 whatever". This is the status half. A genuine interactive menu — focus,
 navigation, a modal stack, and every action reachable two ways — is a
 substantially larger piece of work than a bar, and building half of one
@@ -262,7 +262,7 @@ and long names truncate with `…`. Everything still reads. `no_line_overflows_a
 renders every section at every width from 8 to 60 and asserts nothing exceeds it, so the
 guarantee is a test rather than arithmetic in a comment.
 
-Out of battle the party is the whole panel — here on the captain's own save, a party of two,
+Out of battle the party is the whole panel — here on the maintainer's own save, a party of two,
 where the empty slots simply are not drawn and the panel shrinks to what it has to say:
 
 ![out of battle](trainer-panel/3-out-of-battle.png)
@@ -489,7 +489,7 @@ false` and draws as `?`; a block that fails wholesale sets `enemy_team_unknown` 
 says `TEAM ?`. That also covers the real transient: the first frames of a trainer battle,
 before `LoadEnemyMonData` has run, where the block still holds the previous battle's contents.
 
-Verified against the captain's own cartridge by playing a new game headlessly into the rival
+Verified against the maintainer's own cartridge by playing a new game headlessly into the rival
 battle in Oak's Lab (`cargo run --release --example trainer_layout -- --rom <rom>
 --to-battle`): `wIsInBattle = 2`, `wEnemyPartyCount = 1`, and the species list, the
 `party_struct` copy and `wEnemyMonSpecies` all read `$B1` — SQUIRTLE, which is what the rival
@@ -507,7 +507,7 @@ The technique the strip used is not lost — it is what the party column is buil
 composed image rather than six** is the whole design there: six would mean six terminal image
 ids, six placements and six encodes every time anything changed.
 
-**What is not here: the trainer's own portrait.** The captain asked for the opposing trainer's
+**What is not here: the trainer's own portrait.** The maintainer asked for the opposing trainer's
 picture beside their team. `wTrainerClass` is available, but the pic pointers
 (`TrainerPicAndMoneyPointers`) and the bank the trainer pictures live in are not among the
 symbols derived in [Where every address came from](#where-every-address-came-from), and this
@@ -621,7 +621,7 @@ Three facts, each from the disassembly, are what make it work
 feature says otherwise — every one of them, at every terminal width, reads *would be shiny if
 traded to Gen 2*. A unit test asserts exactly that: it renders the banner at every width from
 8 to 200 cells and fails if the word "shiny" ever appears without its qualifier. Getting this
-wrong would be worse than not shipping it, because the captain would act on it.
+wrong would be worse than not shipping it, because the maintainer would act on it.
 
 ### What gets a verdict, and what does not
 
@@ -656,7 +656,7 @@ at any window size, in both the windowed and fullscreen layouts).
 - **A shiny verdict** fills the row: black on bright yellow, `★ WILD NIDORAN L7 WOULD BE SHINY
   IF TRADED TO GEN 2 ★ DV 8/14/10/10/10 …`, padded edge to edge so it reads as a bar rather
   than a sentence. It also raises a toast and rings the terminal bell — **once**, on the frame
-  the Pokémon appears, which is when the captain is looking at the game and not at a panel.
+  the Pokémon appears, which is when the maintainer is looking at the game and not at a panel.
 - **An ordinary encounter** gets the same row, quietly: the species, the DVs, and *why* it is
   not shiny (`0/3 tens, atk bit yes`). A near miss is interesting, and a banner that only ever
   appears for a shiny gives no way to tell "working, and this one is ordinary" from "not

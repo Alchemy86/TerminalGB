@@ -410,7 +410,7 @@ mod stat_mod_tests {
         assert!(StatMods::from_bytes([1, 13, 7, 7, 7, 7]).is_valid());
     }
 
-    /// The captain's own observation is the test: one Growl took an attack of
+    /// The maintainer's own observation is the test: one Growl took an attack of
     /// 10 down to 6. That is `-1`, and `-1` is **two thirds**, not a half —
     /// which is exactly the assumption this table exists to stop.
     #[test]

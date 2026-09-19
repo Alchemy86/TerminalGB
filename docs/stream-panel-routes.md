@@ -1,6 +1,6 @@
 # Getting the panel into the feed — three routes, and a recommendation
 
-> The captain: *"is it also possible to be able to toggle the feed to INCLUDE the panel's info too,
+> The maintainer: *"is it also possible to be able to toggle the feed to INCLUDE the panel's info too,
 > or just be the game?"* — and then, on seeing the cost: *"we can't just make the window the content
 > of the camera?"*
 

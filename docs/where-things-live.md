@@ -1,6 +1,6 @@
 # Where things live, and why
 
-> **Written on 2026-08-19, after the captain had to give the same correction
+> **Written on 2026-08-19, after the maintainer had to give the same correction
 > twice.** On 2026-08-18 this repository took 50 commits and AgentGB took 4, and
 > everything about what the agent had achieved — reaching Cerulean, beating
 > Brock, catching Pokémon, the test rig, move learning — had been written in
@@ -13,7 +13,7 @@
 **TerminalGB is the terminal tool that carries the harness. AgentGB is the home
 of the teacher-and-student story.**
 
-The captain's own wording, 2026-08-17: *"TerminalGB is not the place for it,
+The maintainer's own wording, 2026-08-17: *"TerminalGB is not the place for it,
 AgentGB is. Terminal is just the terminal tool."* This is an emulator that
 happens to carry a harness; AgentGB is the project that trains the thing.
 

@@ -550,7 +550,7 @@ mod tests {
     }
 
     /// **The shelf must never claim more than it did.** Every wording path is
-    /// checked because this is the promise the captain asked us to keep.
+    /// checked because this is the promise the maintainer asked us to keep.
     #[test]
     fn the_shelf_never_claims_a_soundtrack_it_did_not_get() {
         let rom = testrom::tone_rom();

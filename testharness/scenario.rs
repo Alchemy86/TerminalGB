@@ -17,7 +17,7 @@
 //! Everything here drives the synthetic Gen 1-shaped cartridge in
 //! [`support/fake_gen1.rs`](support/fake_gen1.rs) — twenty instructions of our
 //! own presenting the same RAM layout, with a working door at (8,8). A test
-//! that needs the captain's cartridge is a test CI skips, and a skipped test
+//! that needs the maintainer's cartridge is a test CI skips, and a skipped test
 //! proves nothing.
 //!
 //! # The demonstration, in one sentence
@@ -636,7 +636,7 @@ fn case_an_impossible_scenario_is_refused_before_it_costs_anything() -> Case {
 }
 
 /// The whole cost ceiling has to be on screen before the first call, because
-/// the money is the captain's.
+/// the money is the maintainer's.
 fn case_the_cost_ceiling_is_stated_before_the_run() -> Case {
     let (_gb, d) = machine("briefing");
     let f = scenario_file(

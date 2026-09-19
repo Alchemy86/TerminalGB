@@ -3,7 +3,7 @@
 //! `panel_probe` sweeps registers whose meaning came out of a working driver:
 //! an addressing window, a frame-rate divider, a parameter byte. This one
 //! writes registers **nobody has documented for this controller**, and starts a
-//! refresh it then cuts the power on. The captain authorised it explicitly on
+//! refresh it then cuts the power on. The maintainer authorised it explicitly on
 //! his own device — *"All options are ok to test. It's my test board. Go nuts."*
 //!
 //! Kept as a second binary rather than a section of the first, because the two
@@ -64,7 +64,7 @@
 //! (`0x05`/`0x06`/`0x08`) and `VDCS` (`0x82`) are not written. Over-voltage is
 //! the one thing that damages e-paper outright and it cannot make a refresh
 //! shorter, so it is the one category left alone whatever the authorisation —
-//! the captain gave permission to test options, not to break the panel for no
+//! the maintainer gave permission to test options, not to break the panel for no
 //! possible gain.
 //!
 //! **It ends on a clean picture.** A full reset, a full re-init and the six-ink

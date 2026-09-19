@@ -9,7 +9,7 @@
 > memory, indexed PNG, and why WezTerm rendered nothing over the Kitty protocol — is
 > [How a frame gets into a terminal](rendering.md).
 
-> The captain, playing on a big window: *"The frame rate on larger screen is diabolical. We
+> The maintainer, playing on a big window: *"The frame rate on larger screen is diabolical. We
 > should not be losing running speed and lag just because our 8-bit game screen is larger.
 > We are lightyears ahead with tech and power. It's just a fixed size of square — let's scale
 > this fucker better."*
@@ -48,7 +48,7 @@ Concretely, the old path called `ratatui-image`'s `Resize::Scale`, which:
    **iTerm2**: PNG-**deflates** those 2.2 M pixels — 85 ms of CPU, i.e. 11.7 fps before
    anything else happens.
 
-18 fps at the captain's window size falls straight out of that. It also explains why it got
+18 fps at the maintainer's window size falls straight out of that. It also explains why it got
 worse as the window grew, and why the *game* felt laggy rather than merely choppy: the old
 loop built the image inside `step_frame`, so emulation and encoding were the same piece of
 work, and the audio clock is slaved to emulation.
@@ -130,7 +130,7 @@ written straight to the terminal after the frame is flushed.
 
 ### The stats overlay froze the picture
 
-> The captain: *"when the stats overlay is on, the game does not refresh. I hear things but the
+> The maintainer: *"when the stats overlay is on, the game does not refresh. I hear things but the
 > screen does not change until I close the overlay."*
 
 Three independent causes, all removed:

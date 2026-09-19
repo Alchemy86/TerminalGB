@@ -32,7 +32,7 @@
 //! # `--tty`: measuring the half that was hiding
 //!
 //! Headless numbers are why a 91 KB-per-frame bug survived: the bench reported
-//! **2,395 fps** while the captain's WezTerm ran the same build at **6**. Our
+//! **2,395 fps** while the maintainer's WezTerm ran the same build at **6**. Our
 //! side of the pipe was never the problem — the terminal's parse and upload
 //! was, and writing to `/dev/null` cannot see it.
 //!

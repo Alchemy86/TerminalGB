@@ -4819,7 +4819,7 @@ fn parse(args: &[String]) -> Args {
 }
 
 /// **Never run against a ROM where it lives** — the MBC writes a `.sav` beside
-/// it, and the captain's cartridges are on this machine.
+/// it, and the maintainer's cartridges are on this machine.
 /// The cartridge image, read **once** for a whole command.
 ///
 /// It used to be read from the player's own `~/roms` and written back out to

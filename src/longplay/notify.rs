@@ -2,7 +2,7 @@
 //!
 //! # Why ntfy and why `curl`
 //!
-//! The captain already uses ntfy for exactly this class of "how close are we?"
+//! The maintainer already uses ntfy for exactly this class of "how close are we?"
 //! push, so this wires up the mechanism he has rather than inventing one. The
 //! transport is the system `curl` binary for the same reason
 //! [`crate::portal::http`] uses it: this repository treats its dependency count

@@ -72,7 +72,7 @@ delays; it does not touch the waveform.
 
 Everything else measured identical: the addressing window `0x83` that GxEPD2
 calls partial refresh, the `DISPLAY_REFRESH` parameter byte, a forced
-temperature, and — with the captain's explicit authorisation, twice — the
+temperature, and — with the maintainer's explicit authorisation, twice — the
 `LUT_SEL` bit that would have exposed a black-and-white waveform if this
 controller had one. It does not.
 

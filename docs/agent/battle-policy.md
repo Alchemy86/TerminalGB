@@ -234,7 +234,7 @@ silent — nothing fails, the run simply stops making progress. Link 11 went
 
 ### Running is a decision
 
-The flee trap (`/home/aaron/pokemon-run/FLEE-TRAP.md`, outside the repository) is what happens
+The flee trap (`~/pokemon-run/FLEE-TRAP.md`, outside the repository) is what happens
 when it is a fallback: a policy rewarded for arriving learns to flee every
 encounter, and then meets a trainer battle it cannot flee and deadlocks.
 
@@ -285,7 +285,7 @@ figure, not a tuned one.
 ## 3. Measured
 
 The certification runs of `05-the-rival-battle` and `06-cross-route-1` — 3,000
-attempts each from 3,000 held-out entry states, on the captain's Pokémon Blue.
+attempts each from 3,000 held-out entry states, on the maintainer's Pokémon Blue.
 This is the report the standing order asks for, beside the pass rate rather than
 instead of it, and the two links exercise opposite halves of the policy: 05 is
 one trainer battle that cannot be fled, 06 is a route full of wild ones that
@@ -393,7 +393,7 @@ They have unit tests; they have no run behind them.
 ## 4. What a screen-only student would not have
 
 Stated plainly, because the no-crutches rule
-(`/home/aaron/pokemon-run/NO-CRUTCHES.md`) turns on it. A player looking at the battle screen sees both names and levels,
+(`~/pokemon-run/NO-CRUTCHES.md`) turns on it. A player looking at the battle screen sees both names and levels,
 both HP *bars*, our exact HP, and our move list with each move's type and PP.
 It does **not** see either side's stats, the opponent's exact HP, or the
 opponent's move list. This policy uses all three.

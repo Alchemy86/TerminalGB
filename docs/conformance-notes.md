@@ -1,6 +1,6 @@
 # Conformance notes — raw material for the standalone evaluation tool
 
-Standing convention (captain, 2026-08-13): every real emulation bug we fix is a
+Standing convention (maintainer, 2026-08-13): every real emulation bug we fix is a
 ready-made test case for the planned standalone Game Boy **conformance tool** —
 one that explains *why* a test failed and *what behaviour is missing*, not just
 pass/fail. Capture the reasoning at the moment of the fix, per entry:
@@ -372,7 +372,7 @@ Cost, Pokémon Blue from reset, 6,000 frames, pinned to one P-core, load 2.5:
 | player (pixels + audio) | 0.094 ms/frame (178x) | **0.373** (45x) |
 | collector (`--no-pixels --no-audio-out`) | 0.057 ms/frame (295x) | **0.382** (44x) |
 
-0.373 ms is **2.2 % of a 16.743 ms frame**, which is the captain's stated
+0.373 ms is **2.2 % of a 16.743 ms frame**, which is the maintainer's stated
 condition. 6.7x on a collector is not, which is why `standard` survives.
 
 ### THE CARTRIDGE CAN TELL THE TWO ENGINES APART, AND THAT IS THE BLAST RADIUS
@@ -737,7 +737,7 @@ machine each of them is.*
 
 ## 2026-08-16 — an outside paper's Gen 1 claims, measured; and the one our own engine had backwards
 
-The captain's order was to challenge the figures in Appendix G of *The PokéAgent
+The maintainer's order was to challenge the figures in Appendix G of *The PokéAgent
 Challenge* ([arXiv 2603.15563v2](https://arxiv.org/abs/2603.15563)) rather than
 take them on trust, since this repository has a cartridge-driven Gen 1 battle
 harness and can settle them. Eleven statements were measured on retail Pokémon
@@ -913,7 +913,7 @@ assuming it will read is how six smudges get shipped.
 
 ## 2026-08-15 — the five "principled reds", re-opened against a running SameBoy (SameSuite 72/76 → 73/76)
 
-Five rows in this repository had been recorded as red-for-a-reason and left alone. The captain
+Five rows in this repository had been recorded as red-for-a-reason and left alone. The maintainer
 asked for them to be re-checked rather than taken on trust, with another emulator's source in
 front of the crew. **Two of the five reasons were wrong**, one row is now green, and the other
 four have measurements behind them instead of quotations.
@@ -1261,7 +1261,7 @@ not obliged to be the same edge**.
 
 ## 2026-08-15 — a Gen 1 ↔ Gen 2 trade between two hand-launched emulators, and the two-process path that had no coverage at all
 
-The captain started Pokémon Gold in one terminal window and Pokémon Blue in
+The maintainer started Pokémon Gold in one terminal window and Pokémon Blue in
 another — by hand, no lobby, no flags, nothing scripted — and the two processes
 paired over the ordinary `link = auto` unix-socket rendezvous and **completed a
 Time Capsule trade**. Everything this repository had previously proved about the
@@ -1311,7 +1311,7 @@ and links them.
 * **Every field the two generations share crosses unchanged; the species index
   does not.** Gen 2 dex `1` arrived in Blue as internal index `$99` (153) — checked
   against `PokedexOrder` (`pokered/data/pokemon/dex_order.asm`) read **out of the
-  captain's own cartridge**, where the table occurs exactly once (`$41024`) and
+  maintainer's own cartridge**, where the table occurs exactly once (`$41024`) and
   holds 151 distinct dex numbers. DVs (`$FF00`), OT id (46116), the OT name's
   eight raw bytes, level, experience, PP, stat experience and every stat are
   byte-identical on both sides.
@@ -3341,7 +3341,7 @@ debt. Misdiagnosed four times as APU cost.
 framebuffer is byte-perfect throughout, and the defect only exists when a **host
 audio player is attached**, which no ROM-driven suite does. Our own benchmarks
 missed it for the same reason — `render_bench` is headless and reported a
-healthy 0.246 ms/frame while the captain's session ran at 6 fps. This is the
+healthy 0.246 ms/frame while the maintainer's session ran at 6 fps. This is the
 same class of gap as the three terminal-render bugs: a ROM-driven suite compares
 framebuffers, and everything here leaves the framebuffer correct.
 

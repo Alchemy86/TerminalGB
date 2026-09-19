@@ -11,7 +11,7 @@
 //! background for the bottom, giving two vertical "pixels" per character cell.
 //!
 //! That is crisp *by construction*: a cell is two flat colours, there is
-//! nothing in it that can be soft. And yet the captain reported, twice, that
+//! nothing in it that can be soft. And yet the maintainer reported, twice, that
 //! "running gameboy on our normal terminal is blurry again". The first report
 //! was the desktop OpenGL frontend's `gl::LINEAR` texture filters
 //! (`docs/display.md`). This one is here, and the cause is **the sampling, not

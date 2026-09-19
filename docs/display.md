@@ -18,7 +18,7 @@
 
 The Game Boy panel is **160×144** — a tiny, fixed grid of pixels resolved to 4 grey
 shades (DMG) or 15-bit RGB (CGB). Every frontend has to blow that up to fill a real
-window/canvas/terminal, and **how** it does the blow-up is the whole question the captain
+window/canvas/terminal, and **how** it does the blow-up is the whole question the maintainer
 asked: *"it's just pixel screens — can we enlarge, smoothly, scale like vector?"*
 
 > **Implementation status (2026-08-13).** The 🥇 desktop fix and 🥈 web fix below
@@ -49,7 +49,7 @@ asked: *"it's just pixel screens — can we enlarge, smoothly, scale like vector
 > `image-rendering: pixelated`, terminal
 > [`screen::halfblocks`](../src/screen/halfblocks.rs) replacing `ratatui-image`'s
 > hard-coded `FilterType::Triangle`. Full story, before/after screenshots in the
-> captain's own terminal, the per-terminal matrix and the regression guard:
+> maintainer's own terminal, the per-terminal matrix and the regression guard:
 > [**§1 → the half-block path
 > smoothed**](#the-half-block-path-smoothed--the-terminals-version-of-the-desktop-linear-bug).
 
@@ -207,7 +207,7 @@ terminal to rasterise no glyph, so a font with a poor `▀` cannot soften the la
 Game Boy picture is mostly made of. `render_path = legacy` still takes the library's path, so
 one binary can A/B the two in the same terminal.
 
-Before and after, both in **Ptyxis 50.1 (VTE)** — the captain's own terminal — at the same
+Before and after, both in **Ptyxis 50.1 (VTE)** — the maintainer's own terminal — at the same
 80×24, same 2.8× scale, same `Proto halfblocks`:
 
 | before (`render_path = legacy`) | after (default) |
@@ -292,7 +292,7 @@ of scope for this page, but worth stating so the picture is complete.
 
 ## 2. The options, and how they actually differ
 
-The captain named three things. They are genuinely different techniques with different looks
+The maintainer named three things. They are genuinely different techniques with different looks
 and different costs. Here they are on a diagonal edge — the case where the difference is
 most visible.
 
@@ -331,7 +331,7 @@ disliked for retro content.
 
 ### Option 3 — "Like vector" — **pixel-art upscaling algorithms**  *(the interesting one)*
 
-This is what the captain means by *"scale like vector"*: algorithms that look at each pixel's
+This is what the maintainer means by *"scale like vector"*: algorithms that look at each pixel's
 neighbourhood, **detect edges**, and synthesise smooth diagonals and curves — so a blocky
 sprite comes out looking like it was drawn as vectors, **not** blurred. They are a real middle
 ground between blocky and smeary.

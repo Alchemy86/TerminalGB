@@ -419,7 +419,7 @@ could not be verified and are deliberately absent.)*
 
 ## 9. A real run — and the finding that came out of it
 
-All of this is Pokémon Blue, the captain's own cartridge, on this machine.
+All of this is Pokémon Blue, the maintainer's own cartridge, on this machine.
 
 ### The control: a canned driver, no model, no cost
 

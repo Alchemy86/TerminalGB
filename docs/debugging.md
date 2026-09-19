@@ -15,7 +15,7 @@
 
 ## Why this page exists
 
-The captain's ask: *"see if we can have debug modes etc so we can see or manipulate things,
+The maintainer's ask: *"see if we can have debug modes etc so we can see or manipulate things,
 screenshots, video stream etc."* — with a pointer to a modern Rust emulator
 ([ioncodes/ayyboy-advance](https://github.com/ioncodes/ayyboy-advance)) for hints, and one
 firm instruction: **keep Rust and modern**, take ideas that transfer, and **do not design a
@@ -253,7 +253,7 @@ pub fn wb(&mut self, addr: u16, val: u8) {
 
 A release build contains no watchpoint code and pays not a single branch; a `--features
 debug` build pays one predictable, well-predicted branch per access. This is precisely the
-constraint the captain set: *"a debug build that runs at half speed is fine; a release build
+constraint the maintainer set: *"a debug build that runs at half speed is fine; a release build
 paying for debug hooks it never uses is not."* In practice the branch is far cheaper than
 half speed — but the guarantee is what matters: **release is untouched.**
 
@@ -293,7 +293,7 @@ Ranked by how often it actually finds an emulation bug (BGB/SameBoy experience):
 | **APU waveform display** | — | high | **Low — explicitly not worth building.** Looks impressive, rarely fixes anything; the channel *registers* are what you actually read. |
 | **Cycle/frame timing readout** | `timing()` | trivial | Medium — pairs with stepping |
 
-### 2. Manipulate — the harder half the captain asked for
+### 2. Manipulate — the harder half the maintainer asked for
 
 What is **cheap** here, given the architecture:
 
@@ -492,7 +492,7 @@ The net: **native = Rust handlers (typed, unlimited); web/runtime = declarative 
 
 ## The public extension surface — emit, control, transport
 
-> The captain, after the sections above were drafted: *"in OUR emulator, adding things where
+> The maintainer, after the sections above were drafted: *"in OUR emulator, adding things where
 > it can output or emit or be plugged into at runtime would be great, so even custom tools
 > could plug into the data streams, catch, pause, write."*
 
@@ -534,7 +534,7 @@ the *disabled* cost at zero:
 - **Batching.** The ring is drained in slices — a subscriber pulls "everything since I last
   looked" as one `&[Event]`, so a 60 Hz tracer does 60 drains/s, not 4 000 000 dispatches/s.
 
-**Proving zero-cost-when-idle.** This is a claim to *verify*, not assert (the captain's
+**Proving zero-cost-when-idle.** This is a claim to *verify*, not assert (the maintainer's
 release-speed rule). The check: build `--release` with no `debug` feature and no subscribers,
 and confirm (a) the instruction-retired and memory-access emit sites are **absent from the
 disassembly** (they are `#[cfg(feature = "debug")]`), and (b) the cheap events' emit sites

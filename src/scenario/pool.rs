@@ -3,7 +3,7 @@
 //! # The measurement that put this here
 //!
 //! A corpus directory's bytes are not where anyone expects. Measured on a real
-//! 720-attempt Mt Moon film pass (`/home/aaron/pokemon-run/mtmoon-film`,
+//! 720-attempt Mt Moon film pass (`~/pokemon-run/mtmoon-film`,
 //! 143 MB):
 //!
 //! | | files | on disk |

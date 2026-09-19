@@ -1,5 +1,5 @@
 //! Three original ~30s opening-theme sketches for a TerminalGB short — the
-//! captain's ask was "the feeling of the Pokémon opening, with a melody
+//! maintainer's ask was "the feeling of the Pokémon opening, with a melody
 //! that's genuinely ours." Full derivation, and exactly what each variant
 //! borrowed from the era versus wrote fresh, is in
 //! `docs/opening-theme/README.md`; this file is the composition itself.

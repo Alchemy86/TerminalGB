@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Every tile the swarm walked, drawn as a directional arrow over the atlas.
 
-    python3 tools/pewter-chain/path_arrows.py still /home/aaron/pokemon-run/chain-film \
-        --out /home/aaron/pokemon-run/pewter-path-arrows.png
-    python3 tools/pewter-chain/path_arrows.py video /home/aaron/pokemon-run/chain-film \
-        --out /home/aaron/pokemon-run/pewter-path-arrows --mp4 --speed 900
+    python3 tools/pewter-chain/path_arrows.py still ~/pokemon-run/chain-film \
+        --out ~/pokemon-run/pewter-path-arrows.png
+    python3 tools/pewter-chain/path_arrows.py video ~/pokemon-run/chain-film \
+        --out ~/pokemon-run/pewter-path-arrows --mp4 --speed 900
 
 A movement map, not a film. `swarm_film.py` answers *where is everybody right
 now*; this answers *where did anybody ever go, which way, and how much of the
@@ -591,8 +591,8 @@ def cmd_summary(a):
     note("endings is the survivorship statement: agents stop where they failed "
          "a link, so the arrows are several populations laid on one map.")
     helps([
-        f"{SELF} still {a.tracks} --out /home/aaron/pokemon-run/pewter-path-arrows.png",
-        f"{SELF} video {a.tracks} --out /home/aaron/pokemon-run/pewter-path-arrows --mp4",
+        f"{SELF} still {a.tracks} --out ~/pokemon-run/pewter-path-arrows.png",
+        f"{SELF} video {a.tracks} --out ~/pokemon-run/pewter-path-arrows --mp4",
         f"{SELF} summary {a.tracks} --json   # the same figures, parsed",
     ])
     return 0
@@ -867,8 +867,8 @@ def cmd_home(a):
         ("double-headed", "the tile was walked both ways"),
     ])
     roots = []
-    for d in ("/home/aaron/pokemon-run/chain-film",
-              "/home/aaron/pokemon-run/chain-film-big",
+    for d in ("~/pokemon-run/chain-film",
+              "~/pokemon-run/chain-film-big",
               "target/cert"):
         if os.path.isdir(d):
             try:
@@ -893,15 +893,15 @@ def cmd_home(a):
 HELP = {
     "summary": (
         "What the tracks contain, before anything is rendered.",
-        [f"{SELF} summary /home/aaron/pokemon-run/chain-film",
-         f"{SELF} summary /home/aaron/pokemon-run/chain-film --json"],
+        [f"{SELF} summary ~/pokemon-run/chain-film",
+         f"{SELF} summary ~/pokemon-run/chain-film --json"],
         ["--paced F   how equal the two opposite directions must be before a "
          "tile counts as walked both ways (default 0.40)"],
     ),
     "still": (
         "One composite PNG: every walked tile, one arrow each.",
-        [f"{SELF} still /home/aaron/pokemon-run/chain-film "
-         f"--out /home/aaron/pokemon-run/pewter-path-arrows.png",
+        [f"{SELF} still ~/pokemon-run/chain-film "
+         f"--out ~/pokemon-run/pewter-path-arrows.png",
          f"{SELF} still <dir> --maps 0x0C --tile-px 20 --out <png>"],
         ["--colour E     direction (default): hue is the way they walked, "
          "size and brightness the agent count. traffic: the original ramp",
@@ -914,8 +914,8 @@ HELP = {
     ),
     "video": (
         "PNG frames in which the arrows appear as the swarm reaches the tiles.",
-        [f"{SELF} video /home/aaron/pokemon-run/chain-film "
-         f"--out /home/aaron/pokemon-run/pewter-path-arrows --mp4 --speed 900"],
+        [f"{SELF} video ~/pokemon-run/chain-film "
+         f"--out ~/pokemon-run/pewter-path-arrows --mp4 --speed 900"],
         ["--colour E     direction (default) or traffic; see `help still`",
          "--speed X      film at X times real time; the runtime falls out of it",
          "--seconds S    how long the film should be instead",
@@ -941,7 +941,7 @@ def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("command", nargs="?", default=None)
     ap.add_argument("tracks", nargs="?", default=None)
-    ap.add_argument("--atlas", default="/home/aaron/pokemon-run/atlas/atlas.json")
+    ap.add_argument("--atlas", default=os.path.expanduser("~/pokemon-run/atlas/atlas.json"))
     ap.add_argument("--atlas-image", default=None)
     ap.add_argument("--rendering", default="four-shade",
                     choices=("region-tint", "four-shade"))
@@ -988,13 +988,13 @@ def main():
             f"{SELF} help summary|still|video", code=2)
     if not a.tracks:
         die(f"{a.command} needs a tracks directory",
-            f"{SELF} {a.command} /home/aaron/pokemon-run/chain-film", code=2)
+            f"{SELF} {a.command} ~/pokemon-run/chain-film", code=2)
     if a.command in ("still", "video") and not a.out:
         die(f"{a.command} needs --out",
             f"{SELF} {a.command} {a.tracks} --out "
-            + ("/home/aaron/pokemon-run/pewter-path-arrows.png"
+            + ("~/pokemon-run/pewter-path-arrows.png"
                if a.command == "still"
-               else "/home/aaron/pokemon-run/pewter-path-arrows"), code=2)
+               else "~/pokemon-run/pewter-path-arrows"), code=2)
     try:
         r = {"summary": cmd_summary, "still": cmd_still,
              "video": cmd_video}[a.command](a)

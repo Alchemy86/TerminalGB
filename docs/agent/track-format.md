@@ -2,7 +2,7 @@
 
 <!-- codemap:asof -->
 
-**The captain's instruction, in his words:** *"all runs should have the position
+**The maintainer's instruction, in his words:** *"all runs should have the position
 data... then a sample of them can be used to make more or less on a swarm video
 at will... from best to worst, success to fail. with ease."*
 

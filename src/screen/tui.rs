@@ -763,7 +763,7 @@ fn open_video(
 /// — so it is *not* waiting on a reader the way a FIFO genuinely is. When a
 /// camera is not live the reason is always about the device (another producer
 /// holds it, the module is not loaded, it is a real webcam), and the sink
-/// already knows which. Saying "waiting for a consumer" there sent the captain
+/// already knows which. Saying "waiting for a consumer" there sent the maintainer
 /// hunting for a consumer problem while the real one was a second emulator
 /// still holding `/dev/video10` — the FIFO's words on the camera's screen.
 fn waiting_toast(v: &VideoOut, short: &str) -> String {
@@ -1800,7 +1800,7 @@ impl App {
     }
 
     /// The one description of the cable, used by the Status row **and** the
-    /// trainer panel. One mechanism, two places — the captain watches the
+    /// trainer panel. One mechanism, two places — the maintainer watches the
     /// trainer panel while playing and the Status row while debugging, and two
     /// independent renderings of the same fact would drift.
     ///
@@ -2535,7 +2535,7 @@ impl App {
     /// The banner is *state* — it is redrawn from the latched encounter for as
     /// long as the Pokémon is on screen. This is the *edge*: the toast and the
     /// terminal bell that fire once, at the instant it appears, because that is
-    /// the moment the captain is looking at the game and not at a panel.
+    /// the moment the maintainer is looking at the game and not at a panel.
     ///
     /// The whole cost when nothing is happening is comparing two `u64`s.
     #[cfg(feature = "plugin-trainer")]
@@ -2668,7 +2668,7 @@ impl App {
 
     /// Start or stop the raw video stream while the game runs (`v`).
     ///
-    /// The captain's rule: *never be unsure whether you are live*. So the
+    /// The maintainer's rule: *never be unsure whether you are live*. So the
     /// Status panel carries a `Video` row, the toggle raises a toast, and the
     /// full `ffmpeg` command lands in the `?` overlay's notices — and all three
     /// name the **intent** (`LIVE` for a consumer, `REC` for a file) and the
@@ -4224,7 +4224,7 @@ impl App {
         // being watched, and splitting the column three ways would make both
         // unreadable.
         // Commentary sits across the bottom of the body, under both the
-        // picture and the sidebar — the captain asked for "a text window on
+        // picture and the sidebar — the maintainer asked for "a text window on
         // the bottom", and full width is also what gives it enough columns to
         // stay readable at the large font a stream needs. It is taken off
         // **before** the picture/panel block is composed, so the block is
@@ -4662,7 +4662,7 @@ impl App {
         // **A picture is possible in every terminal, not only in the two that
         // speak an image protocol.** `sprite_image` is `None` for anything but
         // Kitty and iTerm2, and asking `is_some()` here is precisely what made
-        // the whole feature invisible in the captain's own terminal — a
+        // the whole feature invisible in the maintainer's own terminal — a
         // VTE-family one, which Fedora builds without sixel. Half-blocks are
         // the fallback the game picture and the music sleeve already take,
         // and `tv::Pictures` owns what each of the two can actually carry.
@@ -7303,7 +7303,7 @@ fn compose_sprite_cell(
 
 /// **The whole party as ONE tall image**, one `px`-sized cell per slot.
 ///
-/// One image rather than six is what makes the captain's "always show all six"
+/// One image rather than six is what makes the maintainer's "always show all six"
 /// affordable: six images would be six Kitty ids, six placements and six
 /// encodes every time anything moved. It is also *smaller than the single
 /// large sprite it replaces* — that one was transmitted at its native 56×56
@@ -8962,7 +8962,7 @@ impl App {
     }
 }
 
-/// The offer picker — `O` in game. The captain's rule, and the reason this is
+/// The offer picker — `O` in game. The maintainer's rule, and the reason this is
 /// not a form: **an offer comes from the player's real loaded game** — their
 /// party and their boxes — because the emulator is the one component that can
 /// read the actual save. A Pokémon that cannot be read out of the loaded game
@@ -9568,7 +9568,7 @@ fn build_agent(
         // `Budget::default()` allows a call 60 s; the shipped CLI adapter
         // legitimately retries up to 2 x 60 s and its own header comments
         // assume "the host's own per-call timeout (150 s by default)". Left
-        // at 60 s, a slow call is killed mid-retry and the captain watches
+        // at 60 s, a slow call is killed mid-retry and the maintainer watches
         // the game sit on a menu doing nothing — observed live on the
         // naming screen. 150 s matches the documented `claude_plays` runs.
         call_timeout: std::time::Duration::from_secs(150),
@@ -9839,7 +9839,7 @@ mod tests {
 
     #[test]
     fn fit_gives_many_smooth_tiers_not_three() {
-        // The captain's complaint was "three tiers". Sweep terminal height with
+        // The maintainer's complaint was "three tiers". Sweep terminal height with
         // ample width (the normal, height-limited case) and count distinct
         // effective scales. Height-limited fit yields ~one tier per row.
         let mut scales = std::collections::BTreeSet::new();
@@ -10209,7 +10209,7 @@ mod tests {
     #[test]
     fn a_slow_display_drops_pictures_not_emulated_frames() {
         // Thirty simulated seconds of the real loop arithmetic with a draw that
-        // costs 50 ms — three times the frame budget, i.e. the captain's
+        // costs 50 ms — three times the frame budget, i.e. the maintainer's
         // window. Emulation must still run at 59.7275 fps; the display gets
         // ~20, and the difference is dropped *pictures*, not emulated frames.
         let start = Instant::now();
@@ -10596,7 +10596,7 @@ mod tests {
         }
     }
 
-    /// **The captain's report, at unit speed.** On Ptyxis — VTE-family, no
+    /// **The maintainer's report, at unit speed.** On Ptyxis — VTE-family, no
     /// kitty graphics, Fedora builds it without sixel — the shelf printed
     /// `▦ cover 1/4 · … · c to change` over an entirely blank cover area.
     ///
@@ -10658,7 +10658,7 @@ mod tests {
     /// **`M` reaches music mode from a running game.**
     ///
     /// It was bound in the picker's handler only, so mid-game it did nothing at
-    /// all and said nothing about why — the captain pressed it, got silence,
+    /// all and said nothing about why — the maintainer pressed it, got silence,
     /// and had to be told that `L` goes back to the picker first. Driven
     /// through the real dispatcher, because a key that is "bound" in a registry
     /// and not in the handler is exactly the drift these tests exist to catch.
@@ -11525,7 +11525,7 @@ mod tests {
     }
 
     /// **Six small party pictures must not cost more than the one large sprite
-    /// they replace**, which is the captain's explicit condition on this
+    /// they replace**, which is the maintainer's explicit condition on this
     /// redesign and the reason the party is composed as one image rather than
     /// six.
     ///
@@ -11699,7 +11699,7 @@ mod tests {
 
     #[test]
     fn transmitted_bytes_do_not_grow_with_the_window() {
-        // The captain's bug, as a test: at 320x90 cells the old path encoded a
+        // The maintainer's bug, as a test: at 320x90 cells the old path encoded a
         // 1568x1408 image every frame (11.6 MB); the new one sends the same
         // 160x144 image whatever the window size. (Direct placement, the
         // default, does not even pay kitty's per-cell placeholder grid.)
@@ -11750,7 +11750,7 @@ mod tests {
         assert!(again.is_empty(), "retransmitted {} bytes", again.len());
     }
 
-    /// **The captain's live bug.** With the stats overlay on, the picture froze
+    /// **The maintainer's live bug.** With the stats overlay on, the picture froze
     /// while the game kept running: the overlay was drawn on top of the image,
     /// replacing the very cells that carry it, so no new image data reached the
     /// terminal until the overlay was closed.
@@ -11942,7 +11942,7 @@ mod tests {
 
     /// **Defect 1, as a test.** A configured destination is *where* `v` will
     /// send frames. It is not a decision to send them, and the emulator must
-    /// come up with the stream **off** — the captain's status row read
+    /// come up with the stream **off** — the maintainer's status row read
     /// `◌ wait gameboy-cam.…` at launch, before he had pressed anything.
     ///
     /// Asserted for both destination kinds, because they take different paths
@@ -12241,7 +12241,7 @@ mod tests {
         }
     }
 
-    /// **The captain's acceptance test, headless.** Stopping the feed must not
+    /// **The maintainer's acceptance test, headless.** Stopping the feed must not
     /// leave the consumer frozen on the last game frame — his Meet call sat on
     /// a title screen while the emulator was in a Rattata battle, which looks
     /// live and is not. So an idling destination keeps being written to, with
@@ -12379,7 +12379,7 @@ mod tests {
     // Graceful degradation: an ordinary terminal must still run the emulator.
     //
     // `8357546` added a hard `return Err` at the top of `run` when the terminal
-    // reported no kitty keyboard protocol, so GNOME Terminal — the captain's
+    // reported no kitty keyboard protocol, so GNOME Terminal — the maintainer's
     // default — printed an error and exited having drawn nothing. These tests
     // are the ones that would have caught it.
     // -----------------------------------------------------------------------
@@ -13911,7 +13911,7 @@ mod tests {
         assert!(row.contains("SHINY IF TRADED TO GEN 2"), "{row:?}");
     }
 
-    /// The captain's report: "there is simply no leaving the damn room."
+    /// The maintainer's report: "there is simply no leaving the damn room."
     ///
     /// Gen 1's Cable Club rooms have no warp events at all, so a player who
     /// walks in is stuck until they find the START menu's RESET — and nothing

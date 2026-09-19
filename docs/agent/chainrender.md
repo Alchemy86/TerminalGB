@@ -79,7 +79,7 @@ Refactoring a renderer is only safe if you can prove it changed nothing, and
 both proofs are cheap enough that there is no excuse for skipping them.
 
 ```bash
-cd /home/aaron/pokemon-run
+cd ~/pokemon-run
 
 # the camera: --no-split-aware --no-integer-zoom must reproduce the pre-fix
 # trace byte for byte. **--no-integer-zoom is part of the gate now**: rules 8

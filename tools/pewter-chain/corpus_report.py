@@ -148,7 +148,7 @@ def draw_heat(counts, map_id, maps_dir, out_png, title):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("corpus")
-    ap.add_argument("--maps", default="/home/aaron/pixelgb-out/four-shade/1x")
+    ap.add_argument("--maps", default=os.path.expanduser("~/pixelgb-out/four-shade/1x"))
     ap.add_argument("--out", default=None)
     ap.add_argument("--sample", type=int, default=200,
                     help="pairs to sample for the Jaccard mean")

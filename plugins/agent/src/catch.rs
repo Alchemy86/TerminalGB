@@ -438,7 +438,7 @@ mod tests {
     }
 
     /// **The gate.** With an empty bag the policy has not decided anything, and
-    /// says so with a different word. This is the captain's constraint and the
+    /// says so with a different word. This is the maintainer's constraint and the
     /// whole reason `Unavailable` is not `No`.
     #[test]
     fn an_empty_bag_is_not_a_decision() {

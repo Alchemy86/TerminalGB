@@ -24,7 +24,7 @@
 //! A full Gen 1 route table exists in `pret/pokered` and could be copied out.
 //! Two reasons not to. The licence boundary this repository keeps says facts
 //! and formats yes, bulk game data no — a warp table is closer to data than to
-//! a fact. And the captain's ask was for the agent to *build its own guidance*:
+//! a fact. And the maintainer's ask was for the agent to *build its own guidance*:
 //! a graph a run discovered by walking through the doors is evidence the run
 //! really went there, which a transcribed table is not. So [`Guidance`] starts
 //! empty and grows, and a run that learns nothing says so.
@@ -256,7 +256,7 @@ pub struct Link {
 
 /// What runs have worked out about a cartridge, and can hand to the next run.
 ///
-/// This is the captain's *"build its own rules and AI for guidance"* in file
+/// This is the maintainer's *"build its own rules and AI for guidance"* in file
 /// form. A run emits it; a later run of the same or a neighbouring scenario is
 /// given it in its snapshot, so a solved segment is cheap the second time.
 ///

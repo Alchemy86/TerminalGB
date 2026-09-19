@@ -392,7 +392,7 @@ console is a silent no-op that looks exactly like a broken link.
 
 ## 7. What was measured — Gen 1 ↔ Gen 1
 
-Two Pokémon Blue instances, from copies of the captain's cartridge and a Cable
+Two Pokémon Blue instances, from copies of the maintainer's cartridge and a Cable
 Club save fixture, with distinct parties patched in:
 
 ```
@@ -562,7 +562,7 @@ completed run below is one process holding Blue back until Gold is ready.
 
 `--capsule-trade` runs the whole chain in **one process**: Gold and Blue as two
 cores on `LinkCable`, each driven by its own bot, with one line of coordination
-between them. Run it against the captain's real Gold save (any Gold save works —
+between them. Run it against the maintainer's real Gold save (any Gold save works —
 the two Time Capsule gates are patched idempotently and the party is replaced on
 the **staged copy only**):
 
@@ -573,7 +573,7 @@ cargo run --release --features image,plugin-gen1-link,plugin-trainer \
     --shots target/capsule-shots
 ```
 
-**Measured result (the captain's real Gold save, 2026-08-14):** Blue's GLIMMER —
+**Measured result (the maintainer's real Gold save, 2026-08-14):** Blue's GLIMMER —
 an Abra given the shiny DV spread `14/10/10/10` (`$EA$AA`), the verdict printed
 by the trainer plugin's `derived::shiny_if_traded` — crossed the Time Capsule in
 3,700 frames of linked protocol (2,580 transfers, 181 unanswered during
@@ -618,7 +618,7 @@ Four things the completed run needed, each measured the hard way:
    serial handler and walks into the Trade Center alone — the cross-process
    failure above.
 2. **A real save fails Gold's RTC consistency check, and the recovery flow eats
-   the joypad.** On continue, the captain's save produced "The clock's time may
+   the joypad.** On continue, the maintainer's save produced "The clock's time may
    be wrong." and then the whole clock-set screen ("Set with the Control Pad.",
    `engine/rtc/restart_clock.asm`) — three screens in a row that a word-list
    "am I in the overworld yet?" test missed, while `wMapGroup`/`wMapNumber`
@@ -648,7 +648,7 @@ Four things the completed run needed, each measured the hard way:
 Two quirks worth knowing that the run surfaced but did not need fixed:
 GLIMMER arrived in Gold **holding item 200** — Gen 2 reads the Gen 1
 `party_struct`'s catch-rate byte as a held item (Abra's Gen 1 catch rate is
-200), the documented Time Capsule item mechanic — and the captain's real save
+200), the documented Time Capsule item mechanic — and the maintainer's real save
 turned out to have **both Time Capsule gates already open** (`EVENT_MET_BILL`
 clear, `DAILYFLAGS1_TIME_CAPSULE_F` clear) but a party of six Johto species,
 which `CheckTimeCapsuleCompatibility` rejects wholesale; the staged-copy party
@@ -680,7 +680,7 @@ pair; reading the rule out of the cartridge covers all 65,536 by construction.
 
 Everything above §8 was proved with **both consoles inside one process**: two
 cores on `LinkCable`, one loop, one bot per side, one line of coordination
-between them. On **2026-08-15** the captain did it the other way round: Pokémon Gold started
+between them. On **2026-08-15** the maintainer did it the other way round: Pokémon Gold started
 in one terminal window and Pokémon Blue in another, by hand — no lobby, no
 flags, no scaffolding, nothing scripted — and the two
 processes found each other over the ordinary `link = auto` unix-socket
@@ -700,7 +700,7 @@ both.
 #### What was on disk afterwards, and how it was read
 
 Read from **copies staged into `target/`**, never from the live files — the
-standing rule, and the reason the captain's Blue save survived the day the
+standing rule, and the reason the maintainer's Blue save survived the day the
 battery layer was written. The Gen 2 side uses the run map and symbols in
 [the Gen 2 save file](gen2/the-save-file.md) and
 [the Gen 2 memory map](gen2/memory-map.md); the Gen 1 side uses
@@ -812,7 +812,7 @@ Those eight bytes appear in Blue's save at file offset `$3047`, which is
 
 **The species conversion was checked against the cartridge, not against
 memory.** `PokedexOrder` (`pokered/data/pokemon/dex_order.asm`) maps internal
-index → dex number; searching the captain's Blue ROM for its first eight entries
+index → dex number; searching the maintainer's Blue ROM for its first eight entries
 (Rhydon 112, Kangaskhan 115, Nidoran♂ 32, Clefairy 35, Spearow 21, Voltorb 100,
 Nidoking 34, Slowbro 80) finds **exactly one** occurrence, at `$41024`, and the
 190-byte table there holds 151 distinct non-zero dex numbers. In it, internal
@@ -1083,7 +1083,7 @@ Consequences to act on rather than admire:
 
 ## 9. Future work — playing over the internet
 
-**None of this is built.** It is the captain's stated direction written down
+**None of this is built.** It is the maintainer's stated direction written down
 honestly, with the hard parts named, so that whoever picks it up starts from the
 real problem rather than from optimism.
 

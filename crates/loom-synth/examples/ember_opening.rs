@@ -1,5 +1,5 @@
 //! A ~31s DMG-hardware-authentic mimic of the *opening* of Kubbi's "Ember"
-//! (2015), for a captain-requested short. Full derivation — the licence
+//! (2015), for a maintainer-requested short. Full derivation — the licence
 //! finding, the measured tempo/key/structure of the reference, and exactly
 //! what was taken versus written fresh — is in `docs/ember-cover/README.md`;
 //! this file is the composition itself, following the same method

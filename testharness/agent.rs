@@ -21,7 +21,7 @@
 //! the observer engages the Gen 1 reader (see the licence-boundary rule in
 //! `AGENTS.md` — formats and addresses are facts, assets are not ours).
 //!
-//! That is what makes this runnable in CI. A test that needs the captain's
+//! That is what makes this runnable in CI. A test that needs the maintainer's
 //! cartridge is a test CI skips, and a skipped test proves nothing.
 //!
 //! # Every case here failed at least once during development

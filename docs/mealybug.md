@@ -209,8 +209,8 @@ rewrite fails for a reason inside the rewrite.
 > boot ROM nor anything else here ever writes, and it too is pixel-exact already. **Zero of the
 > 18 need only the licence-clean logo tiles (`$01`-`$18`)** — every row that needs anything from
 > post-boot VRAM needs the `®` glyph specifically, which is why decompressing the logo tiles
-> (now done, licence-clean, see `AGENTS.md` "The captain's decision confirmed") moves none of
-> them. **The captain's decision is now settled policy, not an open question**: skip the
+> (now done, licence-clean, see `AGENTS.md` "The maintainer's decision confirmed") moves none of
+> them. **The maintainer's decision is now settled policy, not an open question**: skip the
 > Nintendo boot text entirely (`docs/mealybug.md` §8.6, confirmed 2026-08-21) — these 9 rows
 > stay red under the default configuration, permanently, by deliberate choice, and licence-clean
 > regression coverage of the *mechanism* they exercise lives in GBSelfTest (`GB-BOOT-07`,
@@ -233,9 +233,9 @@ tile-map entries that place them. **18 of the 31 ROMs depend on that state:**
 
 Our screens for these are blank or missing a column of glyphs *before* any timing question arises.
 The logo tile data is derivable from the cartridge's own header bytes `$0104`–`$0133`, but the `®`
-glyph is boot-ROM data. **That was a licensing/policy call for the captain, not a PPU decision** —
+glyph is boot-ROM data. **That was a licensing/policy call for the maintainer, not a PPU decision** —
 see the licence-boundary section of [`AGENTS.md`](../AGENTS.md). **Both halves are now settled: the
-logo tiles are decompressed (licence-clean, §8.6's "captain's decision confirmed" entry) and the
+logo tiles are decompressed (licence-clean, §8.6's "maintainer's decision confirmed" entry) and the
 glyph stays undone, permanently, by deliberate choice — not one row of this section moved either
 way, because (per the correction above) none of the 18 needed the logo tiles at all.**
 
@@ -503,7 +503,7 @@ other machine's numbers.
 > run the conformance suite against the accurate engine, then delete `renderscan`. The first
 > three are done; the fourth is **not**, and deliberately — see the update at the end.
 
-**Keep both engines for now; ship one later.** The captain's condition for deleting the fast
+**Keep both engines for now; ship one later.** The maintainer's condition for deleting the fast
 path was that the accurate one be fast enough on ordinary hardware, and on cost it plainly is —
 2.1x, 2.8 % of a 16.7427 ms frame, 36x real time headless, inside the 1.3-2x band §5.2
 predicted. Cost is no longer the argument for two renderers. The argument that remains is the
@@ -685,7 +685,7 @@ run the experiment, the shape is much narrower than that section implies:
 
 So the whole of Blocker C is eight bytes of bitmap in somebody else's boot ROM.
 
-**The decision (captain, 2026-08-14): do not embed them — support an optional user-supplied
+**The decision (maintainer, 2026-08-14): do not embed them — support an optional user-supplied
 boot ROM instead.** A register value or a counter phase is a fact about hardware and not
 copyrightable expression, which is why this emulator transcribes the entire `$FF00-$FF7F` map
 by hand; a glyph bitmap is expressive content, and this repository is public, MPL-2.0 and has a
@@ -945,7 +945,7 @@ engine-for-engine on the same build:
 **What remains is a cost decision, not an accuracy one.** `testharness/ppuengines.rs` measures
 0.2426 ms/frame fast against 0.5270 accurate — **2.17x**, 3.1 % of a 16.7427 ms frame, still
 31.8x real time headless. That is inside the band [§5.2](#5-recommendation) predicted and the
-captain's stated condition for retiring `renderscan`.
+maintainer's stated condition for retiring `renderscan`.
 
 Flipping the default is nonetheless a product decision with two consequences worth stating
 plainly, and it has **not** been taken here:

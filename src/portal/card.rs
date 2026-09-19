@@ -2,7 +2,7 @@
 //! an offered Pokémon, read or derived from the owner's own cartridge at the
 //! moment of the offer.
 //!
-//! The captain's complaint was a one-line text pill ("SPARK lv12 (Pikachu)")
+//! The maintainer's complaint was a one-line text pill ("SPARK lv12 (Pikachu)")
 //! where a card belongs: sprite, types, moves, the DV detail the trainer
 //! panel computes. The trade spec ([`MonSpec`]) already carries the moves and
 //! DVs; what it cannot carry is anything that is not *trade* data — so those

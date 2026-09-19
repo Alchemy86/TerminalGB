@@ -3,7 +3,7 @@
 //!
 //! # Written for someone who arrived nine seconds ago
 //!
-//! The captain's brief narrows this a long way, and the narrowing is the
+//! The maintainer's brief narrows this a long way, and the narrowing is the
 //! design: the destination is **Twitch via OBS**, on a fixed 16:9 canvas, and
 //! the audience is strangers with no context who cannot pause and cannot zoom.
 //! That produces four rules, in priority order, and everything below follows

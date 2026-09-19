@@ -35,7 +35,7 @@
 //! Cutting power mid-waveform leaves charge on the pigments that the waveform
 //! would have resolved, which is what ghosting is. **Every step ends by
 //! returning to a full stock refresh before the next one**, which is the same
-//! thing a normal update does and is how e-paper clears residue. The captain
+//! thing a normal update does and is how e-paper clears residue. The maintainer
 //! authorised this on his own device; it is still worth pressing C at the end
 //! and leaving the glass on a clean, complete picture.
 //!

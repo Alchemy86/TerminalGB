@@ -629,8 +629,8 @@ def report_motion(positions, cams, lost, n_agents, out_h, view_w, tile=TILE):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tracks")
-    ap.add_argument("--sprites", default="/home/aaron/pokemon-run/sprites")
-    ap.add_argument("--atlas", default="/home/aaron/pokemon-run/atlas/atlas.json",
+    ap.add_argument("--sprites", default=os.path.expanduser("~/pokemon-run/sprites"))
+    ap.add_argument("--atlas", default=os.path.expanduser("~/pokemon-run/atlas/atlas.json"),
                     help="PixelGB atlas manifest. It is the ONLY source of map "
                          "placement; there is no fallback layout")
     ap.add_argument("--rendering", default="region-tint",

@@ -160,7 +160,7 @@ def write(name, content):
 
 
 # ---------------------------------------------------------------------------
-# THE FINAL MARK — the one to ship. Composition matched to the captain's
+# THE FINAL MARK — the one to ship. Composition matched to the maintainer's
 # chosen reference: one heavy wordmark; the motif REPLACING one letter (a
 # solid DMG-green terminal block cursor stands where the I of TERMINAL would
 # be — a block cursor hides the glyph beneath it, exactly what a terminal

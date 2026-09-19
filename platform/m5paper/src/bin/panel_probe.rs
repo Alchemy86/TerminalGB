@@ -5,7 +5,7 @@
 //!
 //! An instrument, not a feature. It boots the panel and nothing else — no
 //! emulator, no heap, no PSRAM — and runs a fixed sequence of timed refreshes.
-//! The question it exists to answer is the captain's: a full refresh measured
+//! The question it exists to answer is the maintainer's: a full refresh measured
 //! 15.967 s at bring-up and a Game Boy frame is 16.743 ms, so anything that
 //! moves that number decides what this device can be.
 //!

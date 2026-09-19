@@ -13,7 +13,7 @@
 //! The wire is tab-separated lines, no dependency and no escaping problem —
 //! every name and phrase has already been filtered to Gen 1's charmap, which
 //! has no tab. It is the same protocol `examples/worldlobby.rs` speaks, so the
-//! captain's own terminal and a scripted walker are the same kind of client.
+//! maintainer's own terminal and a scripted walker are the same kind of client.
 //!
 //! [`Plugin`]: terminalgb_plugin_gen1_lobby::LobbyPlugin
 
@@ -763,7 +763,7 @@ pub fn from_env(name: &str) -> Option<(LobbyClient, String)> {
 /// process — not a second implementation of it.** A driven player is a walker,
 /// a phase machine, a screenshot writer and the Cable Club bot; none of that
 /// belongs in the shipped emulator, and having two of it would mean the
-/// captain's partner and the demonstration's players could drift apart. So the
+/// maintainer's partner and the demonstration's players could drift apart. So the
 /// frontend's job is only to *find* that binary and hand it the room.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub struct PartnerOptions {
@@ -823,7 +823,7 @@ pub struct SeatOptions {
     /// the real ones.
     ///
     /// `examples/worldlobby.rs` sets this: a capture run must not be able to
-    /// write to the captain's cartridge at all. The shipped `--lobby` does
+    /// write to the maintainer's cartridge at all. The shipped `--lobby` does
     /// **not**, because it is an ordinary launch of the person's own game —
     /// silently playing a throwaway copy would lose whatever they did after
     /// they left the Cable Club. Neither choice risks the save inside the room
@@ -1012,7 +1012,7 @@ pub fn take_seat(o: SeatOptions) -> std::io::Result<()> {
     //
     // The driven partner gets a directory of its own, keyed by **our** pid: it
     // is a private two-console session and must not be reachable by anybody
-    // else's run. That is the whole of the defect the captain hit — the old
+    // else's run. That is the whole of the defect the maintainer hit — the old
     // path used one fixed `cable-human` for every launch, so a second `--lobby`
     // put four consoles in one directory and the wrong two paired.
     //
@@ -1102,7 +1102,7 @@ pub fn take_seat(o: SeatOptions) -> std::io::Result<()> {
 ///
 /// It is spelled through `GB_PLUGINS` because that is the channel that already
 /// wins over `config.toml`. Subtracting rather than replacing matters: the
-/// captain's own `plugins = gen1-link, trainer` must keep its trainer panel in
+/// maintainer's own `plugins = gen1-link, trainer` must keep its trainer panel in
 /// the room, and must lose only the one plugin that cannot coexist with a real
 /// second console on the cable.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
@@ -1227,7 +1227,7 @@ mod seat_tests {
     /// one thing it must add. Anything else the person asked for is theirs.
     #[test]
     fn the_lobby_frees_the_cable_and_keeps_everything_else() {
-        // The captain's own configuration, plus one more.
+        // The maintainer's own configuration, plus one more.
         let list = super::plugin_list_from("gen1-link, trainer, agent");
         let names: Vec<&str> = list.split(',').collect();
         assert!(!names.contains(&"gen1-link"), "{list}");

@@ -96,7 +96,7 @@ fn main() {
     );
     std::fs::create_dir_all(&outdir).unwrap();
 
-    // Work on a private copy so the captain's ROM directory is untouched.
+    // Work on a private copy so the maintainer's ROM directory is untouched.
     let work = outdir.join("cart.gb");
     std::fs::copy(&rom, &work).unwrap();
 

@@ -9,7 +9,7 @@ buttons and deliberately ran no emulator. This is the step it was written for.
 
 ## What is measured
 
-Everything below was read off the captain's own device (MAC `28:84:85:43:d2:84`)
+Everything below was read off the maintainer's own device (MAC `28:84:85:43:d2:84`)
 over USB serial, not estimated. Reproduce it with:
 
 ```sh
@@ -165,7 +165,7 @@ emulated.
 ### The measured cadence
 
 25 consecutive free-running turns, no button touched, across two runs of the
-shipped firmware on the captain's device:
+shipped firmware on the maintainer's device:
 
 | | min | median | max |
 |---|---:|---:|---:|

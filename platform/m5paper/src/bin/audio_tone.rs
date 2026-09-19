@@ -9,7 +9,7 @@
 //! **The ES8311 register sequence is borrowed, not derived, and it is the
 //! one part of this that is a real guess.** It is M5Unified's own bring-up
 //! for a *different* M5Stack board (their internal name is literally
-//! `chain_captain`) that happens to carry the same ES8311 part — reset, bring
+//! `chain_maintainer`) that happens to carry the same ES8311 part — reset, bring
 //! up the clock manager, power the analog block and the DAC, enable the
 //! headphone drive, set volume, bypass the DAC's own equalizer. That board's
 //! codec may derive its master clock differently than this one does (its

@@ -16,7 +16,7 @@
 //! assets are not ours.
 //!
 //! That is what makes the harnesses runnable in CI. A test that needs the
-//! captain's cartridge is a test CI skips, and a skipped test proves nothing.
+//! maintainer's cartridge is a test CI skips, and a skipped test proves nothing.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

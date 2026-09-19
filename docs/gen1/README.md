@@ -119,7 +119,7 @@ they are not interchangeable:
 If something is believed but not checked, say "believed" and say why nobody has checked it.
 An unqualified claim that turns out to be wrong costs more than a gap.
 
-**3. Explain the mechanism, so a reader can invent the next technique.** The captain is
+**3. Explain the mechanism, so a reader can invent the next technique.** The maintainer is
 collecting these because each one suggests the next: the battle trigger came from noticing
 that the overworld loop polls a byte; the screen reader came from noticing that the font is
 loaded so a tile id *is* a character. Both are properties of the engine, not tricks. So write

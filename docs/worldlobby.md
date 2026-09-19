@@ -9,7 +9,7 @@ two more started a real link battle, both from inside that room.
 **These were four emulator instances, not four humans, and one human seat.** Nobody can
 summon four people on demand. What was run is four *independent processes*, each with its
 own staged cartridge, its own save file, its own memory and its own walking — plus, since,
-a `--human` mode that puts the captain at one of those seats through the ordinary terminal
+a `--human` mode that puts the maintainer at one of those seats through the ordinary terminal
 frontend. The code cannot tell the two apart: a scripted walk and a person's thumb both
 arrive as `Gameboy::keydown`. If four instances can see and pass each other, four people
 can; what four instances cannot prove is anything about how it *feels*, and that is what
@@ -109,7 +109,7 @@ Two mechanisms worth keeping:
 
 ## 5. What worked
 
-Measured on the captain's own Pokémon Blue cartridge and Cable Club save, staged into
+Measured on the maintainer's own Pokémon Blue cartridge and Cable Club save, staged into
 `target/`, four processes plus a relay:
 
 - **Four consoles into one room.** Each pairs with its partner over the auto-discovered
@@ -227,7 +227,7 @@ Variations, all single tokens because the launcher only forwards one argument:
 **Two `--lobby` windows used to be two rooms of one person each.** Each run
 opened a relay on `127.0.0.1:0` — an ephemeral port the kernel picked, never
 printed anywhere a person could use — and then joined *itself*. The join form
-existed but the address did not. That is the defect the captain hit, and it is
+existed but the address did not. That is the defect the maintainer hit, and it is
 the reason the second window showed an empty room while the first showed an
 empty room beside it.
 
@@ -281,7 +281,7 @@ own directory, `$XDG_RUNTIME_DIR/terminalgb/lobby/cable`
 actually in the room.
 
 A **driven partner** gets a directory of its own again, keyed by the frontend's
-pid. That is the other half of the captain's defect: every launch used one fixed
+pid. That is the other half of the maintainer's defect: every launch used one fixed
 `target/worldlobby/cable-human`, so two `--lobby` runs put *four* consoles in one
 directory and the wrong two paired — after which one of them quit and the
 survivor faulted, poisoned its battery and refused to write the save. A partner
@@ -301,7 +301,7 @@ The driven console is `examples/worldlobby.rs`'s own `play` subcommand, spawned
 as a child process — **not a second implementation of it**. A driven player is a
 walker, a phase machine, a screenshot writer and the Cable Club bot; none of
 that belongs in the shipped emulator, and two copies of it would let the
-captain's partner and the demonstration's players drift apart. The frontend's
+maintainer's partner and the demonstration's players drift apart. The frontend's
 job is only to *find* that binary (`lobby::find_partner_bin`: beside this
 executable, then `examples/` beside it, `$GB_LOBBY_PARTNER` overriding) and hand
 it the room.
@@ -351,7 +351,7 @@ auto-discovered peer (`link = auto`, the default).
 ### What was measured, and how
 
 Every claim in §8 and §9 was run, not reasoned about, on this machine against
-the captain's own Pokémon Blue and Cable Club save, staged into `target/`:
+the maintainer's own Pokémon Blue and Cable Club save, staged into `target/`:
 
 - **`terminalgb --lobby` end to end** — resolved the cartridge from the recent
   list, hosted a room on `127.0.0.1`, booted the partner, seated a person, and
@@ -502,7 +502,7 @@ it, so the four-instance demonstration is as quick as it ever was.
 
 ### 9.4 The other player rode the camera — and the cartridge already solved it
 
-Reported by the captain, in his own words: *"moving also moves the other player
+Reported by the maintainer, in his own words: *"moving also moves the other player
 initially then they auto correct where they should be… the pokemon overworld has
 bots walking about and they don't suffer from this issue, so clearly the game
 already deals with this better."* Both halves were right, including the second.

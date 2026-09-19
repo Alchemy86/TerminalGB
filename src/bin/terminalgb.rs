@@ -75,7 +75,7 @@ fn main() {
             eprintln!("video-out (see docs/video-out.md):");
             eprintln!("{}", terminalgb::video::cli_usage());
         }
-        // The run command the captain asked for. `--music` too, because a
+        // The run command the maintainer asked for. `--music` too, because a
         // person who types one will type the other.
         Some("music") | Some("--music") | Some("-m") => run_music(),
         // The `gh auth login` shape: sign in once in a browser, then the

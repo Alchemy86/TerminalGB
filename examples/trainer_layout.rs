@@ -538,7 +538,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
 /// The failure this exists to catch is the naive one: keying on "lightest
 /// shade" instead of flood-filling from the border punches holes through
 /// Charmander's belly and the core of its flame, and through the highlight on
-/// Squirtle's shell. Those are the two the captain is looking at, so those are
+/// Squirtle's shell. Those are the two the maintainer is looking at, so those are
 /// the two checked by eye.
 fn sprites(rom: &str, out_dir: &str) {
     let data = std::fs::read(rom).expect("read the ROM");

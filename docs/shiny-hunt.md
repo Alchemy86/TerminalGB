@@ -5,7 +5,7 @@
 > shiny the moment the Pokémon is traded forward to Gen 2 — see
 > [What we are actually hunting](#1-what-we-are-actually-hunting).
 
-The captain saw a hunter run **four physical Nintendo DS consoles wired to one
+The maintainer saw a hunter run **four physical Nintendo DS consoles wired to one
 controller through a hardware input splitter**, so identical presses hit all four
 at once — then drop back to two, controlled independently, because the four-way
 rig kept desyncing. This is the software equivalent, for Gen 1, and it is a

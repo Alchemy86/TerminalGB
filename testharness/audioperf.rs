@@ -20,7 +20,7 @@
 //!
 //! Every existing benchmark missed it because **none of them attaches a
 //! player**: `render_bench` is headless and reported a healthy 0.246 ms while
-//! the captain's real session ran at 6 fps.
+//! the maintainer's real session ran at 6 fps.
 //!
 //! ## What it measures, and why it needs no sound card
 //!
@@ -28,7 +28,7 @@
 //! attaches a player that is the real producer half (`sample_queue::hand_off`,
 //! the exact code `CpalPlayer::play` calls) with **no consumer at all**: the
 //! queue saturates within the first few frames and stays saturated, which is
-//! precisely the state the captain's machine was in. Under the old
+//! precisely the state the maintainer's machine was in. Under the old
 //! wait-at-the-watermark policy every frame then sleeps up to 150 ms; under the
 //! current policy the excess is discarded and the frame costs what emulation
 //! costs. That runs on any CI runner, headless.

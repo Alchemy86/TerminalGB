@@ -7,7 +7,7 @@ study kept for the record; do not use those files.
 
 ![The TerminalGB logo](preview/logo.png)
 
-The composition, chosen by the captain against a reference he picked: one heavy geometric
+The composition, chosen by the maintainer against a reference he picked: one heavy geometric
 wordmark, tight-tracked, white on a near-black panel; the motif **replacing one letter** —
 a solid DMG-green terminal **block cursor** stands where the I of TERMINAL would be, the
 glyph hidden beneath it exactly as a terminal shows a block cursor; a single accent-colour

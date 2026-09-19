@@ -1,6 +1,6 @@
 //! Opening the sign-in page — a convenience, never a requirement.
 //!
-//! The captain's ask is the Claude Code `/login` shape: trigger sign-in from
+//! The maintainer's ask is the Claude Code `/login` shape: trigger sign-in from
 //! inside the emulator and have the browser open itself. But a headless box, an
 //! SSH session or a machine with no opener must still sign in, so the URL and
 //! code are **always printed/shown as well**, and every failure here is soft:

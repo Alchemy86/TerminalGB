@@ -1,5 +1,5 @@
 //! [`Instrument`] — a named, reusable timbre. This is the abstraction the
-//! captain's amendment asked for by name: something a piece can *ask for* by
+//! maintainer's amendment asked for by name: something a piece can *ask for* by
 //! preset rather than every voice being a bespoke function (the shape
 //! [`crate::presets`] is deliberately moving away from for anything new,
 //! while still reproducing the old one faithfully — see that module).

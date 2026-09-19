@@ -2492,7 +2492,7 @@ impl Sound {
 ///   audio crystal the master clock — is **wrong here and was a shipped bug**:
 ///   [`hand_off`] is called from `Sound::play_samples`, which runs inside
 ///   `Cpu::do_cycle`, so the wait is charged to the emulated frame. Measured on
-///   the captain's session: `emulate_ms` 17.93 against a 16.743 ms budget,
+///   the maintainer's session: `emulate_ms` 17.93 against a 16.743 ms budget,
 ///   97.6 % of it not executing, the frontend permanently in catch-up, and the
 ///   display down to 6 fps. The frontends already pace to 59.7275 Hz with a
 ///   deadline accumulator; a second clock inside the emulator can only fight it.
@@ -4021,7 +4021,7 @@ pub mod cpal_audio {
         fn play(&mut self, left_channel: &[f32], right_channel: &[f32]) {
             // Push, then bound latency by discarding — never by waiting. See
             // `sample_queue::hand_off` and the module docs for why waiting here
-            // cost the captain 17.6 ms of every 16.743 ms frame.
+            // cost the maintainer 17.6 ms of every 16.743 ms frame.
             sample_queue::hand_off(&self.queue, left_channel, right_channel);
 
             if self.stats_enabled

@@ -99,7 +99,7 @@ fn framebuffer() -> &'static mut [u8; FB_BYTES] {
     alloc::boxed::Box::leak(arr)
 }
 
-/// The orientation the captain asked for, carried forward from bring-up.
+/// The orientation the maintainer asked for, carried forward from bring-up.
 const ORIENTATION: Rotation = Rotation::Landscape;
 
 /// Emulated frames to run before the first picture.
@@ -387,7 +387,7 @@ fn main() -> ! {
     free_run(&mut epd, &mut fb, gb, &mut buttons, &mut look_ix, &mut frames_run);
 }
 
-/// **The loop the captain asked for: the game runs, and the paper keeps up with
+/// **The loop the maintainer asked for: the game runs, and the paper keeps up with
 /// it as fast as paper can.**
 ///
 /// What changed, and why it is not what was asked for word for word. The ask

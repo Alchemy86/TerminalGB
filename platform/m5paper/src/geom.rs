@@ -1,7 +1,7 @@
 //! Panel geometry: inks, rotation and the 4bpp framebuffer.
 //!
 //! Deliberately free of any `esp-hal` dependency so it compiles and tests on
-//! the host. The captain asked for landscape and nobody on this end can see the
+//! the host. The maintainer asked for landscape and nobody on this end can see the
 //! panel, so the rotation maths is checked by `rustc --test` against this very
 //! file rather than asserted — run `tools/m5paper-build.sh --test`.
 
@@ -55,7 +55,7 @@ impl Ink {
 
 /// How logical coordinates map onto the physically-portrait panel.
 ///
-/// The captain asked for landscape, so [`Rotation::Landscape`] is the default
+/// The maintainer asked for landscape, so [`Rotation::Landscape`] is the default
 /// everywhere in this crate. The two landscape variants differ only in which
 /// way up the device sits; pick whichever matches the case in hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -310,7 +310,7 @@ mod tests {
     }
 
     /// The test card has to be asymmetric in both axes or it proves nothing
-    /// about orientation when the captain looks at it.
+    /// about orientation when the maintainer looks at it.
     #[test]
     fn the_test_card_marker_is_in_the_logical_top_left_only() {
         let mut buf = blank();

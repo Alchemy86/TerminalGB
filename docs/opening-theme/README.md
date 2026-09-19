@@ -2,7 +2,7 @@
 
 Three original ~30s opening-theme sketches, built with
 [`loom-synth`](../../crates/loom-synth/README.md) for a TerminalGB short. The
-captain's ask: *"the feeling of the Pokémon opening, with a melody that's
+maintainer's ask: *"the feeling of the Pokémon opening, with a melody that's
 genuinely ours."* This page is the honesty account the task itself asked
 for — exactly what each variant borrowed from the era versus what was
 written fresh — plus how to reproduce or re-render them.

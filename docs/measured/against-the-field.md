@@ -4,7 +4,7 @@
 
 > **"Ensure our efforts to boost speed actually try to verify some of the claims
 > made on the others. If true we can just compare code and see where they gained the benefits."**
-> — the captain, and he is right: a summary of what other emulators achieve is not a
+> — the maintainer, and he is right: a summary of what other emulators achieve is not a
 > measurement, and this page exists because two of those claims went opposite ways when they
 > were actually run.
 
@@ -384,7 +384,7 @@ absent — a green run against an empty submodule would have proved nothing.
 
 ### 7e. The ablation ledger — every shortcut, both sides measured
 
-The captain's rule here is not "never trade accuracy", it is **"never trade accuracy in the
+The maintainer's rule here is not "never trade accuracy", it is **"never trade accuracy in the
 accurate mode"**: this emulator already ships modes ([`modes.md`](../modes.md),
 [`picture-modes.md`](../picture-modes.md)), and something that costs accuracy belongs behind a
 flag rather than in the bin. So every shortcut was re-measured on the post-timer baseline, and

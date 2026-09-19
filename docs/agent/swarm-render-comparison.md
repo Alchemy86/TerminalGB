@@ -136,7 +136,7 @@ fallback) — see the citations in the table row above. No `vp9`/`libvpx`/`444`
 string exists anywhere in `tools/pewter-chain/*.py`, `examples/swarm_view.rs`,
 or the docs (`grep -rn "vp9\|libvpx\|444\|yuv" …` returns nothing outside the
 already-`yuv420p` lines). If a specific rendered artefact (e.g. one of the
-`.mp4`s under `/home/aaron/pokemon-run/`, which are not committed) was
+`.mp4`s under `~/pokemon-run/`, which are not committed) was
 produced with a hand-typed VP9/4:4:4 command outside these scripts, that is a
 one-off operator mistake, not a tooling defect — worth confirming which file
 was affected, but there is nothing to fix in the source. Filed here as

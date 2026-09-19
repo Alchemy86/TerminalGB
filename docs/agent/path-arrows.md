@@ -27,19 +27,19 @@ Rendering the whole 24-agent chain takes about a second and a half.
 
 ```bash
 # what the tracks contain, before anything is drawn
-python3 tools/pewter-chain/path_arrows.py summary /home/aaron/pokemon-run/chain-film
+python3 tools/pewter-chain/path_arrows.py summary ~/pokemon-run/chain-film
 
 # the still at the top of this page
-python3 tools/pewter-chain/path_arrows.py still /home/aaron/pokemon-run/chain-film \
-    --tile-px 14 --out /home/aaron/pokemon-run/pewter-path-arrows.png
+python3 tools/pewter-chain/path_arrows.py still ~/pokemon-run/chain-film \
+    --tile-px 14 --out ~/pokemon-run/pewter-path-arrows.png
 
 # the video: the arrows appear as the swarm reaches those tiles
-python3 tools/pewter-chain/path_arrows.py video /home/aaron/pokemon-run/chain-film \
+python3 tools/pewter-chain/path_arrows.py video ~/pokemon-run/chain-film \
     --tile-px 12 --speed 900 --fps 30 --mp4 \
-    --out /home/aaron/pokemon-run/pewter-path-arrows
+    --out ~/pokemon-run/pewter-path-arrows
 
 # one stretch at a readable size
-python3 tools/pewter-chain/path_arrows.py still /home/aaron/pokemon-run/chain-film \
+python3 tools/pewter-chain/path_arrows.py still ~/pokemon-run/chain-film \
     --maps 0x00,0x0C --tile-px 22 --margin 1 --out /tmp/route-1.png
 ```
 
@@ -49,7 +49,7 @@ accepted there — the same substitution
 [`docs/swarm-view.md`](../swarm-view.md) records. Without `--mp4` the tool
 writes the PNG frames and prints the exact `ffmpeg` line.
 
-The video and the full-resolution still live in `/home/aaron/pokemon-run/`
+The video and the full-resolution still live in `~/pokemon-run/`
 (`pewter-path-arrows.mp4`, `pewter-path-arrows.png`) rather than in the
 repository: a 174 MB frame directory does not belong in git, and the two
 commands above regenerate the lot in under a minute. The three stills on this

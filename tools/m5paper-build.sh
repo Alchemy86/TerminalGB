@@ -63,7 +63,7 @@ usage: tools/m5paper-build.sh [command]
              do. It writes registers nobody has documented for this controller
              (LUT_SEL, the PSR mode bits, a forced temperature) and cuts the
              power part-way through a waveform. It can leave the glass worse
-             than it found it, and the captain authorised it on his own device.
+             than it found it, and the maintainer authorised it on his own device.
              Resets and re-inits after every experiment and ends on a clean
              test card. See src/bin/panel_deep_probe.rs.
   truncate   flash the TRUNCATION stepper: it cuts the power part-way through

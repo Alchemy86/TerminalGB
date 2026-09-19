@@ -1,7 +1,7 @@
 # The screen mosaic — sixty agents' screens at once
 
 > `tools/pewter-chain/screen_mosaic.py`, fed by `pewter_chain corpus --screens`.
-> Video: `/home/aaron/pokemon-run/screen-mosaic-05-rival-battle.mp4`.
+> Video: `~/pokemon-run/screen-mosaic-05-rival-battle.mp4`.
 
 [The swarm view](../swarm-view.md) and [the chain film](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md#11-the-films)
 draw where every agent **is**, on one world. This draws what every agent
@@ -166,7 +166,7 @@ python3 tools/pewter-chain/screen_mosaic.py \
 
 ffmpeg -y -framerate 30 -i target/mosaic-frames/m%05d.png \
     -c:v libopenh264 -b:v 6M \
-    /home/aaron/pokemon-run/screen-mosaic-05-rival-battle.mp4
+    ~/pokemon-run/screen-mosaic-05-rival-battle.mp4
 ```
 
 `--dry-run` reports the grid, the pace and the capture size without writing a

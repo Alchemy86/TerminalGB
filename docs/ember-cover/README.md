@@ -1,6 +1,6 @@
 # A DMG mimic of the opening of Kubbi's "Ember"
 
-The captain's ask: *"my tune. Can we mimic the opening in Gameboy music
+The maintainer's ask: *"my tune. Can we mimic the opening in Gameboy music
 style."* The reference is Kubbi's "Ember" (2015). This page is the honesty
 account the brief itself asked for, in the order the brief asked for it:
 the licence finding first, then the measured analysis, then what was
@@ -71,7 +71,7 @@ and a key are facts, not authorship. On that basis this piece is an
 independent work informed by, not a legal adaptation of, "Ember," and
 ShareAlike's relicensing obligation is very likely not triggered. That's a
 reasoned read of the license terms, not a legal opinion — if this is ever
-monetised or the captain wants certainty, that's worth a real check.
+monetised or the maintainer wants certainty, that's worth a real check.
 
 **Attribution is done regardless**, both because it's simply correct
 (Ember was the explicit creative reference) and because it costs nothing.
