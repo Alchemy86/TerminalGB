@@ -2,7 +2,7 @@
 # the --verify option compares the vendored ROM against, and editing it by hand
 # makes the pin a lie.
 repo = https://github.com/Alchemy86/GBSelfTest
-ref = 933283a
-commit = 933283a71069110c95cff03da87848278f5067b4
+ref = v1.0.0
+commit = 86f41fdbf60fd9bd30ada691aea936f626cd7aeb
 sha256 = 7291f0a7b3aea07796a79842d4ac22c3969e4c5bfc77042091a410109cccdf59
-origin = local checkout /home/aaron/Github/firstmate/projects/gbselftest
+origin = https://github.com/Alchemy86/GBSelfTest/releases/download/v1.0.0/gbselftest-v1.0.0.gb

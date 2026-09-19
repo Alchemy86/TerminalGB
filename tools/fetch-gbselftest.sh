@@ -103,13 +103,30 @@ if [ -n "${GBSELFTEST_LOCAL:-}" ]; then
 else
     REF="${GBSELFTEST_REF:?set GBSELFTEST_REF to the release tag, or GBSELFTEST_LOCAL to a checkout}"
     base="https://github.com/$REPO/releases/download/$REF"
-    curl -fsSL "$base/$ASSET" -o "$DEST/$ASSET.new"
+    # The release asset carries the version in its name (gbselftest-v1.0.0.gb);
+    # older releases published it unversioned. Try both, and record whichever
+    # URL actually answered as the origin -- a lock naming a URL that 404s is
+    # worse than no lock, because it reads as reproducible.
+    asset_url=""
+    for candidate in "$base/${ASSET%.gb}-$REF.gb" "$base/$ASSET"; do
+        if curl -fsSL "$candidate" -o "$DEST/$ASSET.new"; then
+            asset_url="$candidate"
+            break
+        fi
+    done
+    [ -n "$asset_url" ] || { echo "no $ASSET asset on release $REF of $REPO" >&2; exit 1; }
     mv "$DEST/$ASSET.new" "$DEST/$ASSET"
-    curl -fsSL "$base/$DOCS" -o "$DEST/$DOCS" || true
+    # -o truncates its target even when -f rejects the response, so a release
+    # that ships no CHECKS.md would blank the vendored copy. Stage it.
+    if curl -fsSL "$base/$DOCS" -o "$DEST/$DOCS.new" 2>/dev/null && [ -s "$DEST/$DOCS.new" ]; then
+        mv "$DEST/$DOCS.new" "$DEST/$DOCS"
+    else
+        rm -f "$DEST/$DOCS.new"
+    fi
     ref="$REF"
     commit=$(curl -fsSL "https://api.github.com/repos/$REPO/git/ref/tags/$REF" |
         sed -n 's/.*"sha" *: *"\([^"]*\)".*/\1/p' | head -1)
-    origin="$base/$ASSET"
+    origin="$asset_url"
 fi
 
 sha=$(sha256sum "$DEST/$ASSET" | cut -d' ' -f1)
