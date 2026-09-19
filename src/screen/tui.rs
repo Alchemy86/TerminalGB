@@ -1293,6 +1293,7 @@ struct App {
     /// Whether a battle was on at the last draw, so the focus ring can be
     /// re-pointed at the opponent the moment one starts (and back at the party
     /// when it ends) instead of leaving a stale index meaning something else.
+    #[cfg(feature = "plugin-trainer")]
     trainer_fighting: bool,
     /// Set when something has happened that ratatui's cell diff cannot see —
     /// specifically a terminal image being taken off the screen, which leaves
@@ -1306,10 +1307,12 @@ struct App {
     /// The last `TrainerPlugin::encounter_seq` this app reacted to, so the
     /// toast and the bell fire exactly once per Pokémon rather than every
     /// frame the banner is up.
+    #[cfg(feature = "plugin-trainer")]
     last_encounter_seq: u64,
     /// The last `TrainerPlugin::cable_club_seq` this app reacted to, so the
     /// "this room has no door" sentence is said on the way in and not on every
     /// frame the player spends looking for one.
+    #[cfg(feature = "plugin-trainer")]
     last_cable_club_seq: u64,
     /// A terminal bell owed to a shiny-if-traded verdict, written on the next
     /// flush rather than from inside the emulation step.
@@ -1626,11 +1629,14 @@ impl App {
             stats: false,
             trainer: trainer_open,
             trainer_detail: false,
+            #[cfg(feature = "plugin-trainer")]
             trainer_fighting: false,
             full_redraw: false,
             trainer_sel: 0,
             shiny_alert,
+            #[cfg(feature = "plugin-trainer")]
             last_encounter_seq: 0,
+            #[cfg(feature = "plugin-trainer")]
             last_cable_club_seq: 0,
             pending_bell: false,
             agent_panel: false,

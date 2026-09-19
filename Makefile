@@ -12,9 +12,16 @@ all: build install
 watch:
 	cargo watch -- make run
 
+# `--features gen1` on purpose: `default` no longer carries the Generation 1
+# work (see the root Cargo.toml's `gen1` feature), and lint coverage must not
+# shrink just because the bundle moved out of the default set. The bare-default
+# build is linted too, because "the emulator with no Pokemon code" is now a
+# supported configuration and an unused field behind a plugin cfg is exactly
+# the warning it catches.
 lint:
 	cargo fmt -- --check --color always
 	cargo clippy --all-targets -- -D warnings
+	cargo clippy --all-targets --features gen1 -- -D warnings
 
 # Audio is OFF by default (cpal needs ALSA dev headers, and a fresh clone must
 # still build) — so `make lint` never compiles `sound.rs`'s cpal module at all.
@@ -121,8 +128,13 @@ build-wasm:
 	cargo build --profile wasm-release --target wasm32-unknown-unknown
 	wasm-opt -O4 ./target/wasm32-unknown-unknown/wasm-release/terminalgb.wasm -o terminalgb.wasm && du -h terminalgb.wasm
 
+# `--features gen1` so the Generation 1 harnesses (trainer, scenario, agent,
+# longplay, colosseum, portal, …) keep running: they moved out of `default`
+# when the Pokemon bundle did, and a test suite that silently shrinks is worse
+# than no change at all. `make no-plugins` is the other half — it proves the
+# emulator still builds and passes its library tests with all of it off.
 test:
-	cargo test --release
+	cargo test --release --features gen1
 
 # Type-check both wasm builds: the embedding core and the web frontend
 # (default features). This exists because GitHub CI only runs on push and this
@@ -196,8 +208,9 @@ test-mcp:
 # action verb printed in docs/agent-reference.md is checked against the code
 # that produces it, and docs/agent-environment.md's frame hash and save-state
 # size are recomputed from the vendored cartridge. Already covered by a plain
-# `cargo test --release` (plugin-agent is a default feature); this target is
-# for running it alone after editing either page. See testharness/agentdocs.rs.
+# `cargo test --release --features gen1` (which reaches plugin-agent); this
+# target is for running it alone after editing either page.
+# See testharness/agentdocs.rs.
 test-agent-docs:
 	cargo test --release --features plugin-agent --test agentdocs
 
@@ -344,7 +357,7 @@ no-plugins:
 	cargo build --no-default-features --features tui,desktop
 	cargo test --no-default-features --lib
 	@if cargo tree --no-default-features --features tui,desktop --edges normal \
-	    | grep -E 'terminalgb-plugin-(trainer|gen1-link|battle-control|agent|example-tracer)'; \
+	    | grep -E 'terminalgb-plugin-(trainer|gen1-link|battle-control|agent|gen1-shinyhunt|gen1-lobby|example-tracer)|terminalgb-gen1-battle'; \
 	  then echo "FAIL: a plugin crate is in the no-plugin dependency graph"; exit 1; \
 	  else echo "OK: no plugin crate in the dependency graph"; fi
 

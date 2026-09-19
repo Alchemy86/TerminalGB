@@ -14,6 +14,22 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Changed
+- **BREAKING (build): a default build is now a Game Boy emulator and nothing else.** Everything
+  Generation 1 — the six Pokémon plugins, the battle simulator, the trade portal, and the
+  `longplay`/`scenario` runners built on Gen 1 perception — moved out of `default` and behind one
+  new opt-in feature, **`gen1`**. Nobody building an emulator has to take a Pokémon battle
+  simulator with it, and nobody who wants the Pokémon work has to name six features: it is
+  `cargo build --features gen1` or `cargo install terminalgb --features gen1`.
+  - Nothing was removed, renamed or made harder to reach: every individual `plugin-*` feature
+    still selects exactly what it did, `standard-plugins` is still the six-plugin bundle, and the
+    Gen 1 code is byte-for-byte what it was.
+  - **It is checked rather than intended.** CI fails if any cartridge-specific crate reaches the
+    dependency graph of a plain `cargo build`; `make no-plugins` separately builds the frontends
+    with every plugin off and runs the library tests against them; and `make lint` / `make test`
+    cover both configurations so the gate cannot quietly shrink.
+  - A default build still *knows the names*: an unbuilt plugin is told apart from an unknown one
+    and the message says which feature to rebuild with.
+
 - **`identical` is now the default picture engine.** The per-dot pixel FIFO — the real hardware
   pipeline, drawn dot by dot — is what every frontend, harness and embedder gets unless it asks
   otherwise. Scored through the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s

@@ -64,10 +64,33 @@ jobs:
       # testharness/audioperf.rs.
       - name: Emulation speed with audio attached
         run: cargo test --release --features audio --test audioperf
+      # `--features gen1` on both: the Generation 1 bundle (six plugins, the
+      # battle simulator, the trade portal, the long-run and scenario runners)
+      # left `default` so that a plain build is a Game Boy emulator and nothing
+      # else — see the root Cargo.toml. Every harness behind it still runs here;
+      # the `Emulator with no plugins` step below is the other half, proving the
+      # default build carries none of it.
       - name: cargo test build
-        run: cargo build --tests --release
+        run: cargo build --tests --release --features gen1
       - name: cargo test
-        run: cargo test --release
+        run: cargo test --release --features gen1
+      # THE DEFAULT BUILD CARRIES NO POKEMON CODE, and that is now a promise
+      # rather than an arrangement: `default` is the emulator and its
+      # frontends, `gen1` is everything Generation 1. A feature added to
+      # `default` that reaches a cartridge-specific crate fails here, which is
+      # the only place it would otherwise go unnoticed. (`make no-plugins`, in
+      # the embed job, is the neighbouring check on the frontends alone.)
+      - name: The default build is a Game Boy emulator and nothing else
+        run: |
+          found=$(cargo tree --edges normal --prefix none \
+                  | grep -oE 'terminalgb-(plugin-[a-z0-9-]+|gen1-battle)' \
+                  | sort -u | grep -v '^terminalgb-plugin-api$' || true)
+          if [ -n "$found" ]; then
+            echo "FAIL: cartridge-specific crates in the DEFAULT graph:"; echo "$found"
+            echo "Move the feature that pulls them in out of \`default\` and into \`gen1\`."
+            exit 1
+          fi
+          echo "OK: no cartridge-specific crate in the default dependency graph"
       # The MCP server, driven the way a client drives it: the harness spawns
       # the real `terminalgb-mcp` binary and speaks JSON-RPC to it. `make lint`
       # never compiles the feature, and a protocol bug is invisible to every

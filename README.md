@@ -43,7 +43,13 @@ with: the MIT-licensed dmg-acid2 test ROM ships with the repository.
 ```bash
 cargo install terminalgb                    # then: terminalgb path/to/game.gb
 cargo install terminalgb --features audio   # …with sound (Linux: needs libasound2-dev first)
+cargo install terminalgb --features gen1    # …with everything Pokémon (the panel pictured above)
 ```
+
+**A plain build is a Game Boy emulator and nothing else.** The Generation 1 work — the trainer
+panel in that screenshot, the virtual trade partner, the battle simulator, the agent runners — is
+a large, entirely optional layer on top, and it is one flag: `--features gen1`. See
+[Generation 1](#generation-1--one-flag-away) below.
 
 Or install nothing at all: [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Alchemy86/TerminalGB?quickstart=1)
 builds the [devcontainer](.devcontainer/devcontainer.json) in your browser, with the
@@ -131,26 +137,14 @@ needs at run time: **[docs/build-modes.md](docs/build-modes.md)**.
 - **[Full data output](docs/telemetry.md)** — opt-in NDJSON: displayed *and* emulated fps, the
   per-stage millisecond breakdown, bytes on the wire, dropped frames, audio queue depth. Every
   number the overlay shows a human is also a machine-readable line.
-- **[Plugins](docs/plugins.md)** — [seven ship in the tree](plugins/README.md) and the emulator
-  builds and runs with all of them deleted. Each declares what it may touch and the host refuses
+- **[Plugins](docs/plugins.md)** — [seven ship in the tree](plugins/README.md), every one of them
+  optional, and the emulator builds and runs with all of them deleted — which CI checks on every
+  push rather than taking on trust. Each declares what it may touch and the host refuses
   the rest; nothing loads implicitly. [Zero to a working plugin](docs/writing-a-plugin.md)
-- **[Agents that play unattended](docs/claude-plays.md)** — with [scenarios](docs/scenarios.md)
-  whose rules the host *enforces* rather than asks for, and [episodes](docs/longplay.md) that make
-  a long run measurable. The emulator never waits on a driver.
 - **[Be the console on the other end of the cable](docs/link-cable.md)** — start a second emulator
-  and the cable is already connected, no flag and no arming. Or
-  [trade with a partner that does not exist](docs/link-trade.md): not a memory poke, the game runs
-  its real link protocol and inserts the Pokémon itself.
+  and the cable is already connected, no flag and no arming.
 - **[The link port over TCP](docs/bgb-link.md)** — `link_net` speaks BGB's protocol, so the far end
   can be another emulator anywhere, or a bridge with real hardware behind it.
-  [The Colosseum](docs/link-battle.md)
-- **[A live trainer view](docs/trainer.md)** — press `T` in Pokémon Red or Blue for your party,
-  badges and the opponent's hidden stats, sprites decompressed out of your own cartridge, and a
-  verdict on whether a wild Pokémon **would be shiny if traded to Gen 2** before you spend a Ball.
-- **[Stage and script a Gen 1 battle](docs/gen1/battle-control.md)** — Red and Blue start one by
-  reading a single byte, so you can [hunt a DV spread](docs/shiny-hunt.md) across a dozen headless
-  emulators, or [watch two dozen agents](docs/swarm-view.md) walk the world at once.
-  [Gen 1](docs/gen1/README.md)
 - **[Music mode](docs/music-mode.md)** — every cartridge in your ROM directory becomes an album,
   cover art lifted from its own title screen.
 - **[A virtual webcam](docs/video-out.md)** — press `v` and pick the Game Boy as your camera in
@@ -158,6 +152,30 @@ needs at run time: **[docs/build-modes.md](docs/build-modes.md)**.
 - **[A chiptune renderer](docs/chiptune.md)** — a score or a `.vgm` in, real Game Boy audio out,
   because it is this repository's emulated APU rather than a synthesiser imitating one
   (<!--score:samesuite_apu-->66 / 69<!--/score--> on SameSuite's APU group).
+
+### Generation 1 — one flag away
+
+Everything below is **off unless you ask for it**. `cargo build --features gen1` (or
+`cargo install terminalgb --features gen1`) turns on the lot; each piece is also selectable on its
+own — `--features plugin-trainer` is a perfectly good build. None of it adds a third-party crate,
+and none of it ships game data: every byte comes out of the cartridge on your own disk at run time.
+
+- **[A live trainer view](docs/trainer.md)** — press `T` in Pokémon Red or Blue for your party,
+  badges and the opponent's hidden stats, sprites decompressed out of your own cartridge, and a
+  verdict on whether a wild Pokémon **would be shiny if traded to Gen 2** before you spend a Ball.
+- **[Trade with a partner that does not exist](docs/link-trade.md)** — not a memory poke: the game
+  runs its real link protocol and inserts the Pokémon itself. [The Colosseum](docs/link-battle.md)
+  puts a link *battle* on the other end of the same cable.
+- **[Stage and script a battle](docs/gen1/battle-control.md)** — Red and Blue start one by reading
+  a single byte, so you can [hunt a DV spread](docs/shiny-hunt.md) across a dozen headless
+  emulators, or [watch two dozen agents](docs/swarm-view.md) walk the world at once.
+- **[A battle simulator](docs/gen1/battle-engine.md)** held to the retail cartridge by a
+  differential harness, with agents that play it and an evaluation protocol that refuses to
+  report a win rate it cannot stand behind.
+- **[Agents that play unattended](docs/claude-plays.md)**, with [scenarios](docs/scenarios.md)
+  whose rules the host *enforces* rather than asks for.
+- **[The whole Generation 1 area](docs/gen1/README.md)** — the memory map, the mechanics, and what
+  is measured rather than assumed.
 
 ---
 

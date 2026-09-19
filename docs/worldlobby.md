@@ -288,11 +288,12 @@ survivor faulted, poisoned its battery and refused to write the save. A partner
 is also only ever booted into an empty room: joining a room is proof somebody
 else is here, and the seat opposite is theirs.
 
-**`plugin-gen1-lobby` has been in the crate's default features since the room
-landed** (`default` → `standard-plugins` → `plugin-gen1-lobby`), so an ordinary
-`cargo build --release` already contains it and the long `--features` list on
-the older command below was redundant. The only thing that was ever missing from
-an ordinary launch was a way to *ask* for it.
+**`plugin-gen1-lobby` rides the Generation 1 bundle** (`gen1` →
+`standard-plugins` → `plugin-gen1-lobby`), so `cargo build --release --features
+gen1` contains it and the long `--features` list on the older command below is
+redundant. It is *not* in a plain `cargo build`: nothing cartridge-specific is.
+The other thing that was missing from an ordinary launch, until the room landed,
+was a way to *ask* for it.
 
 ### The partner, and where it comes from
 

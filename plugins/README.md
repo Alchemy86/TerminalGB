@@ -1,7 +1,11 @@
 # Plugins
 
-The emulator is the product. Everything in this directory is an optional extra, and the
-emulator builds and runs with all of it deleted.
+The emulator is the product. Everything in this directory is an optional extra, **none of it is
+in a default build**, and the emulator builds and runs with all of it deleted — which CI checks
+on every push rather than taking on trust.
+
+Six of the seven are specific to Pokémon Red/Blue and come on together with
+`--features gen1`; [`example-tracer/`](example-tracer/) is the generic one and the one to copy.
 
 **Writing one: [`docs/writing-a-plugin.md`](../docs/writing-a-plugin.md).** Start by copying
 [`example-tracer/`](example-tracer/).
@@ -32,13 +36,16 @@ cycle.
 ## Building with and without them
 
 ```sh
-cargo build                                          # the standard bundle, all four
-cargo build --no-default-features --features tui     # the emulator, no plugins at all
+cargo build                                          # the emulator — NO plugins
+cargo build --features gen1                          # + everything Pokémon, all six
 cargo build --features plugin-trainer                # pick and choose
+cargo build --features plugin-example-tracer         # the generic example
 make no-plugins                                      # proves none of them is in the graph
 ```
 
-`standard-plugins` is the bundle in `default`. Drop it and you have the emulator alone.
+`standard-plugins` is the six-plugin bundle, and `gen1` is that bundle plus the rest of the
+Generation 1 layer (the battle simulator, the trade portal, the agent and scenario runners).
+Neither is in `default`: a plain `cargo build` is a Game Boy emulator and nothing else.
 
 ## Separate repositories
 

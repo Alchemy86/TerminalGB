@@ -54,15 +54,37 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # audio. See README "Embedding the core". Zero third-party crates besides
 # `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
 # belongs behind `desktop`/`tui`/`audio`, not in the core.
+# **Nothing game-specific is in here.** A plain `cargo build` gives the
+# emulator, its two frontends and the generic extras — and no Pokémon code at
+# all. Everything Generation 1 lives behind `gen1` (below) and is one flag
+# away, because somebody who wants a Game Boy emulator should not have to take
+# a Pokémon battle simulator, a trade portal and six cartridge-specific plugins
+# with it. See README "Generation 1: everything Pokémon, in one flag".
 default = [
     "desktop",
     "tui",
-    "standard-plugins",
     "chiptune",
     "music",
     "bgblink",
-    "portal",
+]
+
+# **EVERYTHING GENERATION 1, IN ONE FLAG** — `cargo build --features gen1`,
+# `cargo install terminalgb --features gen1`.
+#
+# The Pokémon Red/Blue work is the biggest thing built on this emulator and it
+# is *entirely* optional: six plugins, a battle simulator, a trade portal, the
+# unattended runner and the scenario system. Grouping them here is what lets
+# `default` mean "a Game Boy emulator" and this mean "a Game Boy emulator that
+# knows about Generation 1".
+#
+# It adds **no third-party crate** — every crate behind it is first-party and
+# each one is still individually selectable (`--features plugin-trainer` alone
+# is a perfectly good build). `make no-plugins` proves the emulator builds,
+# lints and passes its library tests with every one of them off.
+gen1 = [
+    "standard-plugins",
     "gen1-battle",
+    "portal",
     "longplay",
     "scenario",
 ]
@@ -125,10 +147,10 @@ bgblink = []
 # `examples/gen1_battle_ai`) — a faithful model of Generation 1 battle mechanics
 # and agents that play it. See docs/gen1/battle-engine.md.
 #
-# In `default` because it costs **no third-party crate**:
-# `terminalgb-gen1-battle` is first-party and dependency-free, the same
-# arrangement `chiptune` makes. Out of `--no-default-features` so an embedder
-# taking the machine does not inherit a Pokémon battle simulator.
+# In `gen1`, NOT in `default`: it costs no third-party crate
+# (`terminalgb-gen1-battle` is first-party and dependency-free, the same
+# arrangement `chiptune` makes) but it is a Pokémon battle simulator, and
+# nobody building a Game Boy emulator should have to take one.
 #
 # It depends on `plugin-battle-control` because the differential harness — the
 # thing that makes the model checkable at all — starts real battles on the real
@@ -140,8 +162,8 @@ gen1-battle = ["terminalgb-gen1-battle", "plugin-battle-control"]
 # **no third-party crate**: HTTPS is delegated to the system's `curl` binary
 # (the same "no new dependency" bar as the hand-rolled PNG/deflate/base64), and
 # the JSON codec is the agent plugin's — the same reuse the `mcp` feature makes.
-# In `default` because it costs no dependency; out of `--no-default-features`
-# so the embedding build and wasm inherit no network code. See docs/portal.md.
+# In `gen1`, NOT in `default`: it costs no dependency, but a Pokémon trade
+# portal is not part of a Game Boy emulator. See docs/portal.md.
 portal = ["plugin-gen1-link", "plugin-agent"]
 # THE LONG-HORIZON RUNNER (`terminalgb::longplay`, `examples/longplay.rs`) — an
 # agent plays a cartridge unattended for hours at headless speed, keeps durable
@@ -153,8 +175,9 @@ portal = ["plugin-gen1-link", "plugin-agent"]
 # loop, the perception layer and the bounded executor already live there and
 # must not exist twice. It adds **no third-party crate** — the JSON codec is
 # the agent plugin's and the ntfy push is delegated to the system `curl`, the
-# same bar `portal` meets. In `default` because it costs no dependency; out of
-# `--no-default-features` so an embedder inherits no run harness.
+# same bar `portal` meets. In `gen1`, NOT in `default`: it costs no dependency,
+# but its progress sampler reads Generation 1 work RAM, so it belongs with the
+# rest of the cartridge-specific layer rather than with the emulator.
 longplay = ["plugin-agent"]
 # **Scenarios** (`terminalgb::scenario`) — a declarative goal, rules the HOST
 # enforces rather than the model being asked to honour, the knowledge base an
@@ -163,9 +186,9 @@ longplay = ["plugin-agent"]
 #
 # It is `longplay` plus this module: the reset-and-repeat primitive, the
 # condition grammar and the progress sampler already live there and must not
-# exist twice. It adds **no third-party crate**. In `default` because it costs
-# no dependency; out of `--no-default-features` so an embedder inherits none of
-# it.
+# exist twice. It adds **no third-party crate**. In `gen1` rather than
+# `default`, with `longplay` and for the same reason: it is built on Generation
+# 1 perception and ships Generation 1 scenarios.
 scenario = ["longplay"]
 # BARE METAL — the emulator core with no operating system under it at all.
 #
@@ -231,9 +254,9 @@ plugin-gen1-lobby = ["terminalgb-plugin-gen1-lobby"]
 # documented install path works for a plugin nothing in the emulator special-
 # cases. `--features plugin-example-tracer`, then `plugins = example-tracer`.
 plugin-example-tracer = ["terminalgb-plugin-example-tracer"]
-# The bundle the emulator ships with by default — "a bundle of standard plugins
-# people can reference or install". Drop it from `default` and you have the
-# emulator alone.
+# The six cartridge-specific plugins as one name — "a bundle of standard plugins
+# people can reference or install". It is reached through `gen1`, never through
+# `default`: a plain build is the emulator alone.
 standard-plugins = [
     "plugin-trainer",
     "plugin-gen1-link",
