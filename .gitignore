@@ -50,6 +50,12 @@ scenarios/*/guidance/
 # forward; see docs/agent/pewter-chain.md.
 scenarios/pewter/states/
 
+# Agent/editor local state. `.claude/settings.local.json` is written by the
+# tool on first run and is per-machine (absolute paths, local hooks); it was
+# only ever kept out of the tree by a local `.git/info/exclude`, which does not
+# travel with a clone.
+.claude/settings.local.json
+
 # Secrets never belong in the tree. Nothing here reads a dotenv file today;
 # this is the guard for the day something does.
 .env

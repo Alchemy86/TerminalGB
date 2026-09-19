@@ -124,7 +124,7 @@ Interrupt" — the internal STAT signal is set by
 *New test:* `gpu::tests::entering_vblank_raises_stat_for_the_mode_2_source_too`, positive **and**
 negative case. Teeth proven the same way.
 
-*Conformance-tool candidates* (per the [standing convention](../CLAUDE.md)): **"a latched frame
+*Conformance-tool candidates* (per the [standing convention](../AGENTS.md)): **"a latched frame
 condition must not be gated on the enable bit that consumes it"** and **"the mode-1 STAT source is
 the OR of the mode-1 and mode-2 select bits."** Both are one-frame screen checks against a
 reference image — exactly the shape `tools/conformance/checks.json` already carries.
@@ -364,7 +364,7 @@ can pass at most one of the three columns.
 
 ## 6. Conformance-tool notes
 
-Per the [standing convention](../CLAUDE.md), for the two fixes:
+Per the [standing convention](../AGENTS.md), for the two fixes:
 
 1. **Window Y condition gated on window-enable.** *Symptom:* the window never appears for a game
    that sets `WY` while the window is off and enables it later in the frame. *Caught by:*

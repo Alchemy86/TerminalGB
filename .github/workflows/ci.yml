@@ -38,7 +38,7 @@ jobs:
       CARGO_TERM_COLOR: always
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: recursive   # test ROMs live in the tests/ submodule
       - uses: Swatinem/rust-cache@v2
@@ -173,7 +173,7 @@ jobs:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3   # deliberately NO submodules: the ROM below is vendored
+      - uses: actions/checkout@v4   # deliberately NO submodules: the ROM below is vendored
       - uses: Swatinem/rust-cache@v2
       - run: rustup toolchain install stable --profile minimal
       - run: rustup component add clippy
@@ -235,7 +235,7 @@ jobs:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: recursive   # Blargg ROMs live in the tests/ submodule
       - uses: Swatinem/rust-cache@v2
@@ -291,7 +291,7 @@ jobs:
       # exactly this (Makefile, `SUITES ?=`), so nothing else has to change.
       SUITES: .test-suites
     steps:
-      - uses: actions/checkout@v3       # no submodules: none of these live here
+      - uses: actions/checkout@v4       # no submodules: none of these live here
       - uses: Swatinem/rust-cache@v2
       - run: rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
       # Every pin lives in `tools/fetch-test-suites.sh` and nowhere else — the

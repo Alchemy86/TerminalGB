@@ -623,7 +623,7 @@ headless test and obvious in one screenshot of the status panel.
 
 ## 10. Conformance record
 
-Per the [standing convention](../CLAUDE.md), each fix gets a symptom, the test that catches
+Per the [standing convention](../AGENTS.md), each fix gets a symptom, the test that catches
 it, the contract violated, and the new test it produced. As with the three render bugs in
 [`terminal-render.md`](terminal-render.md), these are **presentation** bugs: the framebuffer
 stays perfectly correct throughout, so point 2 has the same uncomfortable answer every time —

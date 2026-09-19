@@ -231,7 +231,7 @@ misread.
 
 ## 4. Conformance record
 
-Per the standing convention in [`../CLAUDE.md`](../CLAUDE.md). The coverage
+Per the standing convention in [`../AGENTS.md`](../AGENTS.md). The coverage
 answer is the same for all of these and is itself the finding: **no public test
 ROM covers any of it.** Blargg, Mooneye GB and acid2 test one console in
 isolation; nothing in the suite plugs a second Game Boy in.

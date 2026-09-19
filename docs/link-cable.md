@@ -880,7 +880,7 @@ nothing in Blue is shiny, whatever its DVs.
 
 ### Conformance record — the two-process link
 
-Per the [standing convention](../CLAUDE.md). This is a **product-path** finding
+Per the [standing convention](../AGENTS.md). This is a **product-path** finding
 rather than an emulation-accuracy one, so point 3 cites the disassembly and the
 transport contract rather than Pan Docs.
 

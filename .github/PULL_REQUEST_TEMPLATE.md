@@ -19,7 +19,7 @@
 - [ ] Updated `CHANGELOG.md` under `[Unreleased]` for user-facing changes
 - [ ] Ran `make docs-links` if I moved source lines referenced by the docs
 - [ ] For an **emulation** fix: captured it per the
-      [standing convention](../CLAUDE.md) (symptom, which test ROM catches it, the hardware
+      [standing convention](../AGENTS.md) (symptom, which test ROM catches it, the hardware
       behaviour + citation, any new test)
 
 ## Notes

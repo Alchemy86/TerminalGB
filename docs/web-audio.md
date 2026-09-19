@@ -262,7 +262,7 @@ happening again.
 
 ## 7. Conformance record
 
-Per the [standing convention](../CLAUDE.md). Two defects, both in the *frontend*, so
+Per the [standing convention](../AGENTS.md). Two defects, both in the *frontend*, so
 point 3 cites the platform contract rather than Pan Docs where that is what was violated.
 
 **(a) The `wasm32` build had no APU.**

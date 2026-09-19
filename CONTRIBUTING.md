@@ -9,8 +9,8 @@ you'll actually hit building and testing it.
 - **Rust 1.83.0** — pinned in [`rust-toolchain`](rust-toolchain), so `rustup` selects it
   automatically in this directory. `make lint` uses `rustfmt` and `clippy`; add them with
   `rustup component add rustfmt clippy`.
-- A `.gb`/`.gbc` ROM of your own. The repo ships **no** commercial ROMs — only the vendored
-  MIT `dmg-acid2` test ROM under `third_party/`.
+- A `.gb`/`.gbc` ROM of your own. The repo ships **no** commercial ROMs — only the two
+  vendored MIT test cartridges under `third_party/`: `dmg-acid2` and `gbselftest`.
 
 ### Audio is off by default (no ALSA needed for a normal build)
 
@@ -88,7 +88,7 @@ The audio harness has the same model with `UPDATE_AUDIO_BASELINE=1`. Any change 
 When you fix an **emulation** bug, capture it as a test case *in the same change*: record the
 user-visible symptom, which test ROM catches it (or note that none does — a coverage gap is a
 finding), the hardware behaviour violated with a citation, and any new test the fix produced.
-The full convention is in [`CLAUDE.md`](CLAUDE.md); this is what makes the planned standalone
+The full convention is in [`AGENTS.md`](AGENTS.md); this is what makes the planned standalone
 [conformance tool](docs/conformance.md) worth extracting.
 
 ## Formatting & lint
