@@ -219,8 +219,9 @@ reads zero, matching hardware.
 - **`src/cpu/z80` is gone** (deleted 2026-08-14). It was a non-compiled, fully
   commented-out port of Imran Nazar's JavaScript jsgb interpreter that early handlers
   were derived from — dead code, and Nazar's site states no licence, the same
-  provenance question that removed `resources/jsgb-mmu-map.png`. Read his article
-  series online if the lineage is ever needed; do not restore the file.
+  provenance question that removed the inherited memory-map figure traced from his
+  article. Read his article series online if the lineage is ever needed; do not
+  restore the file.
 
 ## 5. Known quirks and edge cases
 

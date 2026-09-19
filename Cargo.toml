@@ -26,8 +26,8 @@ rust-version = "1.83"
 
 # The published crate is SOURCE ONLY — a whitelist, not an exclude list,
 # because what must never ship is unambiguous: no test ROM (the `tests/`
-# submodule is other people's unlicensed ROMs), no game footage or third-party
-# scans (`resources/`, parts of `docs/`), no internal notes (`AGENTS.md`).
+# submodule is other people's unlicensed ROMs), no screenshots or rendered
+# audio (parts of `docs/`), no internal notes (`AGENTS.md`).
 # Every ROM a user plays comes from their own disk at run time and stays
 # there. `testharness/**` and `examples/**` stay in because every declared
 # `[[test]]`/`[[example]]` path must exist in the package; root files carry a
