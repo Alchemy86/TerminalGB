@@ -33,6 +33,7 @@ checksum.
 | [The save file](the-save-file.md) | Three WRAM runs into three SRAM runs, the checksum, and why editing the map in a save does not move the player | **verified: the run map closes exactly on `sGameDataEnd`** |
 | [Reading the screen](reading-the-screen.md) | `wTilemap` reads back as text here too — and the three ways Gen 2 differs from Gen 1 in doing it | **drove menus on the retail cartridge** |
 | [The Time Capsule](time-capsule.md) | The only supported Gen 1 ↔ Gen 2 link: what it refuses, what it requires, and why the wire needs nothing added | **a Pokémon crossed it, both directions, and Gold saved the result** |
+| [A Pokémon out of a Gold cartridge](marill.md) | Locating `BaseData`, `PokemonNames` and `PokemonPicPointers` by signature; Gen 2's picture compression; a species' cry and its battle entrance, both captured off the cartridge | **read out of the cartridge; 500 pictures agree** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost a run, and several cost a day | **found the hard way** |
 | [Two consoles, one wire](../link-cable.md) | The cable that carries it, and the measured record of the run itself | **Gen 1 ↔ Gen 2 trade verified** |
 | Authoring an area | Building a new room and walking into it — **scoped for Gen 2, not attempted.** The work, the unknowns and the cost estimate are in [the Gen 1 page's §7](../gen1/authoring-an-area.md#7-generation-2--the-work-not-a-guess), where they belong beside the mechanism they would be adapting | **not established** |
@@ -112,7 +113,7 @@ Named honestly, with what each would cost, so nobody re-derives the same list:
 | **Storage and the bag** — boxes, the item list | Same shape as the party work already done. Cheap once the party struct is fully transcribed rather than partially. |
 | **The map system** — map attributes, tileset pointers, block map buffer, collision, warp/bg-event/object tables | Scoped in detail, with the open questions and a cost range, in [the Gen 1 authoring page's §7](../gen1/authoring-an-area.md#7-generation-2--the-work-not-a-guess). A map is `(group, number)` in Gen 2, which alone invalidates a one-for-one translation. |
 | **The RNG** — Gen 2's `Random` and whether it mixes `rDIV` the way Gen 1's does | Read the routine. Everything this repository says about reproducibility is a *Gen 1* claim and must not be assumed forward. |
-| **A signature-based address check** — the "read out of the cartridge" grade above | A day, and it is what would let a Gen 2 plugin be safe on a cartridge nobody tested it against. |
+| ~~**A signature-based address check**~~ — done for the species tables, in [a Pokémon out of a Gold cartridge](marill.md): `BaseData`, `PokemonNames` and `PokemonPicPointers` are located by signature and verified against all 500 pictures, and a cartridge that does not match is refused. **Still missing for the WRAM write addresses**, which is where it matters most | The species tables took a day. The write addresses need the same treatment and are the remaining half. |
 | **A Gen 2 observer, trainer panel or battle-control plugin** | None exists. The [trainer plugin](../trainer.md) is Gen 1 only and refuses anything else by title *and* header checksum, which is the correct behaviour and also the reason nothing silently half-works. |
 | **Silver, and Crystal addresses** | See "Which cartridge" above. |
 
@@ -124,6 +125,9 @@ Named honestly, with what each would cost, so nobody re-derives the same list:
   pages. Crafts a Gold save that can use the Time Capsule, drives a real cartridge to the
   receptionist, and runs the whole Gen 1 ↔ Gen 2 trade in one process with both cores on
   [`LinkCable`](../link-cable.md).
+* [`examples/gen2_marill.rs`](../../examples/gen2_marill.rs) — the species tables, the picture
+  decompressor, and the cry and entrance captures. The one Gen 2 code here that needs no
+  transcribed address at all.
 * [`plugins/trainer/src/derived.rs`](../../plugins/trainer/src/derived.rs) — the Gen 2 *rules*
   applied to Gen 1 data: the shiny test, Hidden Power, and an explicit list of what Gen 1
   genuinely does not have. One copy of the shiny rule, shared by everything that quotes it.

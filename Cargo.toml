@@ -581,6 +581,14 @@ path = "examples/gen2_timecapsule.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
 
 [[example]]
+name = "gen2_marill"
+path = "examples/gen2_marill.rs"
+required-features = ["image", "chiptune"]
+# The picture decompressor and the pack packer have unit tests beside them, and
+# an example's tests do not run unless its target says so.
+test = true
+
+[[example]]
 name = "worldlobby"
 path = "examples/worldlobby.rs"
 required-features = [

@@ -222,4 +222,5 @@ and that had quietly happened to more than half of this directory.
 | [the Time Capsule](gen2/time-capsule.md) | the only door between the generations: what Gold refuses, what it requires |
 | [reading Gold's screen](gen2/reading-the-screen.md) | the Gen 2 charmap, and the two facts inverted from Gen 1 |
 | [building the disassembly](gen2/building-the-disassembly.md) | making a `pokegold` build byte-identical to the cartridge, so its symbols are exact |
+| [a Pokémon out of a Gold cartridge](gen2/marill.md) | the species tables found by signature, Gen 2's picture compression, and a cry and a battle entrance captured off the cartridge |
 | [sharp edges](gen2/sharp-edges.md) | the Gen 2 traps, including the ones we have not closed |
