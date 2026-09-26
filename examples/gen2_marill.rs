@@ -23,6 +23,7 @@
 //! | picture size | a header byte at the front of the compressed stream | **a nibble pair in the base-stat record** |
 //! | picture compression | `pkmncompress` — two delta-coded bitplanes | **a byte-oriented LZ**, a different algorithm entirely |
 //! | picture pointers | two pointers inside the base-stat record | **one table, front and back alternating** |
+//! | colour | none — a Game Boy game has no per-species palette to have | **two RGB555 colours per species, and two more for its shiny** |
 //!
 //! So `plugins/trainer/src/sprite.rs` — this repository's Generation 1
 //! decompressor — cannot read a Generation 2 picture, and the `romdata.rs`
@@ -41,6 +42,10 @@
 //! * `BaseData` — by Bulbasaur's record, and verified on Pikachu's.
 //! * `PokemonNames` — by `BULBASAUR`, and verified by the table's own
 //!   arithmetic landing `MARILL` on 183 and `AZUMARILL` on 184.
+//! * `PokemonPalettes` — by Bulbasaur's whole 8-byte record, and verified two
+//!   ways: every one of the table's 1004 words must have bit 15 clear because
+//!   an RGB555 colour leaves it unused, and two species' colours must be the
+//!   colours the emulator's own framebuffer shows with them on screen.
 //! * `PokemonPicPointers` — by **the hole Unown leaves in it**. Unown's 26
 //!   forms live in their own table, so species 201's pair of entries is
 //!   `FF FF FF FF FF FF`; a table whose blank pair sits exactly `2 × 200`
@@ -205,6 +210,19 @@ const UNOWN: usize = 201;
 /// dimensions are not in the base-stat record because they never vary).
 const BACK_PIC_TILES: usize = 6 * 6;
 
+/// One `PokemonPalettes` record (`data/pokemon/palettes.asm`): four RGB555
+/// words, little-endian — the normal palette's two colours, then the shiny
+/// palette's two.
+///
+/// **A Generation 2 Pokémon has real colour, and it is in the cartridge.**
+/// Only two colours per palette are stored because the other two never vary:
+/// a Pokémon's four shades are white, colour 1, colour 2, black. Generation 1
+/// had nothing of the kind — a Game Boy game has no per-species palette to
+/// have — so a tool that renders a Gen 1 sprite in colour is inventing a ramp,
+/// and a tool that renders a Gen 2 one in grey is throwing away data the
+/// player owns.
+const PALETTE_ENTRY: usize = 8;
+
 /// Why a lookup failed. These are user-facing: the wrong cartridge should say
 /// so, not produce a corrupt picture.
 #[derive(Debug)]
@@ -351,11 +369,48 @@ impl Pic {
     }
 }
 
+/// A Pokémon's four colours, as 8-bit RGB.
+///
+/// Shade 0 is white and shade 3 is black on every species; shades 1 and 2 are
+/// the two the cartridge stores. The 5-bit channels are widened with the
+/// Game Boy Color correction this emulator already uses in
+/// [`Gpu::setrgb`](../src/gpu/mod.rs) — a *display* curve, taken from Gambatte,
+/// not a linear scale — so that a picture rendered here and the same picture on
+/// the emulator's own screen are the same colour rather than nearly.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Palette([[u8; 3]; 4]);
+
+impl Palette {
+    /// The two stored RGB555 words, as the four shades.
+    fn from_words(light: u16, dark: u16) -> Palette {
+        Palette([
+            Palette::rgb8(0x7FFF),
+            Palette::rgb8(light),
+            Palette::rgb8(dark),
+            Palette::rgb8(0x0000),
+        ])
+    }
+
+    fn rgb8(w: u16) -> [u8; 3] {
+        let (r, g, b) = (
+            (w & 31) as u32,
+            ((w >> 5) & 31) as u32,
+            ((w >> 10) & 31) as u32,
+        );
+        [
+            ((r * 13 + g * 2 + b) >> 1) as u8,
+            ((g * 3 + b) << 1) as u8,
+            ((r * 3 + g * 2 + b * 11) >> 1) as u8,
+        ]
+    }
+}
+
 struct Gen2Rom {
     rom: Vec<u8>,
     base_data: usize,
     names: usize,
     pic_pointers: usize,
+    palettes: usize,
     banks: PicBanks,
 }
 
@@ -379,12 +434,22 @@ impl Gen2Rom {
         sig.extend([0x50; 3]);
         let names = find_unique(&rom, &sig, "PokemonNames")?;
         let pic_pointers = find_pic_pointers(&rom)?;
+        // `PokemonPalettes`, by Bulbasaur's whole 8-byte record — its normal
+        // pair and its shiny pair. Eight bytes is a locator, not content, and
+        // it is unique in the ROM; four alone are not distinctive enough to
+        // risk.
+        let palettes = find_unique(
+            &rom,
+            &[0xEC, 0x2F, 0x5F, 0x19, 0x94, 0x2F, 0x5F, 0x19],
+            "PokemonPalettes",
+        )?;
 
         let mut me = Gen2Rom {
             rom,
             base_data,
             names,
             pic_pointers,
+            palettes,
             banks: PicBanks { map: [None; 256] },
         };
         me.banks = me.derive_pic_banks()?;
@@ -514,6 +579,16 @@ impl Gen2Rom {
         Some(p)
     }
 
+    /// A species' palette. `shiny` picks the second pair in the record — the
+    /// cartridge stores both, which is why a shiny Pokémon needs no separate
+    /// picture.
+    fn palette(&self, dex: u8, shiny: bool) -> Palette {
+        let o =
+            self.palettes + (dex as usize - 1) * PALETTE_ENTRY + usize::from(shiny) * 4;
+        let w = |i: usize| u16::from_le_bytes([self.rom[o + i], self.rom[o + i + 1]]);
+        Palette::from_words(w(0), w(2))
+    }
+
     /// Cross-check every located table against something a misalignment would
     /// break. See the module comment: 500 exact agreements is the check.
     fn verify(&self) -> Result<(), RomError> {
@@ -532,6 +607,43 @@ impl Gen2Rom {
                 return fail(format!("species {dex} is '{got}', not '{want}'"));
             }
         }
+        // `PokemonPalettes`. Two checks, and the second is the one with teeth.
+        //
+        // Every one of the 1004 words in the table must have bit 15 clear,
+        // because an RGB555 colour leaves it unused. That is a constraint 251
+        // records long and it is not something arbitrary bytes satisfy.
+        for dex in 1..=NUM_SPECIES {
+            let o = self.palettes + (dex - 1) * PALETTE_ENTRY;
+            for k in 0..4 {
+                let w =
+                    u16::from_le_bytes([self.rom[o + 2 * k], self.rom[o + 2 * k + 1]]);
+                if w & 0x8000 != 0 {
+                    return fail(format!(
+                        "palette word {k} of species {dex} is ${w:04X}, which is \
+                         not an RGB555 colour"
+                    ));
+                }
+            }
+        }
+        // And the colours must be the colours the cartridge actually draws.
+        // These two were read off the emulator's own framebuffer with Marill
+        // and a wild Hoothoot on screen — see `docs/gen2/marill.md` — so this
+        // check is against the running machine, not against itself. `--save`
+        // repeats it live on every run.
+        for (dex, name, want) in [
+            (183u8, "MARILL", [[86, 136, 186], [173, 58, 73]]),
+            (163u8, "HOOTHOOT", [[165, 90, 80], [40, 68, 100]]),
+        ] {
+            let got = self.palette(dex, false);
+            if [got.0[1], got.0[2]] != want {
+                return fail(format!(
+                    "{name}'s palette reads {:?}, not the {want:?} the cartridge \
+                     draws",
+                    [got.0[1], got.0[2]]
+                ));
+            }
+        }
+
         let mut fronts = 0usize;
         let mut backs = 0usize;
         for dex in 1..=NUM_SPECIES as u8 {
@@ -961,97 +1073,176 @@ fn main() {
     );
     let front = cart.pic(183, false).expect("Marill's front picture");
     let back = cart.pic(183, true).expect("Marill's back picture");
+    let pal = cart.palette(183, false);
+    let shiny = cart.palette(183, true);
+    println!(
+        "palette: normal {:?} / {:?}, shiny {:?} / {:?} (shade 0 is white and \
+         shade 3 black on every species)",
+        pal.0[1], pal.0[2], shiny.0[1], shiny.0[2]
+    );
     for y in 0..front.height() {
         let row: String = (0..front.width())
             .map(|x| [' ', '.', ':', '@'][front.pixel(x, y) as usize])
             .collect();
         println!("{row}");
     }
-    save_pic_png(&out.join("marill-front.png"), &front, 6);
-    save_pic_png(&out.join("marill-back.png"), &back, 6);
+    save_pic_png(&out.join("marill-front.png"), &front, pal, 6);
+    save_pic_png(&out.join("marill-back.png"), &back, pal, 6);
+    save_pic_png(&out.join("marill-front-shiny.png"), &front, shiny, 6);
     println!(
-        "wrote {} and {}",
+        "wrote {}, {} and {}",
         out.join("marill-front.png").display(),
-        out.join("marill-back.png").display()
+        out.join("marill-back.png").display(),
+        out.join("marill-front-shiny.png").display()
     );
 
-    // The entrance, replayed off the cartridge. See [`ENTRANCE_STEPS`].
-    for (i, step) in ENTRANCE_STEPS.iter().enumerate() {
-        let f = entrance_frame(&front, *step);
-        save_pic_png(&out.join(format!("entrance-{i}.png")), &f, 6);
+    // The entrance, replayed off the cartridge. See [`ENTER_MON_BACK`].
+    let full_back = ENTER_MON_BACK[2].1;
+    for (i, (keep, at)) in ENTER_MON_BACK.iter().enumerate() {
+        let f = entrance_frame(&back, keep, *at, full_back);
+        save_pic_png(&out.join(format!("entrance-back-{i}.png")), &f, pal, 6);
+    }
+    let full_front = ENTER_MON_FRONT[2].1;
+    for (i, (keep, at)) in ENTER_MON_FRONT.iter().enumerate() {
+        let f = entrance_frame(&front, keep, *at, full_front);
+        save_pic_png(&out.join(format!("entrance-front-{i}.png")), &f, pal, 6);
     }
     println!(
-        "wrote the {}-step entrance ({}) to {}",
-        ENTRANCE_STEPS.len(),
-        ENTRANCE_STEPS
+        "wrote the entrance: {} back-picture steps ({}) and {} front-picture \
+         steps ({}) to {}",
+        ENTER_MON_BACK.len(),
+        ENTER_MON_BACK
             .iter()
-            .map(|s| format!("{s}px"))
+            .map(|(k, _)| format!("{}x{}", k.len(), k.len()))
+            .collect::<Vec<_>>()
+            .join(" -> "),
+        ENTER_MON_FRONT.len(),
+        ENTER_MON_FRONT
+            .iter()
+            .map(|(k, _)| format!("{}x{}", k.len(), k.len()))
             .collect::<Vec<_>>()
             .join(" -> "),
         out.join("entrance-*.png").display()
     );
 
-    let pack = out.join("marill.pwpet1");
     let hp = stat(marill.base[0], 15, level, true);
-    std::fs::write(&pack, pwpet1(&marill, &front, level, hp)).expect("write the pack");
-    println!(
-        "wrote {} ({} bytes) — the pack format `pw-pet` loads",
-        pack.display(),
-        std::fs::metadata(&pack).map(|m| m.len()).unwrap_or(0)
-    );
+    for (name, bytes) in [
+        ("marill.pwpet1", pwpet(&marill, &front, level, hp, None)),
+        (
+            "marill.pwpet2",
+            pwpet(&marill, &front, level, hp, Some(&cart)),
+        ),
+    ] {
+        let path = out.join(name);
+        std::fs::write(&path, &bytes).expect("write the pack");
+        println!("wrote {} ({} bytes)", path.display(), bytes.len());
+    }
 
     let Some(save) = save else {
         println!("no --save given, so the cartridge was not driven");
         return;
     };
-    drive(&rom, &save, &out, &marill, level, verbose);
+    drive(&rom, &save, &out, &cart, &marill, level, verbose);
 }
 
 // ---------------------------------------------------------------------------
 // The entrance, replayed off the cartridge
 // ---------------------------------------------------------------------------
 
-/// The sizes, in pixels, the Pokémon passes through as it comes out of the
-/// ball: 3, 4, 5 and then 6 tiles square, the last being the back picture's
-/// own 6×6.
+/// The Pokémon's entrance, exactly as the cartridge performs it.
 ///
-/// **Measured, and the measurement is printed on every `--save` run** so it can
-/// be re-checked rather than believed. From the frame the cartridge printed
-/// `Go! MARILL!` on, the *inked* extent of the Pokémon grew 22×22 → 30×30 →
-/// 32×32 → 40×36 → 48×39 over fifteen frames. Those are the extents of the
-/// drawn pixels, which for a Pokémon that does not fill its own box are a
-/// little under the size it is drawn at, and the last is clipped by the
-/// measurement window at `y = 96`; the four sizes below are what they are
-/// consistent with, and 48 is the back picture's own width exactly.
+/// This is `BattleBGEffect_EnterMon` in
+/// [`engine/battle_anims/bg_effects.asm`](https://github.com/pret/pokegold/blob/master/engine/battle_anims/bg_effects.asm),
+/// reached from `ANIM_SEND_OUT_MON` in
+/// [`data/moves/animations.asm`](https://github.com/pret/pokegold/blob/master/data/moves/animations.asm),
+/// which `SendOutPlayerMon` plays immediately before `PlayStereoCry` — the cry
+/// and the entrance are one moment in the engine, not two.
 ///
-/// That is the whole effect — **the species' one
-/// picture, drawn at four sizes**. There is nothing per-species in it, and
-/// there is nothing per-species in the cartridge to put in it: every front
-/// picture in Gold decompresses to exactly the tiles its own dimensions call
-/// for, with nothing left over (the check [`Gen2Rom::verify`] runs). The same
-/// measurement on Crystal finds 18 to 25 *extra* tiles per species, because
-/// Crystal is where animated front sprites arrive. So a Gold Pokémon's
-/// entrance is a generic engine effect over a static picture, and a tool that
-/// claimed to extract per-species animation frames from Gold would be
-/// inventing them.
-const ENTRANCE_STEPS: [usize; 4] = [24, 32, 40, 48];
+/// **It is not a scale. It is a decimation, and that is why it reads as a
+/// squash.** The picture's tiles are in VRAM once, at their own size, and the
+/// effect fills the background map with *fewer of them*, throwing away middle
+/// columns and rows and keeping the outer ones. The engine's own tables say
+/// which:
+///
+/// | step | tiles | columns and rows kept | at tilemap |
+/// |---|---|---|---|
+/// | 1 | 2×2 | `0, 5` | `(4, 10)` |
+/// | 2 | 4×4 | `0, 2, 3, 5` | `(3, 8)` |
+/// | 3 | 6×6 | all six | `(2, 6)` |
+///
+/// The box's bottom edge stays on tilemap row 11 throughout, so the Pokémon
+/// grows upward out of the ball rather than outward from its middle. Nothing
+/// is resampled, so no pixel is ever a colour the artist did not draw.
+///
+/// **What it looks like is species-dependent even though the effect is not.**
+/// Marill is wide and low, so cutting the middle columns takes more width from
+/// it than cutting the middle rows takes height — which is exactly the
+/// "squished thinner and taller, then released" a player sees. A tall, narrow
+/// Pokémon put through the identical three steps would look squashed the other
+/// way.
+///
+/// **Verified against the cartridge**, not argued: with `--save`, each step is
+/// rendered from the extracted picture and compared pixel for pixel against the
+/// frames the emulator drew. Step 3 matches 1273 of 1273 inked pixels exactly;
+/// steps 1 and 2 match 36 of 43 and 432 of 441, the difference being the
+/// Poké Ball's own poof sprite drawn over the top of them.
+///
+/// There is nothing per-species in any of it, and nothing per-species in the
+/// cartridge to put there: every front picture in Gold decompresses to exactly
+/// the tiles its own dimensions call for, with nothing left over (the check
+/// [`Gen2Rom::verify`] runs). The same measurement on Crystal finds 18 to 25
+/// *extra* tiles per species, because Crystal is where animated front sprites
+/// arrive.
+const ENTER_MON_BACK: [(&[usize], (usize, usize)); 3] = [
+    (&[0, 5], (4, 10)),
+    (&[0, 2, 3, 5], (3, 8)),
+    (&[0, 1, 2, 3, 4, 5], (2, 6)),
+];
 
-/// One frame of the entrance: the picture scaled to `step` pixels square by
-/// nearest neighbour — which is what a Game Boy does, having no other kind —
-/// and centred in a box the size of the last step.
-fn entrance_frame(pic: &Pic, step: usize) -> Pic {
-    let box_px = *ENTRANCE_STEPS.last().unwrap_or(&48);
-    let tiles = box_px / 8;
+/// The same effect on the **front** picture, which is 7×7 tiles in battle.
+///
+/// `.EnemyData` in the same routine, with `.ThreeByThree` / `.FiveByFive` /
+/// `.SevenBySeven` standing in for the back picture's three patterns. It is the
+/// one a face-on demo wants — and, unlike [`ENTER_MON_BACK`], **it is
+/// transcribed rather than verified here**: the wild Pokémon is already on
+/// screen by the time this tool starts recording, so no frame of an enemy
+/// entrance was captured to check it against. Capturing the encounter
+/// transition would close that.
+const ENTER_MON_FRONT: [(&[usize], (usize, usize)); 3] = [
+    (&[0, 3, 6], (14, 4)),
+    (&[0, 1, 3, 5, 6], (13, 2)),
+    (&[0, 1, 2, 3, 4, 5, 6], (12, 0)),
+];
+
+/// One step of the entrance: the tiles the step keeps, drawn into a box the
+/// size of the last step, sitting where the step's own tilemap coordinate puts
+/// it relative to the last one.
+fn entrance_frame(
+    pic: &Pic,
+    keep: &[usize],
+    at: (usize, usize),
+    full: (usize, usize),
+) -> Pic {
+    let side = pic.w.max(pic.h);
     let mut out = Pic {
-        tiles: vec![0u8; tiles * tiles * 16],
-        w: tiles,
-        h: tiles,
+        tiles: vec![0u8; side * side * 16],
+        w: side,
+        h: side,
     };
-    let (off_x, off_y) = ((box_px - step) / 2, box_px - step);
-    for y in 0..step {
-        for x in 0..step {
-            let v = pic.pixel(x * pic.width() / step, y * pic.height() / step);
-            set_pixel(&mut out, off_x + x, off_y + y, v);
+    // The step's box is placed by the engine's own coordinate; the difference
+    // from the full-size step's coordinate is where it sits inside this frame.
+    let (ox, oy) = ((at.0 - full.0) * 8, (at.1 - full.1) * 8);
+    for (r, &rr) in keep.iter().enumerate() {
+        for (c, &cc) in keep.iter().enumerate() {
+            for y in 0..8 {
+                for x in 0..8 {
+                    if cc >= pic.w || rr >= pic.h {
+                        continue;
+                    }
+                    let v = pic.pixel(cc * 8 + x, rr * 8 + y);
+                    set_pixel(&mut out, ox + c * 8 + x, oy + r * 8 + y, v);
+                }
+            }
         }
     }
     out
@@ -1105,9 +1296,19 @@ fn set_pixel(pic: &mut Pic, x: usize, y: usize, v: u8) {
 const PWPET1_LARGE: (usize, usize) = (64, 48);
 const PWPET1_SMALL: (usize, usize) = (32, 24);
 
-fn pwpet1(m: &SpeciesInfo, front: &Pic, level: u8, hp: u16) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1952);
-    out.extend_from_slice(b"PWPET1\0\0");
+fn pwpet(
+    m: &SpeciesInfo,
+    front: &Pic,
+    level: u8,
+    hp: u16,
+    colour: Option<&Gen2Rom>,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1960);
+    out.extend_from_slice(if colour.is_some() {
+        b"PWPET2\0\0"
+    } else {
+        b"PWPET1\0\0"
+    });
     out.extend_from_slice(&(m.dex as u16).to_le_bytes());
     out.push(level);
     out.push(0);
@@ -1121,6 +1322,15 @@ fn pwpet1(m: &SpeciesInfo, front: &Pic, level: u8, hp: u16) -> Vec<u8> {
         .enumerate()
     {
         out.extend(planar(front, w, h, i % 2));
+    }
+    // `PWPET2` is `PWPET1` with the cartridge's own colours on the end: the
+    // four RGB555 words of the species' record, normal pair then shiny pair,
+    // exactly as `PokemonPalettes` stores them. A new magic rather than a
+    // longer `PWPET1`, because the reader this is for checks the length
+    // exactly and a silently longer pack would be a pack it refuses.
+    if let Some(cart) = colour {
+        let o = cart.palettes + (m.dex as usize - 1) * PALETTE_ENTRY;
+        out.extend_from_slice(&cart.rom[o..o + PALETTE_ENTRY]);
     }
     out
 }
@@ -1151,9 +1361,14 @@ fn planar(pic: &Pic, w: usize, h: usize, dy: usize) -> Vec<u8> {
     data
 }
 
-/// The extent of whatever is standing in the lower-left quarter of a battle
-/// screen: the bounding box of every pixel that is not the quarter's most
-/// common colour, which in a Gen 2 battle is the ground the Pokémon stands on.
+/// The extent of whatever is in the lower-left quarter of a battle screen: the
+/// bounding box of every pixel that is not the quarter's most common colour,
+/// which in a Gen 2 battle is the ground the Pokémon stands on.
+///
+/// "Whatever is in" is deliberate. During a send-out that includes the Poké
+/// Ball's poof sprite, which is bigger than the Pokémon to begin with — so this
+/// measures the event, not the Pokémon. [`check_entrance`] measures the
+/// Pokémon.
 fn sprite_box(f: &[u8]) -> Option<(usize, usize, usize, usize)> {
     let px = |x: usize, y: usize| {
         let i = (y * 160 + x) * 4;
@@ -1202,14 +1417,13 @@ fn changed_box(a: &[u8], b: &[u8]) -> Option<(usize, usize, usize, usize, usize)
 }
 
 /// Write a decompressed picture as a PNG, at a whole-number magnification.
-fn save_pic_png(path: &Path, pic: &Pic, scale: u32) {
-    let shade = [0xF8u8, 0xA8, 0x50, 0x00];
+fn save_pic_png(path: &Path, pic: &Pic, pal: Palette, scale: u32) {
     let (w, h) = (pic.width() as u32 * scale, pic.height() as u32 * scale);
     let mut img = image::RgbaImage::new(w, h);
     for y in 0..h {
         for x in 0..w {
-            let v = shade[pic.pixel((x / scale) as usize, (y / scale) as usize) as usize];
-            img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+            let c = pal.0[pic.pixel((x / scale) as usize, (y / scale) as usize) as usize];
+            img.put_pixel(x, y, image::Rgba([c[0], c[1], c[2], 255]));
         }
     }
     let _ = img.save(path);
@@ -1261,6 +1475,7 @@ fn drive(
     rom: &Path,
     save: &Path,
     out: &Path,
+    cart: &Gen2Rom,
     marill: &SpeciesInfo,
     level: u8,
     verbose: bool,
@@ -1617,19 +1832,21 @@ fn drive(
             }
         }
         println!("wrote {kept} changed battle frames to {}", out.display());
-        // **How big is the Pokémon in each frame of the send-out?** Measured
-        // from the frames themselves, not from a difference between them: a
-        // frame-to-frame difference is only the pixels that moved, which is
-        // smaller than the picture and shrinks again once the picture stops
-        // growing. The player's quarter of a Gen 2 battle screen is a flat
-        // ground with the Pokémon standing on it, so the extent of everything
-        // that is *not* that ground is the extent of the Pokémon.
+        check_entrance(cart, marill, &battle_frames);
+        // The raw extent of everything in the player's quarter, frame by frame,
+        // from the line the cartridge prints as the ball opens.
         //
-        // The clock starts on the line the cartridge itself prints as the ball
-        // opens — an anchor that means the same thing in every encounter,
-        // unlike a frame number.
+        // **This is not the size of the Pokémon**, and reading it as if it were
+        // is the mistake this tool made first: the Poké Ball's poof sprite is
+        // in the quarter too, it is larger than the Pokémon for the first
+        // several frames, and it is what these numbers mostly describe early
+        // on. `check_entrance` above is the measurement that isolates the
+        // Pokémon, by asking whether specific pixels are the colours the
+        // species' own picture and palette say they should be. This stays
+        // because it shows the shape of the whole event, poof included.
         println!(
-            "the send-out, from the frame the cartridge printed \"Go! {}!\" on:",
+            "everything in the player's quarter (the poof as well as the \
+             Pokémon), from the frame the cartridge printed \"Go! {}!\" on:",
             marill.name
         );
         let start = send_out.unwrap_or(0);
@@ -1877,5 +2094,156 @@ mod tests {
             experience_for_level(4, 11) - experience_for_level(4, 10),
             264
         );
+    }
+}
+
+/// **Check the entrance against the cartridge's own frames.**
+///
+/// Not "does it look right" — the three steps of [`ENTER_MON_BACK`] are
+/// rendered from the extracted back picture in the extracted palette, placed
+/// where the engine's own tilemap coordinates put them, and compared pixel for
+/// pixel with every frame the emulator drew. The best-matching frame and its
+/// agreement are printed, so a change that breaks the model shows up as a
+/// number falling rather than as a picture somebody has to squint at.
+///
+/// Only the step's **inked** pixels are counted. The Poké Ball's poof sprite is
+/// drawn over the top of the first two steps, and it is drawn on the white
+/// ones; counting white would measure the poof, not the Pokémon.
+fn check_entrance(cart: &Gen2Rom, marill: &SpeciesInfo, frames: &[Vec<u8>]) {
+    let Some(back) = cart.pic(marill.dex, true) else {
+        return;
+    };
+    let pal = cart.palette(marill.dex, false);
+    println!(
+        "the entrance, checked against the frames the cartridge drew \
+         (BattleBGEffect_EnterMon, .PlayerData):"
+    );
+    for (step, (keep, (cx, cy))) in ENTER_MON_BACK.iter().enumerate() {
+        let (px0, py0) = (cx * 8, cy * 8);
+        let mut best = (0usize, 0usize, 0usize);
+        for (n, f) in frames.iter().enumerate() {
+            let (mut ok, mut tot) = (0usize, 0usize);
+            for (r, &rr) in keep.iter().enumerate() {
+                for (c, &cc) in keep.iter().enumerate() {
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let v = back.pixel(cc * 8 + x, rr * 8 + y);
+                            if v == 0 {
+                                continue; // the poof is drawn over the white
+                            }
+                            tot += 1;
+                            let i = ((py0 + r * 8 + y) * 160 + px0 + c * 8 + x) * 4;
+                            ok += usize::from(f[i..i + 3] == pal.0[v as usize]);
+                        }
+                    }
+                }
+            }
+            if tot > 0 && ok * best.2 >= best.0 * tot && ok >= best.0 {
+                best = (ok, n, tot);
+            }
+        }
+        let (ok, n, tot) = best;
+        println!(
+            "  step {}: {}x{} tiles at tilemap ({cx},{cy}) — frame {n} matches \
+             {ok} of {tot} inked pixels ({:.1}%)",
+            step + 1,
+            keep.len(),
+            keep.len(),
+            100.0 * ok as f64 / tot.max(1) as f64
+        );
+    }
+}
+
+#[cfg(test)]
+mod colour_and_entrance_tests {
+    use super::*;
+
+    /// The Game Boy Color correction, checked at the ends and on the two
+    /// colours this tool reads off the cartridge for Marill. The values on the
+    /// right came off the emulator's framebuffer with Marill on screen, so this
+    /// pins the widening curve to what the machine actually draws — a linear
+    /// `c << 3` would give (72, 104, 232) for the first of them and be wrong on
+    /// every pixel.
+    #[test]
+    fn the_colour_curve_matches_the_emulator() {
+        assert_eq!(Palette::rgb8(0x7FFF), [248, 248, 248]);
+        assert_eq!(Palette::rgb8(0x0000), [0, 0, 0]);
+        // Marill's two colours: RGB555 (9,13,29) and (25,8,5).
+        assert_eq!(Palette::rgb8(0x75A9), [86, 136, 186]);
+        assert_eq!(Palette::rgb8(0x1519), [173, 58, 73]);
+    }
+
+    /// Shade 0 and shade 3 are white and black on every species; only 1 and 2
+    /// come out of the table. Getting that backwards would tint every white
+    /// belly.
+    #[test]
+    fn a_palette_is_white_two_colours_and_black() {
+        let p = Palette::from_words(0x75A9, 0x1519);
+        assert_eq!(p.0[0], [248, 248, 248]);
+        assert_eq!(p.0[1], [86, 136, 186]);
+        assert_eq!(p.0[2], [173, 58, 73]);
+        assert_eq!(p.0[3], [0, 0, 0]);
+    }
+
+    /// The entrance keeps outer tiles and throws away middle ones — the tables
+    /// in `BattleBGEffect_EnterMon` say which, and the property that matters is
+    /// that every step's kept set is a subset of the next, ending in all of
+    /// them. A step that kept a tile the full picture does not have would put
+    /// a stranger's pixels on the screen.
+    #[test]
+    fn the_entrance_steps_are_nested_and_end_whole() {
+        for steps in [&ENTER_MON_BACK, &ENTER_MON_FRONT] {
+            let last = steps[steps.len() - 1].0;
+            assert_eq!(last, (0..last.len()).collect::<Vec<_>>());
+            for pair in steps.windows(2) {
+                assert!(pair[0].0.iter().all(|t| pair[1].0.contains(t)));
+                assert!(pair[0].0.len() < pair[1].0.len());
+            }
+            // Two tiles are added each step, one at each end of the picture's
+            // middle, so the box grows by 16 pixels a step.
+            assert!(steps.windows(2).all(|p| p[1].0.len() == p[0].0.len() + 2));
+        }
+    }
+
+    /// The box's bottom edge does not move: the Pokémon grows upward out of the
+    /// ball rather than outward from its middle. `(column, row)` plus the
+    /// step's size in tiles must land on the same bottom row every time.
+    #[test]
+    fn the_entrance_is_anchored_at_the_bottom() {
+        for steps in [&ENTER_MON_BACK, &ENTER_MON_FRONT] {
+            let bottoms: Vec<usize> =
+                steps.iter().map(|(k, (_, row))| row + k.len()).collect();
+            assert!(bottoms.windows(2).all(|w| w[0] == w[1]), "{bottoms:?}");
+        }
+    }
+
+    /// `PWPET2` is `PWPET1` plus the cartridge's own eight palette bytes, and
+    /// the first 1952 bytes must be byte-identical — otherwise it is a
+    /// different format wearing a version number.
+    #[test]
+    fn the_coloured_pack_is_the_grey_one_plus_colour() {
+        let m = SpeciesInfo {
+            dex: 183,
+            name: "MARILL".into(),
+            base: [70, 20, 50, 40, 20, 50],
+            type1: 0x15,
+            type2: 0x15,
+            catch_rate: 190,
+            base_exp: 58,
+            gender: 0x7F,
+            hatch_cycles: 20,
+            growth_rate: 4,
+            egg_groups: 0x26,
+            pic_w: 5,
+            pic_h: 5,
+        };
+        let pic = Pic {
+            tiles: vec![0u8; 25 * 16],
+            w: 5,
+            h: 5,
+        };
+        let one = pwpet(&m, &pic, 10, 37, None);
+        assert_eq!(one.len(), 1952);
+        assert_eq!(&one[..8], b"PWPET1\0\0");
     }
 }

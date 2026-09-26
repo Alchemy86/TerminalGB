@@ -39,6 +39,7 @@ misalignment would break.
 | `BaseData` | Bulbasaur's record — dex 1, 45/49/49/45/65/65, GRASS/POISON, catch 45, exp 64 | `$051B0B` |
 | `PokemonNames` | `BULBASAUR` *and* `IVYSAUR` together — one name alone also appears in the Pokédex text, but the 10-byte field padding makes the pair unmistakable | `$1B0B74` |
 | `PokemonPicPointers` | **the hole Unown leaves in it** (below) | `$048000` |
+| `PokemonPalettes` | Bulbasaur's whole 8-byte record; verified against colours measured off the running cartridge (§5) | `$00AD45` |
 | the picture banks | derived, not assumed (below) | — |
 
 ### Unown is what finds the picture table
@@ -94,6 +95,7 @@ Everything a Gen 1 tool knows about a Pokémon is wrong here except the idea:
 | picture size | a header byte at the head of the compressed stream | **a nibble pair in the base-stat record** |
 | picture compression | `pkmncompress` — two delta-coded bitplanes | **a byte-oriented LZ**, a different algorithm |
 | picture pointers | two pointers inside the base-stat record | **one table, front and back alternating** |
+| colour | none — a Game Boy game has no per-species palette to have | **two RGB555 colours per species, and two more for its shiny** |
 
 So [`plugins/trainer/src/sprite.rs`](../../plugins/trainer/src/sprite.rs), this repository's Gen 1
 decompressor, cannot read a Gen 2 picture at all. The Gen 2 decompressor is a command stream:
@@ -140,46 +142,117 @@ Two things the driver has to get right, both of them already written down here:
 
 ---
 
-## 5. The entrance: a generic effect over a static picture
+## 5. Colour: Generation 2 Pokémon have real palettes, and they are in the cartridge
 
-This is the finding worth the page.
+`PokemonPalettes` at **`$00AD45`**. Eight bytes a species: two RGB555 colours for the normal
+palette, two more for the shiny one. Only two, because the other two never vary — a Pokémon's
+four shades are white, colour 1, colour 2, black.
 
-**Gold holds no animation frames for any species.** Every front picture decompresses to exactly
-the tiles its own dimensions call for, with nothing left over — that is the 500-agreement check
-in §1, read the other way round. The same measurement on Crystal finds **18 to 25 extra tiles
-per species** (Bulbasaur 43 tiles against a 25-tile picture, Pikachu 50, Marill 44), because
-Crystal is where animated front sprites arrive.
+This is a real difference from Generation 1, not a smaller version of it. A Game Boy game has no
+per-species palette to have, so the Pokéwalker project's Generation 1 importer invents a
+[ramp](https://github.com/Alchemy86/TerminalGB) per species and says so plainly. **A Generation 2
+Pokémon needs no ramp invented for it.** Marill is `(86, 136, 186)` and `(173, 58, 73)` — a blue
+body with red inner ears and a red tail ball — and those are the artist's numbers, not anyone's
+guess.
 
-So there is nothing per-species to extract from Gold, and a tool that offered to extract it
-would be inventing it. What there is instead is an **engine effect over the species' one
-picture**, and the tool measures it rather than describing it:
+**How it was found, and why it is not circular.** The colours were measured *first*, off the
+emulator's own framebuffer with Marill on screen, and then used as the signature to find the
+table. Inverting the Game Boy Color correction this emulator applies
+([`Gpu::setrgb`](../../src/gpu/mod.rs), the Gambatte curve) gives exactly one RGB555 pair for
+each: `$75A9` and `$1519`. Searching the ROM for those four bytes matches **once**, at
+`$00B2F5` — and `$00B2F5 − 182 × 8 = $00AD45`, so Marill is entry 183, where every other table
+in this cartridge also puts it.
 
-* **On the status page** there is no effect at all. The picture appears — its bottom tile row
-  two frames before the rest, which is a transfer spread over frames, not an animation — and
-  then does not move again for the five seconds the tool watches it.
-* **In a wild battle** the ball opens on the line `Go! MARILL!` and the Pokémon **grows out of
-  it**. The tool measures the extent of the Pokémon in every frame from that line onwards,
-  taken from the frames themselves — the player's quarter of a battle screen is a flat ground,
-  so the extent of everything that is not that ground is the extent of the Pokémon. On the run
-  behind this page, against a wild Hoothoot:
+Two checks then make it worth believing:
 
-  ```text
-  frame 110 (+29): 22x22    frame 118 (+37): 32x32    frame 125 (+44): 48x39
-  frame 114 (+33): 30x30    frame 121 (+40): 35x32
-  frame 117 (+36): 30x31    frame 122 (+41): 40x36
-  ```
+* **Every one of the table's 1004 words has bit 15 clear**, because an RGB555 colour leaves it
+  unused. That is a 251-record-long constraint, and arbitrary bytes do not satisfy it.
+* **A second species, never used in the search.** The wild Pokémon in the captured battle was a
+  Hoothoot. The table says `#163` is `(165, 90, 80)` and `(40, 68, 100)`; the emulator's
+  framebuffer in that battle contains exactly those two colours and no others besides white and
+  black. The pixel counts agree too: Marill's extracted front picture has 374 pixels of shade 1
+  and 67 of shade 2, and the status page draws 374 blue and 67 red.
 
-  Those are the *inked* pixels, which for a Pokémon that does not fill its own box run a little
-  under the size it is drawn at, and the last height is clipped by the measurement window at
-  `y = 96`. The width of the last one is 48, which is the back picture's own width exactly.
-
-`entrance-*.png` replays that off the cartridge: Marill's extracted picture at 24, 32, 40 and 48
-pixels — 3, 4, 5 and 6 tiles square, the sizes those extents are consistent with. It is the
-whole effect, and it is the same effect for every species.
+So **shade 1 is the record's first colour and shade 2 its second**, and the tool now renders
+Marill — and its shiny palette, `(80, 160, 95)` and `(219, 78, 214)` — in the colours the
+cartridge holds.
 
 ---
 
-## 6. Handing it to the Pokéwalker
+## 6. The entrance: a decimation, which is why it looks like a squash
+
+**This section corrected an earlier wrong answer, and the correction is the interesting part.**
+
+The first version of this tool measured the send-out as "the Pokémon grows out of the ball at
+24, 32, 40 and 48 pixels". That was wrong. It was measuring the bounding box of everything in
+the player's quarter of the screen, and for the first several frames what is in that quarter is
+mostly the **Poké Ball's poof sprite**, which is larger than the Pokémon and is not the
+Pokémon. The numbers were real; the thing they described was not.
+
+The real mechanism is in the disassembly, and it is not a scale at all.
+[`BattleBGEffect_EnterMon`](https://github.com/pret/pokegold/tree/master/engine/battle_anims/bg_effects.asm),
+reached from `ANIM_SEND_OUT_MON` in
+[`data/moves/animations.asm`](https://github.com/pret/pokegold/tree/master/data/moves/animations.asm),
+which `SendOutPlayerMon` plays immediately before `PlayStereoCry` — **the cry and the entrance
+are one moment in the engine, not two.** Its `.PlayerData` is three steps, and each one fills the
+background map from a fixed pattern of tile indices:
+
+| step | tiles | columns and rows kept | at tilemap |
+|---|---|---|---|
+| 1 | 2×2 | `0, 5` | `(4, 10)` |
+| 2 | 4×4 | `0, 2, 3, 5` | `(3, 8)` |
+| 3 | 6×6 | all six | `(2, 6)` |
+
+The picture's 36 tiles are in VRAM once, at their own size. The effect draws **fewer of them**,
+throwing away middle columns and rows and keeping the outer ones. Nothing is resampled, so no
+pixel is ever a colour the artist did not draw. The box's bottom edge stays on tilemap row 11
+throughout, so the Pokémon grows upward out of the ball rather than outward from its middle.
+
+**That is why it reads as a squash, and why what it looks like is species-dependent even though
+the effect is not.** Marill is wide and low, so cutting the middle columns takes more width from
+it than cutting the middle rows takes height — "squished thinner and taller, then released to
+normal size" is an accurate description of what a player sees, produced by a mechanism with
+nothing per-species in it. A tall, narrow Pokémon put through the identical three steps would
+look squashed the other way.
+
+**Verified, not argued.** With `--save`, the tool renders each step from the extracted back
+picture in the extracted palette, places it where the engine's own tilemap coordinates put it,
+and compares it pixel for pixel with every frame the emulator drew:
+
+```text
+step 1: 2x2 tiles at tilemap (4,10) — matches   36 of   43 inked pixels (83.7%)
+step 2: 4x4 tiles at tilemap (3,8)  — matches  432 of  441 inked pixels (98.0%)
+step 3: 6x6 tiles at tilemap (2,6)  — matches 1273 of 1273 inked pixels (100%)
+```
+
+Step 3 is exact. The shortfall in the first two is the poof drawn over the top of them, which is
+also why only *inked* pixels are counted — the poof lands on the white ones. The numbers
+reproduce across different encounters.
+
+The front picture is 7×7 tiles in battle, so its entrance uses the same routine's `.EnemyData`
+and the 3×3 / 5×5 / 7×7 patterns. That one is **transcribed, not verified here**: the wild
+Pokémon is already on screen by the time this tool starts recording, so no frame of an enemy
+entrance was captured to check it against. Capturing the encounter transition would close it.
+
+`entrance-back-*.png` and `entrance-front-*.png` replay both.
+
+### What this does *not* change
+
+**Gold still holds no animation frames for any species.** Every front picture decompresses to
+exactly the tiles its own dimensions call for, with nothing left over — that is the
+500-agreement check in §1, read the other way round. The same measurement on Crystal finds **18
+to 25 extra tiles per species** (Bulbasaur 43 tiles against a 25-tile picture, Pikachu 50,
+Marill 44), because Crystal is where animated front sprites arrive. The entrance is a generic
+engine effect over one static picture, and a tool offering to extract per-species animation from
+Gold would be inventing it.
+
+On the **status page** there is no effect at all: the picture appears — its bottom tile row two
+frames before the rest, which is a transfer spread over frames — and then does not move again
+for the five seconds the tool watches it.
+
+---
+
+## 7. Handing it to the Pokéwalker
 
 `marill.pwpet1` is the 1952-byte pack the Pokéwalker pet software loads — that project keeps no
 artwork of its own and takes a pet as a pack lifted out of the player's cartridge at run time.
@@ -187,24 +260,31 @@ Its Generation 1 producer leans on this repository's Generation 1 decompressor; 
 Generation 2 half of the same arrangement, written here because this is where the Generation 2
 decompressor now lives.
 
+`marill.pwpet2` is the same 1952 bytes with the cartridge's own eight palette bytes on the end —
+a new magic rather than a longer `PWPET1`, because the reader this is for checks the length
+exactly and a silently longer pack is a pack it refuses. The first 1952 bytes are byte-identical,
+so today's importer keeps working on the `.pwpet1` and a future one gets real colour for free.
+
 Frame 2 of the pack is frame 1 nudged down one pixel. The Gen 1 producer already does that and
 says plainly it is not what a shipping implementation would do. It is the right thing here for a
 reason Gen 1's tool could only assume and this one has measured: **there is no second frame on
 the cartridge to put there.**
 
-**What is not done:** the Pokéwalker project's own importer is not taught to read this pack, and
+**What is not done:** the Pokéwalker project's own importer is not taught to read `PWPET2`, and
 its walking screen is not wired to play the cry or the entrance. That work is in that
 repository, not this one.
 
 ---
 
-## 7. What this does not establish
+## 8. What this does not establish
 
 * **Silver and Crystal.** Every number here was measured on English Pokémon Gold, SHA-1
   `d8b8a3600a465308c9953dfa04f0081c05bdcb94` — the cartridge
   [building the disassembly](building-the-disassembly.md) records `pret/pokegold` reproducing
   byte for byte. Crystal is refused by the check, which is the correct behaviour and also the
   proof that the check works. Silver is untested.
+* **The front picture's entrance.** Transcribed from `.EnemyData` in the same routine, not
+  checked against a captured frame — see §6.
 * **`FixPicBank`.** The bank correction is derived and verified; the routine that performs it
   has not been found in the cartridge.
 * **The cry's data.** Nothing here reads Gen 2's `Cries` table or its audio engine. The cry is
