@@ -1,0 +1,29 @@
+# Written by hand for this vendoring. Not a scored/refreshed artefact like
+# gbselftest.lock — see README.md for why. If these directories are ever
+# refreshed, update the commit/date pair for the repo that changed and say
+# why in the commit message (what changed upstream, why it mattered here).
+
+[switch-ldn]
+repo = https://github.com/GB-Link/GB-Link-Switch-LDN
+ref = main
+commit = f3266330f83fc6a017e18c4a9ba2c4efb593a00a
+cloned = 2026-09-26
+vendored = README.md, LICENSE, licenses/LDN-GPL-3.0.txt, firmware/README.md,
+           firmware/common/*.{c,h} (excluding firmware/common/components/zstd,
+           a vendored-of-vendored compression library with no bearing on the
+           LDN/link-cable mechanism)
+not-vendored = web/ (the browser client), host/ (the C# desktop app and
+           console tools), firmware/ESP32*/main (per-chip build glue with no
+           protocol logic), firmware/common/components/ (zstd)
+
+[gblink-firmware]
+repo = https://github.com/GB-Link/GBLink-Firmware
+ref = master
+commit = 4aef46a1aff688cc0a68df666858eccb9b5ae291
+tag = v2.2.3
+cloned = 2026-09-26
+vendored = README.md, LICENSE, src/ (all of it — Zephyr application source,
+           under 30k lines total)
+not-vendored = west.yml, boards/, dts/, tests/, scripts/, prj.conf, Kconfig,
+           CMakeLists.txt, *.svd (build/board-integration plumbing, not
+           protocol source)

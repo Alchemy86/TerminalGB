@@ -132,6 +132,14 @@ Reference implementations of other emulators are **read for behaviour and cited,
 copied**, unless their licence permits reuse and you say so at the call site. Check the
 `LICENSE` file yourself and record what you found; do not rely on a remembered answer.
 
+`third_party/` is not only for build artefacts (`gbselftest/`, `dmg-acid2/` vendor a ROM
+because the point is scoring against an independent oracle). It can also vendor real
+**source** from a copyleft (GPL/AGPL) project purely for reading and evaluation — see
+[`third_party/gblink/README.md`](third_party/gblink/README.md) for the pattern: no build
+artefact to checksum, so the lock pins the upstream commit SHA instead; the README states
+plainly that nothing vendored this way is built or linked into TerminalGB, which is what
+keeps this project's own MPL-2.0 licence uninvolved.
+
 ### The documentation is generated and gated
 
 - `make docs-links` rewrites every `path:line` reference in `docs/` into a GitHub link
