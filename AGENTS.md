@@ -206,6 +206,14 @@ the trait. **Never move the trait back, and never let a plugin crate depend on
 `terminalgb::testing::TestMachine`). The same argument produced `terminalgb-chiptune`
 and `terminalgb-gen1-battle` as dependency-free crates.
 
+**Not everything in `plugins/` is a plugin.** `plugins/surfing-pikachu/` is a standalone
+game that implements no `Plugin` trait, and it *does* depend on `terminalgb` (for the
+terminal frontend's half-block renderer) — which only stays acyclic because nothing in
+`terminalgb` depends on it, and nothing may start. The rule above is about crates the
+emulator links; adding a `surfing-pikachu` panel to the frontend would create the cycle
+it exists to prevent. Its tests are named explicitly in `make test`, because a root
+`cargo test` runs only the root package's.
+
 **Capabilities are enforced per call, not trusted.** A plugin declares
 `OBSERVE / READ_MEMORY / WRITE_MEMORY / CONTROL_INPUT / SERIAL_LINK`; an undeclared
 `peek` returns `None` and an undeclared `poke` returns `false`. That makes "which plugin

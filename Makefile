@@ -135,6 +135,9 @@ build-wasm:
 # emulator still builds and passes its library tests with all of it off.
 test:
 	cargo test --release --features gen1
+	# Plugin crates are separate packages: a root `cargo test` never reaches
+	# their tests, so they are named here or they are not run at all.
+	cargo test --release -p terminalgb-surfing-pikachu
 
 # Type-check both wasm builds: the embedding core and the web frontend
 # (default features). This exists because GitHub CI only runs on push and this
@@ -357,7 +360,7 @@ no-plugins:
 	cargo build --no-default-features --features tui,desktop
 	cargo test --no-default-features --lib
 	@if cargo tree --no-default-features --features tui,desktop --edges normal \
-	    | grep -E 'terminalgb-plugin-(trainer|gen1-link|battle-control|agent|gen1-shinyhunt|gen1-lobby|example-tracer)|terminalgb-gen1-battle'; \
+	    | grep -E 'terminalgb-plugin-(trainer|gen1-link|battle-control|agent|gen1-shinyhunt|gen1-lobby|example-tracer)|terminalgb-gen1-battle|terminalgb-surfing-pikachu'; \
 	  then echo "FAIL: a plugin crate is in the no-plugin dependency graph"; exit 1; \
 	  else echo "OK: no plugin crate in the dependency graph"; fi
 

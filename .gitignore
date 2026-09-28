@@ -68,3 +68,11 @@ scenarios/pewter/states/
 .preview/
 *.preview.html
 readme-*.html
+
+# Extracted reference material for the Surfing Pikachu port: pret's
+# disassembly of somebody else's game plus its tile art. The port is built
+# from it and cites it by symbol name (see
+# plugins/surfing-pikachu/REFERENCE.md), but the material itself is not ours
+# to redistribute, and the licence boundary in AGENTS.md is explicit that
+# game assets never enter the tree.
+plugins/surfing-pikachu/reference/

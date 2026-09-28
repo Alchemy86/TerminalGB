@@ -23,6 +23,21 @@ someone to find.
 | [`gen1-shinyhunt/`](gen1-shinyhunt/README.md) | `gen1-shinyhunt` | `plugin-gen1-shinyhunt` | hunt a Gen 1 DV spread across many headless emulators at once | observe + read |
 | [`gen1-lobby/`](gen1-lobby/) | `gen1-lobby` | `plugin-gen1-lobby` | a shared Cable Club room several emulators walk around in together — [the World Trade Centre](../docs/worldlobby.md) | observe + read + write |
 
+## Not a plugin: [`surfing-pikachu/`](surfing-pikachu/README.md)
+
+The same directory, a different thing. [`surfing-pikachu`](surfing-pikachu/README.md)
+is a standalone Rust port of Pokémon Yellow's Surfing Pikachu minigame — its own
+crate with its own binary, playable in a terminal with no ROM and no emulator.
+It implements no `Plugin` trait because it observes no running machine; it
+reuses the terminal frontend's `halfblocks` renderer and nothing else.
+
+```sh
+cargo run --release -p terminalgb-surfing-pikachu
+```
+
+It is deliberately not in any feature bundle and nothing in the emulator
+depends on it.
+
 Note the middle column: **`battle-control` is the crate, `gen1-battle` is the name you put in
 `plugins = …`.** The crate is named for what it does to any game; the plugin is named for the
 game it does it to.

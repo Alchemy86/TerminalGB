@@ -1,0 +1,28 @@
+[package]
+name = "terminalgb-surfing-pikachu"
+version = "0.1.0"
+description = "Surfing Pikachu — a standalone Rust port of the Pokemon Yellow minigame, played in a terminal"
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/TerminalGB"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+publish = false
+
+[lib]
+name = "surfing_pikachu"
+path = "src/lib.rs"
+
+[[bin]]
+name = "surfing-pikachu"
+path = "src/bin/surfing-pikachu.rs"
+required-features = ["terminal"]
+
+[features]
+default = ["terminal"]
+terminal = ["terminalgb", "ratatui", "image"]
+
+[dependencies]
+terminalgb = { path = "../..", default-features = false, features = ["tui"], optional = true }
+ratatui = { version = "^0.29.0", features = ["crossterm"], optional = true }
+image = { version = "^0.25.1", default-features = false, features = ["png"], optional = true }
