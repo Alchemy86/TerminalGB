@@ -92,6 +92,14 @@ non-zero, and the value is `4 * a * a`, which is a multiple of 256 at a = 0, 8
 and 16. On exactly those frames the ascent gets one extra pixel of lift.
 Reproduced, not fixed.
 
+**The sea is gold, and that is not a bug.** On a Game Boy Color the minigame
+loads `PAL_PIKACHUS_BEACH`, and `DMGPalToCGBPal` is the whole rule for what
+that means: the DMG palette register picks a *shade* per colour index, and the
+shade indexes the base palette. `BGP` is `$d0` here, so the water's colour
+index 2 lands on base entry 1 — pure yellow. Objects run through `OBP0`, the
+normal ramp, so Pikachu's body lands on the same yellow and his board on the
+sea blue at entry 2. Pass `--mono` for the original Game Boy's four greys.
+
 **Landing upside down is always a wipeout.** Frame sets 8 to 14 are 1 to 7
 flipped both ways, and `_TileInteraction` compares only 1 to 7 — everything else
 falls through to the wipeout arm. That single fall-through is what makes

@@ -69,6 +69,7 @@ cargo run --release -p terminalgb-surfing-pikachu -- --gfx path/to/pokeyellow/gf
 | `_InitStaticSpriteLayout`, `_DrawStaticTilemapLayout` | `Game::objects`, `render::window_map` |
 | `_MoveClouds`, `_MoveBannerToCenter`, `Fn_FlippingPika` | `Game::move_clouds`, `Game::tick_popups` |
 | `ldpal` palettes, `get_monochrome_pal_val` | `render::BGP`, `OBP0`, `OBP1`, `SHADES` |
+| `DMGPalToCGBPal`, `CGBBasePalettes`' `PAL_PIKACHUS_BEACH` | `render::colour`, `render::CGB_BEACH` |
 
 ## Deliberately not ported
 
@@ -89,8 +90,9 @@ were not in the extracted set. The title screen is this port's own.
 `beach_outro.tilemap` is missing for the same reason, so the results screen's
 beach is composed from the course's own beach metatiles.
 
-**The SGB and CGB palette paths.** `SurfingPikachuMinigame_SetBGPals` has an
-`wOnSGB` branch; the port always takes the DMG one.
+**The Super Game Boy palette path.** `SurfingPikachuMinigame_SetBGPals` has a
+`wOnSGB` branch that swaps in `$e4` and a different palette; the port always
+takes the other one, which is what a Game Boy and a Game Boy Color both take.
 
 **`hAutoBGTransfer`, `hVBlankCopy` and the redraw queue.** The port applies
 their effects directly, with the one-frame lag that matters

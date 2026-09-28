@@ -34,7 +34,7 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use surfing_pikachu::game::{Game, PikachuState, Status, COURSE_SECTIONS};
 use surfing_pikachu::input::{Controls, Dir, Gesture, SWIPE_FRAMES};
-use surfing_pikachu::render::{FRAME_BYTES, SCREEN_H, SCREEN_W};
+use surfing_pikachu::render::{Look, FRAME_BYTES, SCREEN_H, SCREEN_W};
 use surfing_pikachu::tiles::TileSet;
 
 /// 70224 cycles at 4.194304 MHz. Not 16 ms — see the frame-pacing invariant
@@ -59,6 +59,7 @@ struct Args {
     gfx: Option<PathBuf>,
     seed: u32,
     help: bool,
+    look: Look,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -66,6 +67,7 @@ fn parse_args() -> Result<Args, String> {
         gfx: None,
         seed: 0,
         help: false,
+        look: Look::Colour,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -80,6 +82,7 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("--seed: {v:?} is not a number"))?;
             }
+            "--mono" => args.look = Look::Mono,
             "-h" | "--help" => args.help = true,
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -91,13 +94,15 @@ const HELP: &str = "\
 surfing-pikachu — the Pokemon Yellow minigame, ported and played in a terminal
 
 USAGE:
-    surfing-pikachu [--gfx DIR] [--seed N]
+    surfing-pikachu [--gfx DIR] [--seed N] [--mono]
 
 OPTIONS:
     --gfx DIR    Directory holding pret's extracted surfing_pikachu_1a.png and
                  surfing_pikachu_1b.png. Without it the built-in art is used;
                  no game asset ships with this repository.
     --seed N     Fix the course. The same seed plays the same waves.
+    --mono       Draw in the original Game Boy's four greys instead of the
+                 Game Boy Color palette Yellow actually loads.
     -h, --help   This.
 
 CONTROLS (gestures, not buttons — see the `input` module for why)
@@ -166,7 +171,14 @@ fn main() -> io::Result<()> {
     )?;
     terminal.hide_cursor()?;
 
-    let result = run(&mut terminal, &tiles, args.seed, key_mode, &notices);
+    let result = run(
+        &mut terminal,
+        &tiles,
+        args.seed,
+        key_mode,
+        args.look,
+        &notices,
+    );
 
     let mut out = io::stdout();
     if key_mode == KeyMode::Exact {
@@ -232,6 +244,7 @@ fn run<B: ratatui::backend::Backend>(
     tiles: &TileSet,
     seed: u32,
     key_mode: KeyMode,
+    look: Look,
     notices: &[String],
 ) -> io::Result<()> {
     let seed = if seed == 0 { fresh_seed() } else { seed };
@@ -298,7 +311,7 @@ fn run<B: ratatui::backend::Backend>(
                 game = Game::new(seed_in_play).with_high_score(high_score);
                 showing_title = true;
             }
-            game.render(tiles, &mut frame);
+            game.render_as(tiles, look, &mut frame);
         }
 
         let t_draw = Instant::now();

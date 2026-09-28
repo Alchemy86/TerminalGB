@@ -29,6 +29,48 @@ pub const FRAME_BYTES: usize = SCREEN_W * SCREEN_H * 4;
 /// `Gpu::get_monochrome_pal_val` so the port and a real ROM look alike.
 const SHADES: [u8; 4] = [255, 192, 96, 0];
 
+/// `PAL_PIKACHUS_BEACH` from pokeyellow's `CGBBasePalettes`
+/// (`data/sgb/sgb_palettes.asm`), in the 5-bit components the Game Boy Color
+/// stores: white, Pikachu yellow, sea blue, near-black.
+const CGB_BEACH: [[u8; 3]; 4] = [[31, 31, 31], [31, 31, 0], [11, 23, 31], [3, 3, 3]];
+
+/// Which machine's colours to draw with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Look {
+    /// A Game Boy Color running Yellow: `CGBBasePalettes` selected through the
+    /// DMG palette registers, which is exactly what `DMGPalToCGBPal` does.
+    #[default]
+    Colour,
+    /// An original Game Boy: four greys.
+    Mono,
+}
+
+/// Widen a 5-bit Game Boy Color component to eight bits.
+const fn expand5(v: u8) -> u8 {
+    ((v as u16 * 255 + 15) / 31) as u8
+}
+
+/// The colour a tile's colour index becomes.
+///
+/// `DMGPalToCGBPal` is the whole rule: the DMG palette register picks a
+/// *shade* for each colour index, and the shade indexes the base palette. On a
+/// plain Game Boy the base palette is four greys, so the same expression
+/// covers both machines.
+#[inline]
+fn colour(look: Look, palette: u8, index: u8) -> [u8; 3] {
+    let shade = ((palette >> (2 * index)) & 3) as usize;
+    match look {
+        Look::Mono => {
+            let v = SHADES[shade];
+            [v, v, v]
+        }
+        Look::Colour => {
+            let c = CGB_BEACH[shade];
+            [expand5(c[0]), expand5(c[1]), expand5(c[2])]
+        }
+    }
+}
+
 /// `ldpal a, SHADE_BLACK, SHADE_LIGHT, SHADE_WHITE, SHADE_WHITE`. The macro
 /// lists colour 3 first, so this is `$d0`: indices 0 and 1 both white, 2
 /// light, 3 black. Two indices painting the same shade is deliberate — the
@@ -44,11 +86,6 @@ const OBP1: u8 = 0xe0;
 const WINDOW_Y: usize = 0x7e;
 /// Objects the hardware will draw on one scanline.
 const SPRITES_PER_LINE: usize = 10;
-
-#[inline]
-fn shade(palette: u8, index: u8) -> u8 {
-    SHADES[((palette >> (2 * index)) & 3) as usize]
-}
 
 /// One hardware object.
 #[derive(Clone, Copy)]
@@ -116,15 +153,21 @@ fn window_map() -> [[u8; 20]; 3] {
 
 impl Game {
     /// Draw one frame as RGBA into `out`, which must be [`FRAME_BYTES`] long.
+    /// Uses the Game Boy Color palette, which is what Yellow shows.
     pub fn render(&self, tiles: &TileSet, out: &mut [u8]) {
+        self.render_as(tiles, Look::Colour, out)
+    }
+
+    /// Draw one frame with a chosen machine's colours.
+    pub fn render_as(&self, tiles: &TileSet, look: Look, out: &mut [u8]) {
         if out.len() < FRAME_BYTES {
             return;
         }
-        self.draw_background(tiles, out);
-        self.draw_objects(tiles, out);
+        self.draw_background(tiles, look, out);
+        self.draw_objects(tiles, look, out);
     }
 
-    fn draw_background(&self, tiles: &TileSet, out: &mut [u8]) {
+    fn draw_background(&self, tiles: &TileSet, look: Look, out: &mut [u8]) {
         let window = window_map();
         for y in 0..SCREEN_H {
             // The raster split: this scanline's own SCY.
@@ -146,11 +189,11 @@ impl Game {
                     let id = self.bgmap[(by as usize / 8) * 32 + bx as usize / 8];
                     tiles.bg[id as usize][(by as usize % 8) * 8 + bx as usize % 8]
                 };
-                let v = shade(BGP, index);
+                let [r, g, b] = colour(look, BGP, index);
                 let p = (y * SCREEN_W + x) * 4;
-                out[p] = v;
-                out[p + 1] = v;
-                out[p + 2] = v;
+                out[p] = r;
+                out[p + 1] = g;
+                out[p + 2] = b;
                 out[p + 3] = 0xff;
             }
         }
@@ -274,7 +317,7 @@ impl Game {
         }
     }
 
-    fn draw_objects(&self, tiles: &TileSet, out: &mut [u8]) {
+    fn draw_objects(&self, tiles: &TileSet, look: Look, out: &mut [u8]) {
         let objs = self.objects();
         for y in 0..SCREEN_H {
             // Ten per line, taken in OAM order; then the lowest X wins, and
@@ -303,11 +346,11 @@ impl Game {
                     if index == 0 {
                         continue; // transparent
                     }
-                    let v = shade(if o.pal1 { OBP1 } else { OBP0 }, index);
+                    let [r, g, b] = colour(look, if o.pal1 { OBP1 } else { OBP0 }, index);
                     let p = (y * SCREEN_W + sx as usize) * 4;
-                    out[p] = v;
-                    out[p + 1] = v;
-                    out[p + 2] = v;
+                    out[p] = r;
+                    out[p + 1] = g;
+                    out[p + 2] = b;
                 }
             }
         }
@@ -346,11 +389,30 @@ mod tests {
 
     #[test]
     fn palette_bytes_decode_to_the_shades_the_macro_spelled() {
+        let grey = |p, i| colour(Look::Mono, p, i)[0];
         // BGP $d0: white, white, light, black.
-        assert_eq!([0, 1, 2, 3].map(|i| shade(BGP, i)), [255, 255, 192, 0]);
+        assert_eq!([0, 1, 2, 3].map(|i| grey(BGP, i)), [255, 255, 192, 0]);
         // OBP0 $e4 is the normal ramp; OBP1 $e0 makes index 1 white for foam.
-        assert_eq!([0, 1, 2, 3].map(|i| shade(OBP0, i)), [255, 192, 96, 0]);
-        assert_eq!([0, 1, 2, 3].map(|i| shade(OBP1, i)), [255, 255, 96, 0]);
+        assert_eq!([0, 1, 2, 3].map(|i| grey(OBP0, i)), [255, 192, 96, 0]);
+        assert_eq!([0, 1, 2, 3].map(|i| grey(OBP1, i)), [255, 255, 96, 0]);
+    }
+
+    #[test]
+    fn the_colour_palette_puts_yellow_on_pikachu_and_blue_on_his_board() {
+        // Object colour 1 is Pikachu's body and colour 2 his board; OBP0 is
+        // the normal ramp, so they land on base entries 1 and 2.
+        assert_eq!(colour(Look::Colour, OBP0, 1), [255, 255, 0]);
+        assert_eq!(colour(Look::Colour, OBP0, 2), [90, 189, 255]);
+        // Foam takes OBP1, where colour 1 is white rather than yellow.
+        assert_eq!(colour(Look::Colour, OBP1, 1), [255, 255, 255]);
+        // Sky is background colour 0.
+        assert_eq!(colour(Look::Colour, BGP, 0), [255, 255, 255]);
+    }
+
+    #[test]
+    fn five_bit_components_widen_to_the_full_range() {
+        assert_eq!(expand5(0), 0);
+        assert_eq!(expand5(31), 255);
     }
 
     #[test]
