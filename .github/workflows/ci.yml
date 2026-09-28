@@ -203,6 +203,14 @@ jobs:
       # is a claim rather than a fact. See `make no-plugins`.
       - name: No plugin is in the core, or the frontends
         run: make no-plugins
+      # The Surfing Pikachu library makes the same promise and is meant to be
+      # driven by other projects: `game::Game` for the machine and `render` for
+      # the 160x144 frame, blitted through the host's own screen code. With no
+      # features it has no dependencies at all; with `art` it gains a PNG
+      # decoder and nothing else, and no emulator, terminal UI or window may
+      # appear in its tree at any depth. See `make embed-surfing`.
+      - name: The Surfing Pikachu library drags no frontend behind it
+        run: make embed-surfing
       # Run a real cartridge with no HOME, no display and no audio device. The
       # example exits non-zero if the save-state round trip diverges.
       - name: Run a ROM headless with no HOME and no display

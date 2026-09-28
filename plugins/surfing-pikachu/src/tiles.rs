@@ -88,7 +88,7 @@ impl TileSet {
         }
     }
 
-    #[cfg(feature = "terminal")]
+    #[cfg(feature = "art")]
     fn from_dir(dir: &Path) -> Result<TileSet, String> {
         let bg_src = Self::decode(&dir.join("surfing_pikachu_1a.png"), 5)?;
         let obj_src = Self::decode(&dir.join("surfing_pikachu_1b.png"), 16)?;
@@ -113,12 +113,12 @@ impl TileSet {
         })
     }
 
-    #[cfg(not(feature = "terminal"))]
+    #[cfg(not(feature = "art"))]
     fn from_dir(_dir: &Path) -> Result<TileSet, String> {
-        Err("built without the `terminal` feature, so without a PNG decoder".to_string())
+        Err("built without the `art` feature, so without a PNG decoder".to_string())
     }
 
-    #[cfg(feature = "terminal")]
+    #[cfg(feature = "art")]
     fn decode(path: &Path, tiles_per_row: usize) -> Result<Vec<Tile>, String> {
         let img = image::open(path)
             .map_err(|e| format!("{}: {e}", path.display()))?

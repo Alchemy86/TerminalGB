@@ -20,7 +20,13 @@ required-features = ["terminal"]
 
 [features]
 default = ["terminal"]
-terminal = ["terminalgb", "ratatui", "image"]
+terminal = ["terminalgb", "ratatui", "art"]
+# The PNG decoder for pret's extracted art, and nothing else. Its own feature
+# because the library is meant to be embedded: a host that wants
+# `game` + `render` + the real art should not have to link an emulator and a
+# terminal UI framework to get a picture decoder. `--no-default-features`
+# alone has NO dependencies at all and draws the built-in art.
+art = ["image"]
 
 [dependencies]
 terminalgb = { path = "../..", default-features = false, features = ["tui"], optional = true }

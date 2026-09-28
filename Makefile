@@ -155,7 +155,49 @@ check-wasm:
 # The `env -u` is the point: it fails if anything on this path needs a host.
 # Includes the wasm cross-check: `wasm32` compiles the `sound` module out, so
 # it is the target most likely to break from a native-only change.
-embed: check-wasm
+# The same contract for the Surfing Pikachu library, which is the other thing
+# in this repository meant to be embedded: another project drives
+# `surfing_pikachu::game::Game` and blits `render`'s 160x144 frame through its
+# own screen code, so the library must not drag an emulator or a terminal UI
+# behind it. `--no-default-features` has NO dependencies at all; `art` adds the
+# PNG decoder for pret's extracted tiles and must add nothing else. The clippy
+# line is here because a root `cargo clippy` lints the root package only, so
+# until now this crate was never linted at all.
+embed-surfing:
+	cargo build -p terminalgb-surfing-pikachu --no-default-features --lib
+	cargo test  -p terminalgb-surfing-pikachu --no-default-features --lib
+	cargo clippy -p terminalgb-surfing-pikachu --all-targets -- -D warnings
+	@deps=$$(cargo tree -p terminalgb-surfing-pikachu --no-default-features \
+	         --edges normal --prefix none | sort -u \
+	         | grep -v '^terminalgb-surfing-pikachu '); \
+	  if [ -n "$$deps" ]; then \
+	    echo "the library must have no dependencies, found:"; echo "$$deps"; exit 1; \
+	  fi; \
+	  echo "library: no dependencies"
+	@deps=$$(cargo tree -p terminalgb-surfing-pikachu --no-default-features \
+	         --features art --edges normal --depth 1 --prefix none | sort -u \
+	         | grep -v '^terminalgb-surfing-pikachu ' | cut -d' ' -f1); \
+	  if [ "$$deps" != "image" ]; then \
+	    echo "with \`art\` the library's direct dependency must be image alone, found:"; \
+	    echo "$$deps"; exit 1; \
+	  fi; \
+	  echo "library + art: image is the only direct dependency"
+	# The claim that actually matters to an embedder: no emulator, no terminal UI
+	# and no window anywhere in the tree, at any depth, under any feature the
+	# library itself offers.
+	@for f in "" "art"; do \
+	  found=$$(cargo tree -p terminalgb-surfing-pikachu --no-default-features \
+	           --features "$$f" --edges normal --prefix none \
+	           | cut -d' ' -f1 | sort -u \
+	           | grep -xE 'terminalgb|ratatui|crossterm|minifb' || true); \
+	  if [ -n "$$found" ]; then \
+	    echo "a frontend leaked into the library (features: '$$f'):"; \
+	    echo "$$found"; exit 1; \
+	  fi; \
+	done; \
+	echo "library: no emulator, no terminal UI, no window"
+
+embed: check-wasm embed-surfing
 	cargo clippy --release --no-default-features --all-targets -- -D warnings
 	cargo test --release --no-default-features --lib
 	cargo tree --no-default-features --edges normal   # blip_buf + first-party terminalgb-plugin-api

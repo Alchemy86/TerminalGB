@@ -108,10 +108,49 @@ flipped both ways, and `_TileInteraction` compares only 1 to 7 — everything el
 falls through to the wipeout arm. That single fall-through is what makes
 spinning a gamble, and it is what the scoring is paying for.
 
+## Embedding it: the game without the terminal
+
+The terminal frontend is one caller, not the product. Another project drives
+`Game` and blits its picture through its own screen code — a round panel, a
+web canvas, a framebuffer — and for that the library has to drag nothing
+behind it:
+
+```toml
+# the machine and the picture, and nothing else at all
+terminalgb-surfing-pikachu = { git = "…", default-features = false }
+# …and pret's extracted art too, which costs one PNG decoder
+terminalgb-surfing-pikachu = { git = "…", default-features = false, features = ["art"] }
+```
+
+Two modules are the whole surface:
+
+- **`game::Game`** is the machine. `Game::new(seed)`, then `step(Input)` once
+  per frame; it returns `Status::Finished` when the run is over. Nothing in it
+  reads a clock, a file or an environment variable.
+- **`render`** composes the picture: `render_as(&tiles, Look::Colour, &mut buf)`
+  fills `FRAME_BYTES` of RGBA at `SCREEN_W` x `SCREEN_H` — 160x144, the Game
+  Boy Color palette Yellow actually loads, raster split included. What the host
+  does with those bytes is the host's business.
+
+`input` comes with it if the host wants gestures rather than a pad, and
+`tiles::TileSet::load` takes the extracted PNGs when `art` is on and falls back
+to the built-in art when it is not — it never fails over a missing directory.
+
+**This is a contract, not a hope.** `make embed-surfing` builds and tests the
+library with no features, lints it, and fails if the dependency tree is not
+empty; with `art` it fails unless `image` is the only direct dependency; and
+under either it fails if `terminalgb`, `ratatui`, `crossterm` or a window crate
+appears anywhere in the tree at any depth. CI runs it in the same job that
+guards the emulator core's own embedding build. The `art` feature exists
+*because* of that rule: the PNG decoder used to be gated behind `terminal`, so
+asking for the real art meant linking the emulator and a terminal UI framework
+to get a picture decoder.
+
 ## Tests
 
 ```sh
-cargo test -p terminalgb-surfing-pikachu     # 70 tests
+cargo test -p terminalgb-surfing-pikachu                      # 74 tests
+cargo test -p terminalgb-surfing-pikachu --no-default-features   # 69, the library alone
 ```
 
 The game rules are small and completely specified, so there is no excuse for
