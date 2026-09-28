@@ -236,6 +236,14 @@ devices — lives in `screen/`, `video.rs` and the audio backend. Adding a host 
 to `cpu`/`mmu`/`gpu`/`mbc`/`sound`/`savestate`/`mode`/`upscale` breaks the claim.
 `--no-default-features --features embedded` goes further and builds `no_std`.
 
+**`terminalgb-surfing-pikachu` is the second embeddable thing here, and it makes the same
+promise.** Other projects drive `game::Game` and blit `render`'s 160x144 frame through
+their own screen code, so the *library* must drag no frontend behind it: with no features
+it has no dependencies at all, and `art` adds a PNG decoder for pret's tiles and nothing
+else. `terminal` is one caller, not the product — that is why the decoder is gated on
+`art` rather than on it. `make embed-surfing` is the gate and CI runs it in the same job
+as the core's; see the crate's README, "Embedding it".
+
 **Two picture engines, two names.** The user-facing modes are `standard` (whole-scanline)
 and `identical` (per-dot pixel FIFO, the default); the Rust variants are still
 `RenderMode::{Fast, Accurate}`, and both spellings parse everywhere. They score the same
