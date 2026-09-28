@@ -29,7 +29,7 @@ use ratatui::crossterm::{
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use surfing_pikachu::game::{Game, PikachuState, Status, COURSE_SECTIONS};
@@ -309,6 +309,10 @@ fn run<B: ratatui::backend::Backend>(
                 draw_title(f.buffer_mut(), area, seed_in_play, high_score, notices);
                 return;
             }
+            // The picture is letterboxed inside the terminal, and ratatui
+            // diffs rather than clears — so without this the rows the layout
+            // does not cover keep whatever the title screen last wrote there.
+            f.render_widget(Clear, area);
             let (picture, status) = layout(area);
             terminalgb::screen::halfblocks::render(
                 &frame,

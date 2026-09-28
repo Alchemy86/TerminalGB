@@ -76,3 +76,14 @@ readme-*.html
 # to redistribute, and the licence boundary in AGENTS.md is explicit that
 # game assets never enter the tree.
 plugins/surfing-pikachu/reference/
+
+# Recorded gameplay sessions. The repository ships stills, not video, and a
+# recording made with the extracted art would be a picture whose subject is
+# somebody else's sprite work — see the licence boundary in AGENTS.md. Record
+# into here and hand the file over; it does not belong in the tree.
+plugins/surfing-pikachu/media/
+
+# Gameplay recordings handed over for review. Not committed: the repository
+# ships stills and no video, and a recording made with the extracted art is a
+# picture whose subject is somebody else's sprite work (AGENTS.md).
+demo/

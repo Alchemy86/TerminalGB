@@ -22,7 +22,8 @@ plugins/surfing-pikachu/
 │   ├── bcd.rs     DAA, and the four-digit counters built on it
 │   ├── fixed.rs   8.8 fixed point
 │   └── rng.rs     the one thing that is not a port
-├── examples/      probe, shot, bench — headless, for checking it still works
+├── examples/      probe (play a run under a policy), shot (one frame, as
+│                  text or a PPM), bench (what a frame costs) — all headless
 └── REFERENCE.md   what was read, cited by symbol name
 ```
 

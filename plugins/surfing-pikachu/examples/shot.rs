@@ -10,7 +10,8 @@ fn main() {
     let until = a.next().unwrap_or_else(|| "300".into());
     let seed: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let gfx = a.next().filter(|s| s != "-").map(std::path::PathBuf::from);
-    let spin = a.next().is_some();
+    let spin = a.next().filter(|s| s != "-").is_some();
+    let ppm = a.next();
     let (tiles, warn) = TileSet::load(gfx.as_deref());
     if let Some(w) = warn {
         eprintln!("{w}");
@@ -44,6 +45,21 @@ fn main() {
         at += 1;
     }
     g.render(&tiles, &mut buf);
+    if let Some(path) = ppm {
+        // A plain PPM of the framebuffer, scaled, for looking at the art
+        // itself rather than at what a terminal makes of it.
+        const SCALE: usize = 4;
+        let mut out =
+            format!("P6\n{} {}\n255\n", SCREEN_W * SCALE, SCREEN_H * SCALE).into_bytes();
+        for y in 0..SCREEN_H * SCALE {
+            for x in 0..SCREEN_W * SCALE {
+                let p = ((y / SCALE) * SCREEN_W + x / SCALE) * 4;
+                out.extend_from_slice(&buf[p..p + 3]);
+            }
+        }
+        std::fs::write(&path, out).expect("write ppm");
+        eprintln!("wrote {path}");
+    }
     // Two scanlines per text row, four shades, so the eye can read the wave.
     let ramp = [' ', '-', '+', '#'];
     for y in (0..SCREEN_H).step_by(2) {
