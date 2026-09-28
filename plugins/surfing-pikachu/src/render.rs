@@ -45,6 +45,15 @@ pub enum Look {
     Mono,
 }
 
+/// Which background palette register applies on this machine.
+#[inline]
+const fn bg_register(look: Look) -> u8 {
+    match look {
+        Look::Mono => BGP,
+        Look::Colour => BGP_COLOUR,
+    }
+}
+
 /// Widen a 5-bit Game Boy Color component to eight bits.
 const fn expand5(v: u8) -> u8 {
     ((v as u16 * 255 + 15) / 31) as u8
@@ -71,11 +80,26 @@ fn colour(look: Look, palette: u8, index: u8) -> [u8; 3] {
     }
 }
 
-/// `ldpal a, SHADE_BLACK, SHADE_LIGHT, SHADE_WHITE, SHADE_WHITE`. The macro
-/// lists colour 3 first, so this is `$d0`: indices 0 and 1 both white, 2
-/// light, 3 black. Two indices painting the same shade is deliberate — the
-/// background art is drawn in three tones.
+/// `ldpal a, SHADE_BLACK, SHADE_LIGHT, SHADE_WHITE, SHADE_WHITE`. The macro is
+/// `ld \1, \2 << 6 | \3 << 4 | \4 << 2 | \5`, so colour 3 is listed first and
+/// this is `$d0`: indices 0 and 1 both white, 2 light, 3 black.
+///
+/// **This is the original Game Boy's palette and only that.** It is what makes
+/// the sea a light grey on a DMG, and it is deliberately *not* applied to the
+/// colour palette — see [`BGP_COLOUR`].
 const BGP: u8 = 0xd0;
+
+/// The background register a Game Boy Color effectively uses: the identity,
+/// so colour index `i` takes base palette entry `i`.
+///
+/// Both palette tables are built for that. `PAL_PIKACHUS_BEACH` puts its blue
+/// at **entry 2**, which is the colour index the water tiles are drawn in, and
+/// the Super Game Boy branch of `SurfingPikachuMinigame_SetBGPals` — the one
+/// place the game spells a background palette out for a colour machine — sets
+/// `$e4`, the identity, and gets a blue sea from the same slot. Applying the
+/// DMG `$d0` on top instead folds colour 2 onto entry 1 and turns the sea
+/// yellow, which is the bug this constant fixes.
+const BGP_COLOUR: u8 = 0xe4;
 /// `ldpal a, SHADE_BLACK, SHADE_DARK, SHADE_LIGHT, SHADE_WHITE` = `$e4`.
 const OBP0: u8 = 0xe4;
 /// `ldpal a, SHADE_BLACK, SHADE_DARK, SHADE_WHITE, SHADE_WHITE` = `$e0`, the
@@ -189,7 +213,7 @@ impl Game {
                     let id = self.bgmap[(by as usize / 8) * 32 + bx as usize / 8];
                     tiles.bg[id as usize][(by as usize % 8) * 8 + bx as usize % 8]
                 };
-                let [r, g, b] = colour(look, BGP, index);
+                let [r, g, b] = colour(look, bg_register(look), index);
                 let p = (y * SCREEN_W + x) * 4;
                 out[p] = r;
                 out[p + 1] = g;
@@ -400,13 +424,39 @@ mod tests {
     #[test]
     fn the_colour_palette_puts_yellow_on_pikachu_and_blue_on_his_board() {
         // Object colour 1 is Pikachu's body and colour 2 his board; OBP0 is
-        // the normal ramp, so they land on base entries 1 and 2.
+        // the identity, so they land on base entries 1 and 2.
         assert_eq!(colour(Look::Colour, OBP0, 1), [255, 255, 0]);
         assert_eq!(colour(Look::Colour, OBP0, 2), [90, 189, 255]);
-        // Foam takes OBP1, where colour 1 is white rather than yellow.
+        // Foam takes OBP1, where colour 1 is white rather than yellow. That
+        // remap is real and must survive.
         assert_eq!(colour(Look::Colour, OBP1, 1), [255, 255, 255]);
-        // Sky is background colour 0.
-        assert_eq!(colour(Look::Colour, BGP, 0), [255, 255, 255]);
+    }
+
+    /// The bug a player found by looking at it: the sea came out yellow.
+    /// Background colour 2 is the water, and in colour it must reach the
+    /// palette's blue rather than being folded onto Pikachu's yellow.
+    #[test]
+    fn in_colour_the_sky_is_white_and_the_sea_is_blue() {
+        let bg = |i| colour(Look::Colour, bg_register(Look::Colour), i);
+        assert_eq!(bg(0), [255, 255, 255], "sky must be white");
+        assert_eq!(bg(2), [90, 189, 255], "the sea must be blue");
+        assert_eq!(bg(3), [25, 25, 25], "outlines must be near-black");
+        assert_ne!(
+            bg(2),
+            colour(Look::Colour, OBP0, 1),
+            "sea must not be Pikachu's yellow"
+        );
+    }
+
+    /// The original Game Boy keeps its own register: there the sea is a light
+    /// grey, and folding colour 2 onto colour 1's shade is correct.
+    #[test]
+    fn in_mono_the_background_keeps_the_dmg_register() {
+        let bg = |i| colour(Look::Mono, bg_register(Look::Mono), i);
+        assert_eq!(bg(0), [255, 255, 255]);
+        assert_eq!(bg(1), [255, 255, 255]);
+        assert_eq!(bg(2), [192, 192, 192]);
+        assert_eq!(bg(3), [0, 0, 0]);
     }
 
     #[test]

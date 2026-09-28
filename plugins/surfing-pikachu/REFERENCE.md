@@ -69,7 +69,7 @@ cargo run --release -p terminalgb-surfing-pikachu -- --gfx path/to/pokeyellow/gf
 | `_InitStaticSpriteLayout`, `_DrawStaticTilemapLayout` | `Game::objects`, `render::window_map` |
 | `_MoveClouds`, `_MoveBannerToCenter`, `Fn_FlippingPika` | `Game::move_clouds`, `Game::tick_popups` |
 | `ldpal` palettes, `get_monochrome_pal_val` | `render::BGP`, `OBP0`, `OBP1`, `SHADES` |
-| `DMGPalToCGBPal`, `CGBBasePalettes`' `PAL_PIKACHUS_BEACH` | `render::colour`, `render::CGB_BEACH` |
+| `DMGPalToCGBPal`, `CGBBasePalettes`' `PAL_PIKACHUS_BEACH` | `render::colour`, `render::CGB_BEACH`, `render::bg_register` |
 
 ## Deliberately not ported
 

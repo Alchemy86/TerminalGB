@@ -92,13 +92,16 @@ non-zero, and the value is `4 * a * a`, which is a multiple of 256 at a = 0, 8
 and 16. On exactly those frames the ascent gets one extra pixel of lift.
 Reproduced, not fixed.
 
-**The sea is gold, and that is not a bug.** On a Game Boy Color the minigame
-loads `PAL_PIKACHUS_BEACH`, and `DMGPalToCGBPal` is the whole rule for what
-that means: the DMG palette register picks a *shade* per colour index, and the
-shade indexes the base palette. `BGP` is `$d0` here, so the water's colour
-index 2 lands on base entry 1 — pure yellow. Objects run through `OBP0`, the
-normal ramp, so Pikachu's body lands on the same yellow and his board on the
-sea blue at entry 2. Pass `--mono` for the original Game Boy's four greys.
+**The background palette is not the background register.** Yellow is a Game
+Boy Color game and the minigame loads `PAL_PIKACHUS_BEACH`: white, Pikachu
+yellow, sea blue, near-black. Both that table and its Super Game Boy twin put
+the blue at **entry 2**, which is the colour index the water tiles are drawn
+in. `BGP` is `$d0` — the *original* Game Boy's palette, which paints the sea a
+light grey — and applying it on top of the colour palette folds colour 2 onto
+entry 1 and turns the sea Pikachu-yellow. It does not apply in colour; the
+background takes the palette directly. Objects are the other way round: `OBP1`
+is `$e0` precisely so foam's colour 1 comes out white instead of yellow, and
+that remap is real. `--mono` keeps `$d0` and the four greys.
 
 **Landing upside down is always a wipeout.** Frame sets 8 to 14 are 1 to 7
 flipped both ways, and `_TileInteraction` compares only 1 to 7 — everything else
