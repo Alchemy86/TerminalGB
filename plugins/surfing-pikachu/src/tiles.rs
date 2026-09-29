@@ -91,7 +91,7 @@ impl TileSet {
     #[cfg(feature = "art")]
     fn from_dir(dir: &Path) -> Result<TileSet, String> {
         let bg_src = Self::decode(&dir.join("surfing_pikachu_1a.png"), 5)?;
-        let obj_src = Self::decode(&dir.join("surfing_pikachu_1b.png"), 16)?;
+        let mut obj_src = Self::decode(&dir.join("surfing_pikachu_1b.png"), 16)?;
         if obj_src.len() < 256 {
             return Err(format!(
                 "surfing_pikachu_1b.png holds {} tiles, need 256",
@@ -106,11 +106,39 @@ impl TileSet {
         }
         // $80..$ff alias the object tiles: both resolve to $8800..$8fff.
         bg[0x80..0x100].copy_from_slice(&obj_src[0x80..0x100]);
+        // An optional restyle of just Pikachu's own riding/turning/results
+        // poses, decoded from a 24x24 index sprite dropped in the same
+        // directory. Its absence is not an error: everything else stays the
+        // real extracted art either way.
+        if let Ok(base) = Self::decode_sprite24(&dir.join("pikachu_modern_base.png")) {
+            write_pikachu_poses(&mut obj_src, &base);
+        }
         Ok(TileSet {
             bg,
             obj: obj_src,
             source: TileSource::Extracted(dir.to_path_buf()),
         })
+    }
+
+    /// A single 24x24 sprite, colour indices 0..=3, row major — the same
+    /// layout [`sprite24`] builds from ASCII art, decoded from a PNG instead.
+    #[cfg(feature = "art")]
+    fn decode_sprite24(path: &Path) -> Result<[u8; 24 * 24], String> {
+        let img = image::open(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .to_luma8();
+        let (w, h) = (img.width(), img.height());
+        if w != 24 || h != 24 {
+            return Err(format!("{} is {w}x{h}, expected 24x24", path.display()));
+        }
+        let mut out = [0u8; 24 * 24];
+        for y in 0..24u32 {
+            for x in 0..24u32 {
+                let grey = (img.get_pixel(x, y).0[0] as u16 + 42) / 85;
+                out[(y * 24 + x) as usize] = 3 - grey.min(3) as u8;
+            }
+        }
+        Ok(out)
     }
 
     #[cfg(not(feature = "art"))]
@@ -209,22 +237,7 @@ impl TileSet {
         obj[0xef] = mirror(&parse(CLOUD_L));
 
         // --- Pikachu, one base pose rotated into fourteen ---------------
-        //
-        // The original draws each board angle by hand. Fourteen frame sets
-        // cover a full turn (the upper seven are the lower seven flipped both
-        // ways), so pose N sits at (N - 3) * 360/14 degrees from level, and
-        // rotating the base pose by that lands each one where the game's own
-        // landing table expects it.
-        let base = sprite24(PIKACHU);
-        for (pose, (a, b)) in POSE_OFFSETS.iter().enumerate() {
-            let degrees = (pose as f32 - 3.0) * (360.0 / 14.0);
-            let rotated = rotate24(&base, degrees);
-            write_block(&mut obj, *a, &rotated);
-            write_block(&mut obj, *b, &rotated);
-        }
-        // The results pose and the empty surfboard after a wipeout.
-        write_block(&mut obj, 0xa0, &base);
-        write_block(&mut obj, 0xa3, &base);
+        write_pikachu_poses(&mut obj, &sprite24(PIKACHU));
         let board = sprite24(SURFBOARD);
         for tcol in 0..3usize {
             let mut t = BLANK;
@@ -341,6 +354,27 @@ fn rotate24(src: &[u8; 24 * 24], degrees: f32) -> [u8; 24 * 24] {
         }
     }
     out
+}
+
+/// Fill every riding/turning frame and the results pose from one base pose,
+/// facing right and level (0 degrees) — the same source `built_in`'s
+/// hand-authored art uses, and what a decoded 24x24 sprite provides too.
+///
+/// The original draws each board angle by hand. Fourteen frame sets cover a
+/// full turn (the upper seven are the lower seven flipped both ways), so pose
+/// N sits at (N - 3) * 360/14 degrees from level, and rotating the base pose
+/// by that lands each one where the game's own landing table expects it.
+fn write_pikachu_poses(obj: &mut [Tile], base: &[u8; 24 * 24]) {
+    for (pose, (a, b)) in POSE_OFFSETS.iter().enumerate() {
+        let degrees = (pose as f32 - 3.0) * (360.0 / 14.0);
+        let rotated = rotate24(base, degrees);
+        write_block(obj, *a, &rotated);
+        write_block(obj, *b, &rotated);
+    }
+    // The results pose. The empty surfboard after a wipeout is drawn
+    // separately, from `SURFBOARD` rather than this base.
+    write_block(obj, 0xa0, base);
+    write_block(obj, 0xa3, base);
 }
 
 /// Store a 24x24 sprite as the 3x3 tile block the OAM layout expects: three
