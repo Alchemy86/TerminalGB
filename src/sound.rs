@@ -1486,6 +1486,10 @@ pub struct Sound {
     /// See [`Sound::set_state_frozen`]. Machine configuration, not state:
     /// never serialised.
     state_frozen: bool,
+    /// Every register write, in order, while a tool has asked for it (see
+    /// [`Sound::start_write_log`]). Host tooling only: never serialised, and
+    /// `None` costs one branch per register write.
+    write_log: Option<Vec<(u16, u8)>>,
 }
 
 impl Default for Sound {
@@ -1512,6 +1516,7 @@ impl Sound {
             on: false,
             render_audio: true,
             state_frozen: false,
+            write_log: None,
             channel1: SquareChannel::new(ch1_blip),
             channel2: SquareChannel::new(ch2_blip),
             channel3: WaveChannel::new(ch3_blip),
@@ -2160,7 +2165,21 @@ impl Sound {
         }
     }
 
+    /// Start recording every write to the sound registers (`0xFF10..=0xFF3F`),
+    /// so a tool can capture what a cartridge's own sound engine tells the chip.
+    pub fn start_write_log(&mut self) {
+        self.write_log = Some(Vec::new());
+    }
+
+    /// The writes since the last call, oldest first; empty when not logging.
+    pub fn take_write_log(&mut self) -> Vec<(u16, u8)> {
+        self.write_log.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
     pub fn wb(&mut self, a: u16, v: u8) {
+        if let Some(log) = self.write_log.as_mut() {
+            log.push((a, v));
+        }
         if !self.on && a != 0xFF26 {
             match a {
                 // Wave RAM is unaffected by APU power: always writable.

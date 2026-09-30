@@ -43,6 +43,13 @@ impl Blockset {
         Some(Blockset { tiles })
     }
 
+    /// A blockset from tile ids already in hand -- 16 per block, block after
+    /// block -- for a room built with a tileset of its own rather than the
+    /// cartridge's (see `terminalgb-plugin-gen1-walkerroom`).
+    pub fn from_tiles(tiles: Vec<u8>) -> Blockset {
+        Blockset { tiles }
+    }
+
     /// One tile of one block. `(col, row)` are 0-3 within the block's 4x4.
     pub fn tile(&self, block: u8, col: usize, row: usize) -> u8 {
         let at = block as usize * BLOCK_TILES + row * BLOCK_SIDE + col;

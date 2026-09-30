@@ -249,6 +249,7 @@ plugin-gen1-shinyhunt = ["terminalgb-plugin-gen1-shinyhunt", "plugin-trainer"]
 # The relay client is the frontend's, not the plugin's (docs/worldlobby.md
 # §"Where the network lives"), so this adds no third-party crate.
 plugin-gen1-lobby = ["terminalgb-plugin-gen1-lobby"]
+plugin-gen1-walkerroom = ["terminalgb-plugin-gen1-walkerroom"]
 # The documentation example, kept out of `standard-plugins` on purpose: it is
 # the thing a stranger copies, and it is also the end-to-end proof that the
 # documented install path works for a plugin nothing in the emulator special-
@@ -441,6 +442,7 @@ terminalgb-plugin-battle-control = { path = "plugins/battle-control", version = 
 terminalgb-plugin-agent = { path = "plugins/agent", version = "0.1.0", optional = true }
 terminalgb-plugin-gen1-shinyhunt = { path = "plugins/gen1-shinyhunt", version = "0.1.0", optional = true }
 terminalgb-plugin-gen1-lobby = { path = "plugins/gen1-lobby", version = "0.1.0", optional = true }
+terminalgb-plugin-gen1-walkerroom = { path = "plugins/gen1-walkerroom", version = "0.1.0", optional = true }
 terminalgb-plugin-example-tracer = { path = "plugins/example-tracer", version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -626,6 +628,11 @@ required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
 name = "bgb_link"
 path = "examples/bgb_link.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer", "bgblink"]
+
+[[example]]
+name = "walkerroom"
+path = "examples/walkerroom.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-gen1-walkerroom", "bgblink"]
 
 [[example]]
 name = "gen1_trade"

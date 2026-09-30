@@ -1,0 +1,19 @@
+[package]
+name = "terminalgb-plugin-gen1-walkerroom"
+version = "0.1.0"
+description = "The walker's trade room -- a Secret Base built at run time in a Gen 1 Trade Center, with pads and menus for sending a Pokemon to the walker or taking one back"
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/TerminalGB"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "terminalgb_plugin_gen1_walkerroom"
+path = "src/lib.rs"
+
+# The room machinery (addresses, the screen painter, the block map) is the
+# lobby's; the art, the room and the menus are this crate's own.
+[dependencies]
+terminalgb-plugin-api = { path = "../../crates/terminalgb-plugin-api", version = "0.1.0" }
+terminalgb-plugin-gen1-lobby = { path = "../gen1-lobby", version = "0.1.0" }
