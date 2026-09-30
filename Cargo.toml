@@ -635,6 +635,16 @@ path = "examples/walkerroom.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-gen1-walkerroom", "bgblink"]
 
 [[example]]
+name = "ace_probe_dump"
+path = "examples/ace_probe_dump.rs"
+required-features = ["plugin-gen1-link", "bgblink"]
+
+[[example]]
+name = "room_dump"
+path = "examples/room_dump.rs"
+required-features = ["plugin-gen1-link", "plugin-gen1-walkerroom", "bgblink"]
+
+[[example]]
 name = "gen1_trade"
 path = "examples/gen1_trade.rs"
 required-features = ["image", "plugin-gen1-link"]

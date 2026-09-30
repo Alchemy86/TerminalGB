@@ -62,7 +62,14 @@ fn main() {
     let mut gb = Gameboy::new(rom_bytes.clone(), Some(staged.rom.clone()));
     gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
-    gb.add_plugin(Box::new(WalkerRoomPlugin::new())).expect("attach the walker room");
+    // NO_ROOM=1 skips attaching the plugin entirely, for a controlled A/B: the same
+    // real cable, the same real trade, with only this one local flag different --
+    // proof that the room comes from the plugin poking memory, not from the wire.
+    if std::env::var("NO_ROOM").is_err() {
+        gb.add_plugin(Box::new(WalkerRoomPlugin::new())).expect("attach the walker room");
+    } else {
+        println!("NO_ROOM set: the walker room plugin is NOT attached this run");
+    }
     let mut bot = TradeBot::default();
     let mut in_room_for = 0u32;
     for frame in 0..frames {

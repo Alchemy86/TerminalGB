@@ -8321,6 +8321,16 @@ fn attach_plugins(
             .collect(),
         Err(_) => cfg.plugins.clone(),
     };
+    // The walker's trade room is switched on by its own variable rather than by the
+    // plugin list, so turning it on never changes which other plugins are loaded
+    // (or their config). See `plugins/gen1-walkerroom`.
+    #[cfg(feature = "plugin-gen1-walkerroom")]
+    if std::env::var("GB_WALKER_ROOM").is_ok_and(|v| !v.is_empty() && v != "0") {
+        notes.push(match gb.add_plugin(Box::new(terminalgb_plugin_gen1_walkerroom::WalkerRoomPlugin::new())) {
+            Ok(()) => "plugin gen1-walkerroom attached: the walker's trade room".to_string(),
+            Err(e) => format!("plugin gen1-walkerroom: {e}"),
+        });
+    }
     for name in names {
         match attach_named(gb, cfg, rom, &name, &mut portal_armed) {
             Some(note) => {
