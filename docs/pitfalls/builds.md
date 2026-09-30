@@ -198,6 +198,32 @@ without the atomic. The rule is about *unconditionally compiled* code.
 
 ---
 
+## A stale fingerprint blames a function that is right there
+
+**Symptom.** `error[E0599]: no function or associated item named 'X' found for struct 'Y' in
+the current scope`, and `note:` points rustc's own suggestion at a *different* function in
+the *same* `impl` block the missing one is sitting in three lines away — reading the file
+shows `X` public, correctly spelled, correctly exported, with nothing else claiming the name.
+
+**Root cause.** A crate's compiled fingerprint under `target/` did not notice a dependant
+crate's new public item, so the dependant's build used a cached, pre-add copy of the
+dependency's metadata. Not this project's bug and not the pattern the rest of this file is
+about: no cross-target contamination, no second `impl`, no shadowing — the on-disk source was
+correct the whole time.
+
+**Resolution.** `cargo clean -p <the crate the missing item lives in> -p <the crate that
+can't see it>` (cheaper than a full `cargo clean`) and rebuild. Confirmed 2026-09-30 on
+`terminalgb-plugin-gen1-lobby`'s `Blockset::from_tiles` (added in the same commit that first
+called it from `terminalgb-plugin-gen1-walkerroom`) reporting "not found" against
+`terminalgb-plugin-gen1-lobby`'s own `Blockset::read` — cleaning those two crates' output and
+re-running the identical `cargo check` fixed it with no source change.
+
+**How to tell it apart from a real missing item.** A real one stays missing after a clean
+crate rebuild. This one does not — if `cargo clean -p` + rebuild makes the error vanish
+without touching a line of source, it was always this.
+
+---
+
 ## Cargo cannot target-gate a `[[bin]]`
 
 **Symptom.** A `wasm32` build fails inside a binary you never intended to build for wasm,

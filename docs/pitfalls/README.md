@@ -35,6 +35,7 @@ Search this page for the error text you have. Strings are quoted verbatim.
 |---|---|
 | `` the trait bound `X: Y` is not satisfied `` — and rustc's own *help* lists `X` as implementing `Y` | [two builds of one crate](builds.md#two-builds-of-one-crate-and-rustc-blames-your-code) |
 | `` `A` and `crate::path::A` have similar names, but are actually distinct types `` | [same](builds.md#two-builds-of-one-crate-and-rustc-blames-your-code) |
+| `error[E0599]: no function or associated item named` for one that is plainly public in the same `impl` block | [a stale fingerprint blames a function that is right there](builds.md#a-stale-fingerprint-blames-a-function-that-is-right-there) |
 | ``perhaps two different versions of crate `X` are being used?`` | [same](builds.md#two-builds-of-one-crate-and-rustc-blames-your-code) |
 | ``requires panic strategy `abort` which is incompatible with this crate's strategy of `unwind` `` | [same](builds.md#two-builds-of-one-crate-and-rustc-blames-your-code) |
 | `undefined reference to` a symbol that plainly exists, only in `--release` | [same](builds.md#two-builds-of-one-crate-and-rustc-blames-your-code) |
