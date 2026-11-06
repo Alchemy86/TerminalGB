@@ -202,8 +202,10 @@ scenario = ["longplay"]
 #   * no battery saves — cartridge RAM lives and dies with the session
 #   * no `$GB_MODEL` / `$GB_PPU` / `$GB_SPEED` / `$GB_CGB_REVISION` overrides;
 #     an embedder passes `Model` to `Gameboy::new_with_model` instead
-#   * no plugins — `crate::plugin` is a no-op host, so `terminalgb-plugin-api`
-#     is not in the graph
+#   * no plugins — `crate::plugin` is a no-op host, so none actually runs
+#     (`terminalgb-plugin-api` itself stays in the tree either way: it is
+#     first-party with no dependencies of its own, and does not count against
+#     the one-third-party-crate figure above)
 #   * no save states, no terminal/desktop/web frontends, no telemetry
 #   * the ROM is borrowed (`&'static [u8]`), not reference-counted, so it can
 #     live in memory-mapped flash and cost no RAM at all

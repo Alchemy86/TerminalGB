@@ -126,7 +126,8 @@ needs at run time: **[docs/build-modes.md](docs/build-modes.md)**.
   Mooneye's `acceptance` suite <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->, scores Mealybug <!--score:mealybug_accurate-->29 / 79<!--/score-->,
   and reaches **243 / 264** on the [GB Emulator Shootout](docs/shootout.md)'s own board.
 - **[Runs almost anywhere](docs/portability.md)** — WebAssembly, aarch64, armv7, i686, 32-bit
-  RISC-V, and a PlayStation Portable at the DMG's own 59.7275 fps.
+  RISC-V, Windows, a PlayStation Portable at the DMG's own 59.7275 fps, and `#![no_std]` on an
+  ESP32-S3 with no host OS at all.
 - **[An embeddable core](docs/portability.md#7a-embedding-the-core)** — `default-features = false`
   gives you the running machine against **one third-party crate**, where the default build has
   170. CI enforces the count.
@@ -244,6 +245,20 @@ builds *and runs* a cartridge and demands a byte-identical frame — on a **Play
 the DMG's own 59.7275 fps with 40 % of the budget spare, and on **32-bit RISC-V**. A C or Go static
 library is `make ffi-build`. Nothing has ever been run on a big-endian machine and the save-state
 codec is explicitly little-endian: that is a prediction, not a measurement, and it is the gap.
+
+"It's Rust, so it goes basically anywhere" is a claim this board backs rather than asserts, and
+every row below is a **run**, not a compile, except where it says otherwise:
+
+| Target | |
+|---|---|
+| Windows (`x86_64-pc-windows-msvc`) | builds and smoke-tests on a real Windows runner |
+| macOS (x86_64, aarch64) | type-checks only — nobody has linked or run it |
+| **M5Stack PaperColor** (ESP32-S3, `--features embedded`, `#![no_std]`) | Pokémon Blue from a cartridge **in flash, 0 bytes of RAM for it**, real hardware, no host OS at all — §4a of the page below |
+
+That last row is a `no_std` + `alloc` build this page used to describe as "not possible without
+a rework"; the rework happened and the PaperColor runs it. Every other target, the PSP's own
+instrumentation campaign, and what is and isn't checked by CI: **[the full
+board](docs/portability.md)**.
 
 <p align="center">
   <img src="docs/shots/psp-dmg-acid2.png" alt="dmg-acid2 running on a PlayStation Portable, the face rendered pixel-exact" width="330" />

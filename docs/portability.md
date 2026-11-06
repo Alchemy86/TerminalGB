@@ -9,8 +9,17 @@ that a shift is architecture-dependent. **Running it can.**
 This page records what has been run, on what, and what it cost — and says plainly which
 rows are still only a compile.
 
-Everything below was measured on 2026-08-15. Reproduce the Linux rows with
-`make test-cross`; the PSP with `tools/psp-build.sh`.
+The Linux, PSP, RISC-V, FFI and Windows rows below were measured on 2026-08-15; this revision
+re-confirms them against current `main` (post the v0.3.0 release, 2026-11-06) and adds the two
+rows that did not exist yet — the `embedded` row and the M5Stack PaperColor underneath it,
+both from the week of 2026-09-15. Re-checked for this pass: `i686-unknown-linux-musl` still
+builds under `rust-lld` and still runs frame-identical (`make test-cross`, same frame hash as
+below); `aarch64`/`armv7` still build under the same linker but could not be *run* here — this
+machine has no `qemu-aarch64-static`/`qemu-arm-static` installed, so `make test-cross` skips
+them loudly rather than passing silently, same as it would for anyone else without the package;
+`make embed` and `cargo tree --no-default-features --features embedded` both still hold (one
+third-party crate, either way). Reproduce the Linux rows with `make test-cross`; the PSP with
+`tools/psp-build.sh`; the PaperColor with `tools/m5paper-build.sh`.
 
 ---
 
@@ -21,8 +30,9 @@ Everything below was measured on 2026-08-15. Reproduce the Linux rows with
 | `x86_64-unknown-linux-gnu` | **runs** — the development platform | everything |
 | `aarch64-unknown-linux-musl` | **runs**, frame-identical | `make test-cross`, under `qemu-aarch64` |
 | `armv7-unknown-linux-musleabihf` | **runs**, frame-identical | `make test-cross`, under `qemu-arm` |
-| `i686-unknown-linux-musl` | **runs**, frame-identical | `make test-cross`, natively |
+| `i686-unknown-linux-musl` | **runs**, frame-identical | `make test-cross`, natively — reconfirmed 2026-11-06 |
 | `mipsel-sony-psp` (**PlayStation Portable**) | **runs Pokémon Blue at 59.7275 fps** | §3, under PPSSPP |
+| `xtensa-esp32s3-none-elf` (**M5Stack PaperColor**, `embedded` feature, no host at all) | **runs Pokémon Blue on real hardware** — cartridge in flash, 0 bytes of RAM for the megabyte, 12 fps | §4a, on the maintainer's own device |
 | `wasm32-unknown-unknown` | **runs** in a browser, with audio | `docs/web-audio.md` |
 | `riscv32imafc-esp-espidf` (**32-bit RISC-V**) | **builds clean** at `--no-default-features` with no source changes, and under QEMU produced the same frame hash as x86-64 on **both** picture engines | a one-off run, *not* covered by `make test-cross` — see the note below |
 | **C / Go static library** (`ffi` feature) | **builds** — `libterminalgb.a` + `terminalgb.h` | `make ffi-build`; `docs/components/frontends.md` |
@@ -31,12 +41,14 @@ Everything below was measured on 2026-08-15. Reproduce the Linux rows with
 | `armv7-sony-vita-newlibeabihf` (**PS Vita**) | not attempted — *the cheapest console left*, §5 | — |
 | `armv6k-nintendo-3ds`, `aarch64-nintendo-switch-freestanding` | not attempted, §5 | — |
 | any big-endian machine | **never run**, §6 | — |
-| bare metal / `no_std` | **not possible without a rework**, §7 | — |
+| bare metal / `no_std` | **runs** — `--features embedded`, §7 | the PaperColor row above |
 
-**`std` is required and `no_std` is not a flag away.** `Vec`, `Box<dyn …>`,
-`std::sync::Mutex` in the FFI shim and `PathBuf` in the battery layer are all load-bearing.
-Embedded *Linux* is fine — that is what the aarch64/armv7 rows above are. Bare metal is a
-rework of the MBC and battery layers; see §7.
+**`std` is no longer required.** That used to be flat fact: `Vec`, `Box<dyn …>`,
+`std::sync::Mutex` in the FFI shim and `PathBuf` in the battery layer were all load-bearing, and
+this section said bare metal was a rework away. The rework happened — `--no-default-features
+--features embedded` builds `#![no_std]` + `alloc` and it is what runs on the PaperColor above —
+so read it as **done**, and §7 as a record of what that cost rather than a prediction. Embedded
+*Linux* needs none of it; that is what the aarch64/armv7 rows above already were.
 
 ---
 
@@ -431,6 +443,55 @@ a number nobody can check.
 
 ---
 
+## 4a. The M5Stack PaperColor — no host at all
+
+The PSP above still has `std`: a filesystem, threads, a clock. The PaperColor doesn't.
+`platform/m5paper/` boots the emulator core through the `embedded` cargo feature —
+`#![no_std]` + `alloc`, nothing else — on an ESP32-S3 (Xtensa), with a 1 MiB Pokémon Blue
+cartridge built into the firmware's flash and a six-colour E Ink panel standing in for a
+screen. It is the board's one `bare metal / no_std` row, and it is a real device
+(MAC `28:84:85:43:d2:84`), not a simulator.
+
+```sh
+espup install --targets esp32s3                       # once; upstream rustc has no Xtensa backend
+TERMINALGB_ROM=~/roms/blue.gb tools/m5paper-build.sh flash
+```
+
+Measured off the device over USB serial (`docs/m5paper-emulator.md`):
+
+| | Pokémon Blue | dmg-acid2 |
+|---|---:|---:|
+| cartridge | 1024 KiB, **in flash, 0 bytes of RAM** | 32 KiB |
+| emulation | 1000 frames in 81.051 s — **12 fps, 20 % of a real Game Boy** | 30 frames — 10 fps |
+| one frame onto the panel | **15.953 s** | 15.953 s |
+
+Two things follow from that table rather than from prose: the cartridge really does cost no
+RAM — `include_bytes!` lands it in `.rodata`, the chip memory-maps that out of flash, and the
+`embedded` feature holds mappers over a borrowed `&'static [u8]` instead of a reference-counted
+one — and **the panel, not the CPU, is the bottleneck**: 15.953 s to draw one E Ink frame
+dwarfs the 0.081 s it takes to emulate 1,000 of them, so 12 fps is this build's honest
+emulation speed, not a claim about how fast a picture appears. That is the opposite shape from
+the PSP, which hits the DMG's own 59.7275 fps and spends its slack on everything *but* the
+pixels; the right comparison is "does the target have `std`", not "which one is faster" — see
+§5.
+
+Getting a `Gameboy` to exist at all here cost a real debugging campaign, not a flag: the chip's
+~335 KiB of internal DRAM could not hold the panel framebuffer, the emulator's heap, *and* the
+stack `Gameboy`'s constructor needed in one pass, and a stack-guard fault (`sp=0x3fc8cb90`
+against `top=0x3fcdb700`, a 322,928-byte prologue) is what found it before a word reached the
+console. The heap and the panel buffer moved to external PSRAM, and one framebuffer allocation
+moved from the stack to `vec!` (which reaches `alloc_zeroed` instead of copying). Full account,
+including the five ways four Game Boy greys get drawn on a six-ink, no-grey panel:
+[`docs/m5paper-emulator.md`](m5paper-emulator.md) · [the bring-up that came before
+it](m5paper-first-boot.md) · [the panel-speed campaign](m5paper-refresh.md).
+
+**Not in CI, same standard as the PSP and the RISC-V row above**: it needs the `espup` Xtensa
+toolchain fork (upstream rustc has no Xtensa backend at all) and real hardware to flash, so
+nothing here would notice if it stopped building. `platform/m5paper/` is not a workspace member
+for the same reason `platform/psp/` isn't — see `AGENTS.md`.
+
+---
+
 ## 5. The consoles that were not attempted, and what each would cost
 
 The Rust target must exist and it must have `std`; that single question separates these
@@ -478,22 +539,41 @@ boundary — channels are extracted with `to_ne_bytes`, never with shifts. So bi
 
 ---
 
-## 7. `no_std` and bare metal
+## 7. `no_std` and bare metal — done, and what it cost
 
-Not a flag away, and here is the list:
+This section used to be a list of what stood in the way: `Vec` and `Box<dyn …>` throughout,
+`std::sync::Mutex` in the FFI shim, `std::path::PathBuf` and `std::fs` in the battery layer,
+one `std::env::var` and one `SystemTime::now`. **That rework happened** —
+`--no-default-features --features embedded` (added 2026-09-15) builds the crate
+`#![no_std]` + `alloc`, and it is what the M5Stack PaperColor in §4a actually runs — so what
+follows is a record of how each item was closed, not a plan.
 
-* `Vec` and `Box<dyn …>` throughout — `alloc` would cover these.
-* `std::sync::Mutex` in the FFI shim (`src/lib.rs` parks a `Gameboy` in a `static`).
-* `std::path::PathBuf` and `std::fs` in the battery layer (`src/mbc/battery.rs`) — the
-  cartridge-RAM persistence that `docs/testing.md` treats as a correctness feature, not a
-  convenience.
-* One `std::env::var` (`$GB_MODEL`, and only for `Model::Auto` — `Gameboy::new_with_model`
-  bypasses it) and one `SystemTime::now` (only when an MBC3 clock cartridge's battery file
-  is read or written).
+* `Vec` and `Box<dyn …>` — covered by `alloc`, no change needed.
+* **Battery saves are gone, not stubbed.** `SavePath` is an *uninhabited* type under
+  `embedded`, so `Option<SavePath>` can only ever be `None` and the compiler proves every
+  mapper's save arm unreachable — a property check, not a promise the host has to keep.
+  `Battery` becomes a no-op with the same surface the host side already had for "no save
+  file". There is no `PathBuf`/`std::fs` left to need.
+* **The FFI shim's `static Mutex` is simply not built** — `embedded` carries no FFI, no
+  terminal/desktop/web frontends, no save *states*, and no telemetry, and `crate::plugin`
+  becomes a no-op host so no plugin actually runs. `terminalgb-plugin-api` itself stays in the
+  tree either way — it is first-party, has no dependencies of its own, and does not count
+  against the "one third-party crate" figure, with or without `embedded`: re-checked here,
+  `cargo tree --no-default-features --edges normal` and the same command with
+  `--features embedded` both print the identical two-crate tree. Cargo.toml's own
+  `embedded = [...]` feature comment is the canonical list of what `embedded` leaves.
+* `std::env::var` answers `None` under `embedded` and every caller falls back to exactly the
+  default it already had; an embedder passes `Model`, `RenderMode` and `SpeedFlags` in as
+  arguments instead of `$GB_MODEL` et al. `SystemTime::now` is only reached through the
+  battery layer, which no longer exists in this build.
+* The ROM itself is borrowed (`&'static [u8]`) rather than reference-counted, so it can live
+  in memory-mapped flash at zero RAM cost — see §4a — which an `alloc`-only port needed but
+  was not on the original list above.
 
-`alloc`-only would need the battery layer restructured behind a storage trait the host
-implements, and the FFI shim's `static Mutex` replaced. That is a real piece of design work
-with a clear shape; it has not been done and should not be described as close.
+What it costs a host, stated rather than hidden: no battery saves, no `$GB_*` overrides, no
+plugins, no save states, no bundled frontends. A `#[global_allocator]` is the one thing the
+binary must supply. See the feature's own doc comment in `Cargo.toml` and
+[the M5Paper port](m5paper-emulator.md) for a host that actually supplies it.
 
 ---
 
@@ -510,7 +590,7 @@ That is the **whole** dependency tree at that feature set:
 
 ```console
 $ cargo tree --no-default-features --edges normal
-terminalgb v0.2.0
+terminalgb v0.3.0
 ├── blip_buf v0.1.5
 └── terminalgb-plugin-api v0.1.0 (crates/terminalgb-plugin-api)
 ```
@@ -597,3 +677,10 @@ switched off. With no save path nothing here reads a host clock at all.
 * `tools/psp-build.sh` — the PSP, pinned. **Not in CI**: it needs a pinned nightly, a
   third-party checkout and `-Z build-std`, and it produces an artefact nothing here can
   execute. Run it by hand when `platform/psp/` or the core's host surface changes.
+* `cargo check --no-default-features --features embedded` — **not currently gated anywhere**
+  (neither `Makefile` nor CI greps for it); re-checked by hand for this page, 2026-11-06. A
+  change to `src/` that quietly broke `no_std` would not be caught until the next such check.
+* `tools/m5paper-build.sh` — the PaperColor. **Not in CI**, same reason as the PSP: it needs
+  the `espup` Xtensa toolchain fork and a real device to flash. `tools/m5paper-build.sh test`
+  does run `platform/m5paper/src/gbscreen.rs`'s dithering tests without `esp-hal`, so that one
+  slice is checkable without hardware; the emulator-on-device numbers in §4a are not.
