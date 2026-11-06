@@ -1,0 +1,37 @@
+222:wSurfingMinigameData:: db
+223:wSurfingMinigameRoutineNumber:: db
+224:wSurfingMinigamePikachuState:: db
+225:wSurfingMinigameWaveFunctionNumber:: dw
+226:wSurfingMinigameWaveRandomValue:: db
+227:wSurfingMinigamePikachuHP:: dw ; little-endian BCD
+229:wSurfingMinigameRadnessMeter:: db ; number of consecutive tricks
+230:wSurfingMinigameRadnessScore:: dw ; little-endian BCD
+231:wSurfingMinigameTotalScore:: dw ; little-endian BCD
+232:wSurfingMinigameBoardAngleOffset:: db
+233:wSurfingMinigameBoardAngleDecreasing:: db
+234:wSurfingMinigameBoardAngleTimer:: db
+235:wSurfingMinigameCrashTimer:: db
+236:wSurfingMinigameUnusedToggle:: db ; only used in unused function
+237:wSurfingMinigamePikachuSpeed:: dw ; little-endian
+238:wSurfingMinigameDistance:: ds 3 ; big-endian
+239:wSurfingMinigameWaveHeightBuffer:: dw
+240:wSurfingMinigamePikachuObjectHeight:: db
+241:wSurfingMinigameWaterSprayCounter:: db
+242:wSurfingMinigameJumpArcMagnitude:: db
+243:wSurfingMinigameJumpDescending:: db
+244:wSurfingMinigameJumpArcFraction:: db
+245:wSurfingMinigameBGMapReadBuffer:: ds 1 tiles
+247:wSurfingMinigameSCX:: db
+248:wSurfingMinigameSCX2:: db
+249:wSurfingMinigameSCXHi:: db
+250:wSurfingMinigameWaveHeight:: ds SCREEN_WIDTH
+251:wSurfingMinigameXOffset:: db
+252:wSurfingMinigameTrickFlags:: db
+253:wSurfingMinigameGameOver:: db
+254:wSurfingMinigameGameOverDelay:: db
+255:wSurfingMinigameRoutineDelay:: db
+256:wSurfingMinigameIntroAnimationFinished:: db
+259:wSurfingMinigameMusicTempoEnabled::
+261:wSurfingMinigameCloudScrollFraction::
+264:wSurfingMinigameDataEnd::
+2084:wSurfingMinigameHiScore:: dw ; little-endian BCD

@@ -76,6 +76,7 @@
 use terminalgb::gameboy::Gameboy;
 use terminalgb::KeypadKey;
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -851,6 +852,11 @@ const RATE: u32 = 44_100;
 /// Frames kept from the status page — five seconds, which is long enough to
 /// show that nothing moves after the picture lands.
 const STATUS_FRAMES: usize = 300;
+/// How many frames of `Walking` to keep behind the driver at all times, so
+/// the wild-battle transition itself — not just the moment its text finishes
+/// typing — is in the capture. 90 frames is 1.5s at the Game Boy's frame
+/// rate, comfortably longer than any Gen 2 encounter-start animation.
+const PREROLL_FRAMES: usize = 400;
 /// Frames kept from a wild battle: twelve seconds covers the encounter text,
 /// the wild Pokémon's own cry and the send-out.
 const BATTLE_FRAMES: usize = 720;
@@ -1508,6 +1514,14 @@ fn drive(
     let mut battle_audio: Vec<(f32, f32)> = Vec::new();
     let mut status_frames: Vec<Vec<u8>> = Vec::new();
     let mut battle_frames: Vec<Vec<u8>> = Vec::new();
+    // `text.contains("appeared")` only goes true once the whole line is
+    // typed out, so the transition itself — however Sentret actually gets
+    // from off-screen to on-screen, in the frames *before* that string is
+    // complete — was never in the capture. A rolling pre-roll fixes that
+    // without guessing at an earlier OCR match: it is always holding the
+    // last PREROLL_FRAMES frames of Walking, and the instant a wild battle
+    // is detected, that buffer becomes the first frames of the clip.
+    let mut preroll: VecDeque<Vec<u8>> = VecDeque::with_capacity(PREROLL_FRAMES);
     let mut status_started = 0u32;
     let mut battle_started = 0u32;
     let mut backs_out = 0u32;
@@ -1682,8 +1696,13 @@ fn drive(
                     // "Wild <SPECIES> appeared!" is the first line of every
                     // wild encounter, and nothing in the overworld writes it.
                     if text.contains("appeared") {
-                        println!("[{f:6}] a wild battle started");
+                        println!(
+                            "[{f:6}] a wild battle started ({} pre-roll frames \
+                             carried in ahead of it)",
+                            preroll.len()
+                        );
                         tape.arm();
+                        battle_frames.extend(preroll.drain(..));
                         stage = Stage::Battle;
                         battle_started = f;
                     } else if settle > walk_for {
@@ -1766,6 +1785,12 @@ fn drive(
         match stage {
             Stage::Status if status_frames.len() < STATUS_FRAMES => {
                 status_frames.push(gb.image().to_vec())
+            }
+            Stage::Walking => {
+                if preroll.len() >= PREROLL_FRAMES {
+                    preroll.pop_front();
+                }
+                preroll.push_back(gb.image().to_vec());
             }
             Stage::Battle => {
                 battle_frames.push(gb.image().to_vec());
