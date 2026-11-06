@@ -11,9 +11,11 @@
 
 **A cycle-accurate Game Boy and Game Boy Color emulator in Rust that draws real pixels in your
 terminal.** It plays games. It also takes Mooneye's `acceptance` suite <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->, scores **243 / 264** on the
-[GB Emulator Shootout](docs/shootout.md)'s own board, compiles down to **one third-party crate**,
-and hands the running machine to [plugins](docs/plugins.md), any [MCP client](docs/mcp.md), or
-[your own program](docs/portability.md#7a-embedding-the-core).
+[GB Emulator Shootout](docs/shootout.md)'s own board, runs **~1.9× faster than SameBoy** and
+**~1.9× behind PyBoy** (which isn't cycle-accurate — see [speed, and where it
+runs](#speed-and-where-it-runs)), compiles down to **one third-party crate**, and hands the
+running machine to [plugins](docs/plugins.md), any [MCP client](docs/mcp.md), or [your own
+program](docs/portability.md#7a-embedding-the-core).
 
 <p align="center">
   <img src="docs/trainer-panel/5-composition-wide.png" alt="The terminal frontend running Pokemon Blue mid-battle - the message box reads Wild ONIX appeared - with the live trainer panel beside it: trainer name, ID and money, eight badge markers, the opponent's types, HP, stats, DVs, catch odds and full move table, and the six-Pokemon party each with its own decompressed sprite" width="900" />
@@ -230,10 +232,11 @@ full](docs/picture-modes.md) · [a third mode, for driving rather than judging](
 
 Pokémon Blue on one pinned core, thread CPU clock, against a 16.7427 ms frame: a headless
 **collector** runs at **369×** real time and a **player** with the picture on at **106×**; four
-workers on a quiet box pass **1,000×** and twenty reach **3,735×**. Measured against the field in
-one session on one machine, every side optimised: **9.5× faster than SameBoy**, and 2.1× behind
-PyBoy — which gives up cycle accuracy always, and scores 0 on Mealybug's 24 published rows where
-this scores 26.
+workers on a quiet box pass **1,000×** and twenty reach **3,735×**. Measured against the field,
+machine-matched (same PPU granularity, same machine, each side's own render-on/render-off split),
+interleaved in one session, reconfirmed for this release on 2026-11-06: **~1.9× faster than
+SameBoy**, and ~1.9× behind PyBoy — which gives up cycle accuracy always, and scores 0 on
+Mealybug's 24 published rows where this scores 26.
 
 The same code runs on **terminal, desktop and browser** (WebAssembly, sound through Web Audio, no
 cross-origin-isolation headers needed), on **aarch64, armv7 and i686** — where `make test-cross`

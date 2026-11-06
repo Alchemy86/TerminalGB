@@ -28,6 +28,12 @@ now resolved):
 > the further five rows to 243 are later `identical`-only picture work, two of
 > them [`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026).)
 
+**Reconfirmed for this release — 2026-11-06.** A fresh clone of `gbdev/GBEmulatorShootout`
+(`38b926b`, 2026-07-13) and a live `shootout_scout` run against current `main` score the same
+**243 / 264 (92.0 %)**, suite for suite: `blargg` 51/51, `mooneye` 97/97, `samesuite` 66/68,
+`cpp` 4/4, `ax6` 3/3, `acid` 5/5, `daid` 5/9, `ashiepaws` 1/3, `mealybug-tearoom-tests` 11/24.
+Nothing moved.
+
 That is **5th of 19** by pass count and by percentage, four rows behind fourth:
 
 | | emulator | score | % |

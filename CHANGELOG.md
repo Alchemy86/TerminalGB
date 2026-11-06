@@ -13,7 +13,40 @@ history. See [Credits & lineage](README.md#credits--lineage).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
+### Added
+- **Generation 2: read a Pokémon straight out of a Gold cartridge** — picture, cry and battle
+  entrance (`examples/gen2_marill.rs`, [`docs/gen2/`](docs/gen2/README.md)). Species tables
+  (`BaseData`, `PokemonNames`, `PokemonPicPointers`, `PokemonPalettes`) are located in the ROM
+  image by signature rather than transcribed from a symbol file, so the tool can tell a cartridge
+  it does not recognise from one it does. Generation 2's own picture compression, picture-pointer
+  layout and real per-species palettes (`$00AD45`, two RGB555 colours for normal and shiny) are
+  new work — Generation 2 shares almost nothing with Generation 1 beyond the method.
+- `SECURITY.md`: a private vulnerability-reporting policy scoped feature by feature (the
+  link-cable listener, the portal client, the MCP server, `unsafe extern "C"` entry points, and
+  parsing of untrusted ROMs/saves/states under `panic = 'abort'`), linked from the README.
+- `third_party/gblink/README.md`: GB-Link's firmware and Switch-LDN bridge source, vendored
+  read-only for investigation (GPL-3.0/AGPL-3.0, not built or linked into TerminalGB) — the real
+  RFU-to-LDN bridging mechanism and an honest reusability verdict against `plugins/gen1-link/`.
+- **The terminal frontend's graphics protocol cycles live** — `{` steps
+  kitty → sixel → iterm2 → half-blocks with no restart, the last of the "How it looks" group to
+  gain in-place cycling.
+- **`tools/gen1-save/gen1_save.py`** — a Generation 1 battery-save reader and event-flag editor.
+  With no arguments it prints player, money, position, Pokédex owned/seen, the early story flags
+  and the checksum verdict; `set`/`clear <EVENT> --yes` moves one flag and repairs the checksum
+  after a dry run and a timestamped backup. Edits event flags only — party, bag and box data have
+  cross-structure consistency rules this tool does not take on.
+- **A `no_std` embedding build** — `--no-default-features --features embedded` makes the crate
+  `#![no_std]` + `alloc`, for a microcontroller rather than a hosted embedder. It needs only a
+  `#[global_allocator]` from the binary. `--no-default-features` alone still assumes a host
+  (filesystem, environment variables, a clock, threads); `embedded` drops that last assumption,
+  the rework the architecture notes had flagged as outstanding.
+
 ### Changed
+- `third_party/gbselftest.lock` now pins `Alchemy86/GBSelfTest`'s public `v1.0.0` release instead
+  of a local-checkout origin, so the cartridge is reproducible by anyone, not only the machine
+  that bootstrapped it. The vendored ROM is byte-identical (sha256 unchanged).
 - **BREAKING (build): a default build is now a Game Boy emulator and nothing else.** Everything
   Generation 1 — the six Pokémon plugins, the battle simulator, the trade portal, and the
   `longplay`/`scenario` runners built on Gen 1 perception — moved out of `default` and behind one
@@ -513,6 +546,14 @@ history. See [Credits & lineage](README.md#credits--lineage).
 - `.github/FUNDING.yml`, which pointed sponsorship at the upstream author from this fork (see
   the notes in the pull request).
 
+### Fixed
+- **A stale throughput figure.** [`docs/measured/against-the-field.md`](docs/measured/against-the-field.md)
+  §7c's `identical`/no-pixels row (0.3433 ms/frame) predated the same day's per-dot idle-batch
+  fix ([`docs/throughput.md`](docs/throughput.md) §14) and was never re-measured against it.
+  Re-run for this release: **0.1857 ms/frame, a real halving**, not a regression. The headline,
+  machine-matched ratios (§8b: ~1.9× ahead of SameBoy, ~1.9× behind PyBoy) and the shootout score
+  were independently re-measured and are unchanged. See the release notes for the full account.
+
 ## [0.2.0] - 2026-08-13
 
 A large accuracy, audio, rendering, and tooling pass on top of the fork baseline.
@@ -560,5 +601,6 @@ A large accuracy, audio, rendering, and tooling pass on top of the fork baseline
   `cell_scale` configuration key.
 - **MBC**: three crashes fixed alongside adopting the ecosystem `.sav` format.
 
-[Unreleased]: https://github.com/Alchemy86/TerminalGB/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Alchemy86/TerminalGB/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Alchemy86/TerminalGB/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Alchemy86/TerminalGB/releases/tag/v0.2.0

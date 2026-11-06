@@ -6,7 +6,7 @@ members = ["crates/*", "plugins/*"]
 
 [package]
 name = "terminalgb"
-version = "0.2.0"
+version = "0.3.0"
 description = "Game Boy / Game Boy Color emulator in Rust — desktop, terminal, and WebAssembly"
 # This is a fork of raphamorim/gameboy (itself modelled on mvdnes/rboy). Under
 # MPL-2.0 the upstream authorship stays credited; see README "Credits & lineage".

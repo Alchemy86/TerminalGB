@@ -357,6 +357,16 @@ may skip ([`picture-modes.md`](../picture-modes.md), [`modes.md`](../modes.md)).
 | **identical** | **accurate** | 0.3410 | 0.3433 | 49× | 22.0× behind |
 | identical | speed | — | refused by design | — | — |
 
+> **The `identical`/`no-pixels` cell is superseded — 2026-11-06.** `0.3433` predates
+> [`docs/throughput.md`](../throughput.md) §14 (`7554bd7`, the same day, 13:26, after this
+> section was measured): the per-dot engine could not idle-batch and `set_render_pixels(false)`
+> was inert on it, so a headless collector was drawing a picture nobody reads. Re-measured on
+> this release's `main` (`tools/perf/field.sh 4 4`, load 2.0–3.2, same box, same ROM, frame hash
+> unchanged at `c850103d…`): **0.1857 ms/frame, 90× real time, 11.5× behind PyBoy** — not a
+> regression check, a real halving. The `standard` row and the PyBoy figure above are unchanged
+> within run-to-run noise (0.0305–0.0309 and 0.0161 respectively); only this cell moved, and it
+> moved for the reason §14 already gives.
+
 With an APU installed and silent — the shape a certification run uses — the same three cells are
 **0.0318 accurate**, **0.0275 speed**, and **0.0256** with `speed,no-apu-state`.
 
@@ -497,6 +507,13 @@ is event-scheduled at mode boundaries (`_endMode0`..`_endMode3` and `mTimingSche
 **We are 1.23× faster than mGBA and 1.92× faster than SameBoy, each against the engine of its own
 granularity.** PyBoy, in the APU-free block both sides, is 0.0156 against our 0.0297 — **1.90×
 ahead of us**.
+
+> **Reconfirmed — 2026-11-06, for this release.** SameBoy block rebuilt at the same pinned
+> commit, PyBoy 2.7.0 (unchanged), interleaved on the same box, load 2.0–3.2: TerminalGB
+> `identical` 0.2164 vs SameBoy 0.4202 (**1.94× ahead**, frame hash `c850103d…` unchanged);
+> TerminalGB `standard`/no-pixels/no-APU 0.0305–0.0309 vs PyBoy 0.0161 (**1.89–1.91× behind**) and
+> 0.0260 in speed mode (**1.61× behind**). mGBA was not rebuilt this round. Every ratio above
+> holds within run-to-run noise; nothing here moved.
 
 ### 8c. So the received wisdom is wrong on this box, and it is worth saying plainly
 
