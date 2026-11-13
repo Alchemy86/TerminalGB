@@ -598,8 +598,10 @@ HELP = {
         "encode_film.py encode <frames-dir> --out FILM.mp4 [--fps 60] "
         "[--recipe NAME] [--mobile FILM-mobile.mp4]",
         "",
-        f"Default recipe {DEFAULT}: constant quality at 4:4:4 chroma. Nothing "
-        "scales — the frames are already at the output resolution.",
+        f"Default recipe {DEFAULT}: H.264 High + CABAC at 4:2:0, which every "
+        "player and every hardware decoder handles — 4:4:4 is a MASTER recipe "
+        "and needs --master. Nothing scales: the frames are already at the "
+        "output resolution.",
         "",
         "examples:",
         "  encode_film.py encode /tmp/frames --out film.mp4 --fps 60",
