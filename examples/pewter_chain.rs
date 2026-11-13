@@ -1593,6 +1593,12 @@ mod item {
     pub const POTION_HEAL: u32 = 20;
 }
 
+/// PARAS' **internal** species index — `wPartySpecies`' own numbering, which
+/// is not its Pokédex number (46). `gen1_tables.py` reads both out of the
+/// cartridge and they differ for almost every species; mixing them is the
+/// classic Gen 1 mistake.
+const PARAS: u8 = 109;
+
 /// What each leg is prepared to spend a Poké Ball on.
 ///
 /// **The first time this chain has ever thrown one**, and it is a
@@ -1616,7 +1622,6 @@ mod item {
 fn catch_wants(scenario: &str) -> &'static [terminalgb_plugin_agent::catch::Want] {
     use terminalgb_plugin_agent::catch::Want;
     const ZUBAT: u8 = 107;
-    const PARAS: u8 = 109;
     const MT_MOON: &[Want] = &[
         Want {
             species: PARAS,
@@ -1629,6 +1634,11 @@ fn catch_wants(scenario: &str) -> &'static [terminalgb_plugin_agent::catch::Want
             why: "a bench to switch to when the lead is confused, at catch rate 255",
         },
     ];
+    const PARAS_ONLY: &[Want] = &[Want {
+        species: PARAS,
+        cap: 1,
+        why: "the bench Misty is beaten with — see docs/gen1/catch-and-train.md",
+    }];
     match scenario {
         // **The catch rides the walk it is already making.** A leg whose
         // *goal* was `party>=2` was built and measured first and scored 56 of
@@ -1638,7 +1648,66 @@ fn catch_wants(scenario: &str) -> &'static [terminalgb_plugin_agent::catch::Want
         // mountain. Hung off a walk that was already 60 of 60, the same catch
         // costs nothing and risks nothing.
         "23-down-to-mt-moon-b2f" => MT_MOON,
+        // **A hunt is the other shape, and it wants one species and no
+        // other.** ZUBAT is deliberately absent: a leg whose whole job is to
+        // come away holding a PARAS has five balls, and every one spent on
+        // something else is one the hunt does not have.
+        "23b-hunt-a-paras" => PARAS_ONLY,
         _ => &[],
+    }
+}
+
+/// The species a leg is **hunting**, as against catching if one wanders past.
+///
+/// # Why a hunt is a different thing from a catch, and needs one extra rule
+///
+/// [`catch::decide`] answers `Weaken` below [`catch::WEAKEN_BELOW`] — a third
+/// — because a ball thrown at a full-health target is worth less than one more
+/// turn of chipping. That is right, and on an *opportunistic* leg it costs
+/// nothing: the encounter is declined, the walk carries on, and another one
+/// comes along.
+///
+/// A hunt cannot afford that. PARAS is **two slots in ten of a floor whose
+/// encounter rate is 10/256**, so it is about one step in 128; a leg that
+/// answers `Weaken` and then runs away has thrown the encounter it was waiting
+/// for. So the one extra rule is: **fight the thing you are hunting, run from
+/// everything else**. Measured against the cartridge's own routine
+/// ([`terminalgb_plugin_trainer::capture`]): a full-health PARAS at catch rate
+/// 190 is a 25% Poké Ball, which is under the third; at half health it is 50%,
+/// which is over it.
+///
+/// Returns the **internal** species index, the same numbering [`Want`] uses.
+fn hunting(scenario: &str) -> Option<u8> {
+    match scenario {
+        "23b-hunt-a-paras" => Some(PARAS),
+        _ => None,
+    }
+}
+
+/// The species a leg must leave in **party slot one**.
+///
+/// # Why promoting is a capability of its own, and not part of the catch
+///
+/// Gen 1 gives experience only to the Pokémon that were sent out, and it sends
+/// out the first party member that has any HP. So a caught Pokémon on the
+/// bench cannot be trained at all: it has to lead first. The party menu's
+/// `SWITCH` is the cartridge's own way to say so, and
+/// [`ChainDriver::reorder_party`] is a driver stage over exactly that — no
+/// memory is written, so a leg that promotes still reports `clean`.
+///
+/// **It is deliberately a separate leg from the hunt.** The hunt is long and
+/// its length is a geometric variable; the promotion is fifteen decisions and
+/// deterministic. Folded together, a promotion bug reads as a hunt that never
+/// found anything, and the budget has to cover both.
+///
+/// **And WHERE it happens is a measured constraint, not a tidiness choice.**
+/// Promoting inside the mountain would hand Mt Moon B2F's two forced trainer
+/// battles to a level-10 PARAS holding SCRATCH. The promotion therefore waits
+/// until Cerulean, after the last fight the starter has to win.
+fn lead_with(scenario: &str) -> Option<u8> {
+    match scenario {
+        "26b-lead-with-the-paras" => Some(PARAS),
+        _ => None,
     }
 }
 
@@ -2076,6 +2145,13 @@ pub struct ChainDriver {
     /// but the one that catches, and an empty list means `catch::decide` is
     /// never even asked.
     wants: &'static [terminalgb_plugin_agent::catch::Want],
+    /// The species this leg is **hunting**, if it is hunting rather than
+    /// catching opportunistically. See [`hunting`].
+    hunting: Option<u8>,
+    /// The species this leg must leave in party slot one, and how many
+    /// decisions the party menu has already cost. See [`lead_with`].
+    promote: Option<u8>,
+    promote_tries: u32,
     /// How many the party held at the last decision, so a catch can be counted
     /// where it lands rather than where a ball leaves the bag.
     party_seen: usize,
@@ -2287,6 +2363,9 @@ impl ChainDriver {
             train_to: train_to(scenario),
             shopping: shopping_list(scenario),
             wants: catch_wants(scenario),
+            hunting: hunting(scenario),
+            promote: lead_with(scenario),
+            promote_tries: 0,
             party_seen: 0,
             item_use: None,
             item_failures: 0,
@@ -2994,9 +3073,19 @@ impl ChainDriver {
             // nothing to decide from, so let it.
             return Plan::new("Let the battle settle.").wait(16).finish();
         };
+        // **A hunt fights the thing it is hunting, and runs from everything
+        // else.** The leg's own `fight_wild` is `false` — a mountain has no
+        // nurse in it and a Zubat is worth nothing — but the one encounter the
+        // leg exists for has to be chipped down before a ball is worth
+        // throwing, and `catch::decide` says so itself by answering `Weaken`.
+        // Without this the hunt declines the encounter it has been walking a
+        // hundred and twenty-eight steps for. See [`hunting`].
+        let hunted = self
+            .hunting
+            .is_some_and(|sp| view.theirs.species == sp && s.battle.as_deref() == Some("wild"));
         let intent = terminalgb_plugin_agent::battle::Intent {
-            may_fight_wild: self.fight_wild,
-            train_to: self.train_to as u8,
+            may_fight_wild: self.fight_wild || hunted,
+            train_to: if hunted { 100 } else { self.train_to as u8 },
         };
         // How many turns have already gone on a stat move is the driver's
         // count; the cartridge keeps none, so the view carries ours.
