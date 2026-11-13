@@ -1,17 +1,10 @@
 use blip_buf::BlipBuf;
 
-/// The four square duty patterns, in hardware's own bit order (Pan Docs,
-/// "Audio Registers" → NRx1). Position 0 is the one the duty counter holds
-/// immediately after an APU power-on, which is what makes the phase of these
-/// rows observable: SameSuite reads the channel's live digital output through
-/// PCM12/PCM34 and compares it position by position, so a rotated table (which
-/// sounds identical — a square wave's phase is inaudible) fails every
-/// `channel_N_duty` / `channel_N_align` subtest.
-const DUTY_PATTERN: [[u8; 8]; 4] = [
-    [0, 0, 0, 0, 0, 0, 0, 1], // 12.5%
-    [1, 0, 0, 0, 0, 0, 0, 1], // 25%
-    [1, 0, 0, 0, 0, 1, 1, 1], // 50%
-    [0, 1, 1, 1, 1, 1, 1, 0], // 75%
+const WAVE_PATTERN: [[i32; 8]; 4] = [
+    [-1, -1, -1, -1, 1, -1, -1, -1],
+    [-1, -1, -1, -1, 1, 1, -1, -1],
+    [-1, -1, 1, 1, 1, 1, -1, -1],
+    [1, 1, 1, 1, -1, -1, 1, 1],
 ];
 // Game Boy CPU runs at 4.194304 MHz
 const CLOCKS_PER_SECOND: u32 = 4194304;
@@ -73,56 +66,18 @@ impl VolumeEnvelope {
 
     fn wb(&mut self, a: u16, v: u8) {
         match a {
-            0xFF12 | 0xFF17 | 0xFF21 => self.write_nrx2(v, false),
+            0xFF12 | 0xFF17 | 0xFF21 => {
+                self.period = v & 0x7;
+                self.goes_up = v & 0x8 == 0x8;
+                self.initial_volume = v >> 4;
+                self.volume = self.initial_volume;
+            }
             0xFF14 | 0xFF19 | 0xFF23 if v & 0x80 == 0x80 => {
                 self.delay = self.period;
                 self.volume = self.initial_volume;
             }
             _ => (),
         }
-    }
-
-    /// NRx2 write. **The current volume is not reloaded** — only a trigger
-    /// does that; NRx2 sets the value the *next* trigger will load. Writing it
-    /// while the channel is playing instead perturbs the live volume, the
-    /// behaviour known as "zombie mode".
-    ///
-    /// The rule below is CGB revision E's, derived from SameSuite
-    /// `channel_N_volume` (which sweeps every combination of old and new
-    /// direction and period against the resulting PCM12 reading) and confirmed
-    /// against the short half of `channel_N_nrx2_glitch`. SameSuite's own
-    /// README records that this glitch "behaves differently across CPU-CGB
-    /// revisions" and that only revision E is documented — DMG's variant, as
-    /// described on the gg8 wiki, is a different formula and is not what a
-    /// CGB-booting emulator should implement.
-    fn write_nrx2(&mut self, v: u8, channel_enabled: bool) {
-        let new_period = v & 0x7;
-        let new_up = v & 0x8 == 0x8;
-
-        if channel_enabled {
-            let mut vol = self.volume as i32;
-            // The envelope timer sits idle while its period is 0. Loading a
-            // fresh NRx2 restarts it and it fires once immediately — in the
-            // OLD direction, because the direction latch has not caught up.
-            // Writing an envelope that is off in both senses (counting down
-            // with period 0) restarts nothing.
-            if self.period == 0 && (new_up || new_period != 0) {
-                vol += if self.goes_up { 1 } else { -1 };
-            }
-            // Switching the envelope from decrement to increment adds two.
-            if new_up && !self.goes_up {
-                vol += 2;
-            }
-            // Reversing the direction reverses the counter itself.
-            if new_up != self.goes_up {
-                vol = 16 - vol;
-            }
-            self.volume = (vol & 0x0F) as u8;
-        }
-
-        self.period = new_period;
-        self.goes_up = new_up;
-        self.initial_volume = v >> 4;
     }
 
     fn step(&mut self) {
@@ -222,54 +177,13 @@ impl LengthCounter {
     }
 }
 
-/// Extra T-cycles beyond one full period before a square channel's first duty
-/// step after a trigger. SameSuite `channel_1_delay` / `channel_2_delay`
-/// document the total as "(sample length + 2) ticks from the moment channel 1
-/// is enabled until PCM12 is affected" and step their read point one M-cycle
-/// at a time, so this constant is measured, not guessed.
-const SQUARE_TRIGGER_DELAY: u32 = 6;
-
-/// Phase, on the APU's free-running 1 MHz (4 T-cycle) grid, that a square
-/// channel's first post-trigger duty step lands on.
-///
-/// The frequency timer is clocked by that grid, not by the write: a trigger
-/// reloads the counter but the reload only takes effect at the next 1 MHz
-/// edge, so the true delay is "period + [`SQUARE_TRIGGER_DELAY`], rounded up
-/// to the grid". At single speed the CPU is locked to the same grid and this
-/// is invisible; at double speed the CPU can write NRx4 on either half of a
-/// grid cell, which is exactly what SameSuite's `channel_N_align` tests do —
-/// they shift the trigger by one double-speed M-cycle (2 T) at a time and
-/// show the first duty step *not* moving with it.
-const SQUARE_TRIGGER_ALIGN: u32 = 0;
-
-/// T-cycles knocked off [`SQUARE_TRIGGER_DELAY`] when the trigger is a
-/// *re*-trigger of an already-running channel. SameSuite `channel_N_restart`
-/// states it outright: "after restarting, the start delay from the 'delay'
-/// test is actually 1 tick shorter. The countdown for the next sample is
-/// reset, but the new pulse's first sample will be the next sample the old
-/// pulse would have played" — which is also why the duty position is left
-/// alone here.
-const SQUARE_RESTART_SPEEDUP: u32 = 4;
-
 struct SquareChannel {
     enabled: bool,
     dac_enabled: bool,
     volume: VolumeEnvelope,
     length: LengthCounter,
     duty: u8,
-    /// Position in the duty pattern. Advanced at each frequency-timer expiry,
-    /// reset only by an APU power-off — a trigger reloads the timer
-    /// but leaves the position alone (gg8 wiki, "Gameboy sound hardware" →
-    /// Trigger Event).
-    duty_pos: u8,
-    /// The duty bit the channel is **currently driving into its DAC**. It is a
-    /// latch, not a function of `duty_pos`: it only takes a new value when the
-    /// frequency timer expires, so a freshly powered-on channel reads 0 for
-    /// the whole first pattern position even where the duty table says high.
-    /// SameSuite `channel_N_duty` measures exactly that — with duty 0 (one
-    /// high position out of eight) the first cycle's high is missing and the
-    /// second is not.
-    duty_out: bool,
+    phase: u8,
     freq: u16,
     period: u32,
     delay: u32,
@@ -294,8 +208,7 @@ impl SquareChannel {
             volume: VolumeEnvelope::new(),
             length: LengthCounter::new(64),
             duty: 1,
-            duty_pos: 0,
-            duty_out: false,
+            phase: 1,
             freq: 0,
             period: 2048,
             delay: 0,
@@ -328,63 +241,34 @@ impl SquareChannel {
             }
         } else {
             let mut time = start_time + self.delay;
-            let pattern = DUTY_PATTERN[self.duty as usize];
+            let pattern = WAVE_PATTERN[self.duty as usize];
             let vol = self.volume.volume as i32;
 
-            // At each frequency-timer expiry the duty counter advances and
-            // the channel latches the bit at the new position. (`delay` is
-            // time-to-next-expiry, which a trigger reloads.)
             while time < end_time {
-                self.duty_pos = (self.duty_pos + 1) & 7;
-                self.duty_out = pattern[self.duty_pos as usize] != 0;
-                let amp = if self.duty_out { vol } else { -vol };
+                let amp = vol * pattern[self.phase as usize];
                 if amp != self.last_amp {
                     self.blip.add_delta(time, amp - self.last_amp);
                     self.last_amp = amp;
                 }
 
                 time += self.period;
+                self.phase = (self.phase + 1) % 8;
             }
 
             self.delay = time - end_time;
         }
     }
 
-    /// The channel's live 4-bit digital output — what PCM12/PCM34 report
-    /// (Pan Docs, "Audio Registers" → PCM12/PCM34; CGB only). Zero whenever
-    /// the channel or its DAC is off; otherwise the envelope volume gated by
-    /// the current duty bit.
-    fn digital_output(&self) -> u8 {
-        if self.enabled && self.dac_enabled && self.duty_out {
-            self.volume.volume
-        } else {
-            0
-        }
-    }
-
-    /// `grid_phase` is the APU clock's position on its 1 MHz grid (`0..=3`) at
-    /// the cycle the trigger lands — see [`SQUARE_TRIGGER_ALIGN`].
-    fn trigger(&mut self, grid_phase: u32) {
-        let restart = self.enabled;
+    fn trigger(&mut self) {
         self.enabled = true;
         self.calculate_period();
-        // Hardware reloads the frequency timer on trigger, so the first duty
-        // step is a whole period away — SameSuite `channel_N_delay` measures
-        // that delay as (sample length + 2) M-cycles and fails a channel that
-        // steps immediately. The duty *position* is deliberately not reset.
-        let pad = SQUARE_TRIGGER_ALIGN.wrapping_sub(grid_phase) & 3;
-        let base = if restart {
-            SQUARE_TRIGGER_DELAY - SQUARE_RESTART_SPEEDUP
-        } else {
-            SQUARE_TRIGGER_DELAY
-        };
-        self.delay = self.period + base + pad;
-        // Sweep trigger semantics (gg8 wiki; dmg_sound 04-sweep): the shadow
-        // frequency and timer ALWAYS reload, the internal enable flag is set
-        // iff period or shift is non-zero (a stale `true` from an earlier
-        // trigger must not survive — 04-sweep test 10), the negate-used flag
-        // resets, and a non-zero shift performs an immediate calculation +
-        // overflow check (which can disable the channel on the spot).
+        self.delay = 0; // No initial delay for square channels
+                        // Sweep trigger semantics (gg8 wiki; dmg_sound 04-sweep): the shadow
+                        // frequency and timer ALWAYS reload, the internal enable flag is set
+                        // iff period or shift is non-zero (a stale `true` from an earlier
+                        // trigger must not survive — 04-sweep test 10), the negate-used flag
+                        // resets, and a non-zero shift performs an immediate calculation +
+                        // overflow check (which can disable the channel on the spot).
         self.sweep_freq = self.freq;
         self.sweep_delay = if self.sweep_period == 0 {
             8
@@ -450,8 +334,7 @@ impl SquareChannel {
         self.volume.save_state(w);
         self.length.save_state(w);
         w.u8(self.duty);
-        w.u8(self.duty_pos);
-        w.bool(self.duty_out);
+        w.u8(self.phase);
         w.u16(self.freq);
         w.u32(self.period);
         w.u32(self.delay);
@@ -474,8 +357,7 @@ impl SquareChannel {
         self.volume.load_state(r)?;
         self.length.load_state(r)?;
         self.duty = r.u8()?;
-        self.duty_pos = r.u8()?;
-        self.duty_out = r.bool()?;
+        self.phase = r.u8()?;
         self.freq = r.u16()?;
         self.period = r.u32()?;
         self.delay = r.u32()?;
@@ -501,11 +383,6 @@ struct WaveChannel {
     volume_shift: u8,
     waveram: [u8; 16],
     wave_pos: u8,
-    /// The raw 4-bit sample the channel is currently driving into its DAC.
-    /// Latched at each fetch, which is why it survives a re-trigger (hardware
-    /// resets `wave_pos` but does *not* refill the sample buffer — Pan Docs,
-    /// "Audio Details" → Wave Channel) and is what PCM34 reports.
-    sample_latch: u8,
     /// T-cycles from the channel's most recent wave-RAM byte fetch to the
     /// point `run()` last synced to (`u32::MAX` = no fetch yet). Consulted at
     /// CPU access time for the DMG wave-RAM access window: on DMG, wave RAM
@@ -549,7 +426,6 @@ impl WaveChannel {
                 0x34, 0xB8, 0x2E, 0xDA,
             ], // Default wave pattern
             wave_pos: 0,
-            sample_latch: 0,
             since_fetch: u32::MAX,
             blip,
             last_amp: 0,
@@ -584,20 +460,6 @@ impl WaveChannel {
         }
     }
 
-    /// Live 4-bit digital output for PCM34 — the latched sample shifted by the
-    /// NR32 volume code (0 = mute).
-    fn digital_output(&self) -> u8 {
-        if !self.enabled || !self.dac_enabled {
-            return 0;
-        }
-        match self.volume_shift {
-            1 => self.sample_latch,
-            2 => self.sample_latch >> 1,
-            3 => self.sample_latch >> 2,
-            _ => 0,
-        }
-    }
-
     fn run(&mut self, start_time: u32, end_time: u32) {
         if !self.enabled || !self.dac_enabled || self.period == 0 {
             if self.last_amp != 0 {
@@ -622,13 +484,6 @@ impl WaveChannel {
 
             let mut last_fetch: Option<u32> = None;
             while time < end_time {
-                // The position advances *then* the sample is fetched, which is
-                // why a freshly triggered CH3 never plays wave sample 0: the
-                // trigger resets the position to 0 and the first fetch is
-                // already sample 1 (Pan Docs, "Audio Details" → Wave Channel;
-                // SameSuite `channel_3_first_sample` puts a distinguishable
-                // nibble in each half of byte 0 and reads back the second).
-                self.wave_pos = (self.wave_pos + 1) % 32;
                 let byte = self.waveram[self.wave_pos as usize / 2];
                 let sample = if self.wave_pos & 1 == 0 {
                     byte >> 4
@@ -636,7 +491,6 @@ impl WaveChannel {
                     byte & 0xF
                 };
 
-                self.sample_latch = sample;
                 // Shift left by 2 for 4x amplitude
                 let amp = ((sample << 2) >> volshift) as i32;
 
@@ -647,6 +501,7 @@ impl WaveChannel {
 
                 last_fetch = Some(time);
                 time += self.period;
+                self.wave_pos = (self.wave_pos + 1) % 32;
             }
 
             self.delay = time - end_time;
@@ -680,7 +535,6 @@ impl WaveChannel {
         w.u8(self.volume_shift);
         w.bytes(&self.waveram);
         w.u8(self.wave_pos);
-        w.u8(self.sample_latch);
         // Live at any save point while CH3 plays: the DMG access window is
         // derived from it, so dropping it desyncs windowed wave-RAM
         // reads/writes after a load (format v3).
@@ -701,27 +555,11 @@ impl WaveChannel {
         self.volume_shift = r.u8()?;
         r.fill(&mut self.waveram)?;
         self.wave_pos = r.u8()?;
-        self.sample_latch = r.u8()?;
         self.since_fetch = r.u32()?;
         self.last_amp = r.i32()?;
         Ok(())
     }
 }
-
-/// T-cycles from a noise-channel trigger to its first LFSR step, beyond the
-/// reload of the frequency timer. SameSuite `channel_4_delay` measures the
-/// total as "sample length + 3 M-cycles" and steps its read point one M-cycle
-/// at a time; `channel_4_lfsr` then pins the *phase* by reconstructing the
-/// LFSR from 128 consecutive samples, so an error here rotates the whole
-/// reconstructed sequence.
-const NOISE_TRIGGER_DELAY: u32 = 2;
-
-/// Phase, on the APU's 1 MHz grid, that the noise channel's first post-trigger
-/// LFSR step lands on — the same free-running-clock effect as
-/// [`SQUARE_TRIGGER_ALIGN`], and measured the same way by SameSuite's
-/// `channel_4_align` (which shifts the trigger one double-speed M-cycle at a
-/// time and shows the first sample moving in 4 T-cycle steps, not 2).
-const NOISE_TRIGGER_ALIGN: u32 = 0;
 
 struct NoiseChannel {
     enabled: bool,
@@ -765,16 +603,6 @@ impl NoiseChannel {
         self.period = divisor << self.shift;
     }
 
-    /// Live 4-bit digital output for PCM34. The LFSR drives the DAC high when
-    /// its bit 0 is **clear** (Pan Docs, "Audio Details" → Noise Channel).
-    fn digital_output(&self) -> u8 {
-        if self.enabled && self.dac_enabled && self.lfsr & 1 == 0 {
-            self.volume.volume
-        } else {
-            0
-        }
-    }
-
     fn run(&mut self, start_time: u32, end_time: u32) {
         if !self.enabled {
             if self.last_amp != 0 {
@@ -812,25 +640,11 @@ impl NoiseChannel {
         }
     }
 
-    fn trigger(&mut self, grid_phase: u32) {
+    fn trigger(&mut self) {
         self.enabled = true;
         self.lfsr = 0x7FFF;
         self.calculate_period();
-        // The noise frequency is built from two counters — the NR43 divisor
-        // and the shift stage above it — and a trigger reloads only the
-        // divisor, leaving the shift stage half-way through. The first LFSR
-        // step therefore lands at `divisor + (period - divisor)/2`, not at a
-        // full period. SameSuite `channel_4_delay` measures this across three
-        // shift settings at a fixed divisor (2/4/8 M-cycle samples) and the
-        // lateness of a plain full-period reload grows as 0/1/3 M-cycles,
-        // which is exactly that halved shift stage.
-        let divisor = if self.divisor == 0 {
-            8
-        } else {
-            self.divisor as u32 * 16
-        };
-        let pad = NOISE_TRIGGER_ALIGN.wrapping_sub(grid_phase) & 3;
-        self.delay = divisor + (self.period - divisor) / 2 + NOISE_TRIGGER_DELAY + pad;
+        self.delay = 0;
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {
@@ -917,7 +731,6 @@ pub struct Sound {
     channel_to_left: u8,
     channel_to_right: u8,
     frame_seq_counter: u8,
-    frame_seq_skip: bool,
     /// Raw last-written bytes for `0xFF10..=0xFF25`. Hardware read-back is
     /// `written | mask` (see [`NR_READBACK_MASKS`]) — the decoded channel
     /// state below is what *plays*, this shadow is what *reads*.
@@ -932,16 +745,6 @@ pub struct Sound {
     prev_time: u32,
     next_time: u32,
     output_period: u32,
-    /// CGB double-speed mode: the CPU ticks twice as fast, the APU does not.
-    double_speed: bool,
-    /// Odd CPU T-cycle carried across a `do_cycle` when halving for double
-    /// speed.
-    cpu_frac: u32,
-    /// Position of the APU clock on its free-running 1 MHz grid (`0..=3` base
-    /// T-cycles). Kept separately from `time`, which `do_output` rebases by
-    /// `output_period` (24344 T at 44.1 kHz — not a multiple of 4, so `time`
-    /// cannot carry the phase). See [`SQUARE_TRIGGER_ALIGN`].
-    grid_phase: u32,
     /// Reusable mixing scratch (see [`Mixdown`]).
     mixdown: Mixdown,
 }
@@ -977,7 +780,6 @@ impl Sound {
             channel_to_left: 0xF,  // All channels to left (only lower 4 bits)
             channel_to_right: 0xF, // All channels to right (only lower 4 bits)
             frame_seq_counter: 0,
-            frame_seq_skip: false,
             regs: [0; 22],
             dmg_mode: true,
             player: None,
@@ -985,9 +787,6 @@ impl Sound {
             prev_time: 0,
             next_time: CLOCKS_PER_FRAME,
             output_period,
-            double_speed: false,
-            cpu_frac: 0,
-            grid_phase: 0,
             mixdown: Mixdown::default(),
         }
     }
@@ -1029,7 +828,6 @@ impl Sound {
         w.u8(self.channel_to_left);
         w.u8(self.channel_to_right);
         w.u8(self.frame_seq_counter);
-        w.bool(self.frame_seq_skip);
         for b in self.regs {
             w.u8(b);
         }
@@ -1038,9 +836,6 @@ impl Sound {
         w.u32(self.prev_time);
         w.u32(self.next_time);
         w.u32(self.output_period);
-        w.bool(self.double_speed);
-        w.u32(self.cpu_frac);
-        w.u32(self.grid_phase);
     }
 
     pub(crate) fn load_state(
@@ -1057,7 +852,6 @@ impl Sound {
         self.channel_to_left = r.u8()?;
         self.channel_to_right = r.u8()?;
         self.frame_seq_counter = r.u8()?;
-        self.frame_seq_skip = r.bool()?;
         for b in self.regs.iter_mut() {
             *b = r.u8()?;
         }
@@ -1066,9 +860,6 @@ impl Sound {
         self.prev_time = r.u32()?;
         self.next_time = r.u32()?;
         self.output_period = r.u32()?;
-        self.double_speed = r.bool()?;
-        self.cpu_frac = r.u32()?;
-        self.grid_phase = r.u32()?;
         Ok(())
     }
 
@@ -1134,23 +925,10 @@ impl Sound {
         self.run();
     }
 
-    /// Advance the APU by `cycles` **CPU** T-cycles.
-    ///
-    /// At double speed the CPU's tick is half a base clock tick, so the APU —
-    /// which is wired to the unmodified 4.194304 MHz clock — advances half as
-    /// far. `cpu_frac` carries the odd tick so an odd `cycles` never loses
-    /// time (the APU must stay exactly `cycles/2` behind, or pitch drifts).
     pub fn do_cycle(&mut self, cycles: u32) {
         if self.player.is_none() {
             return;
         }
-        let cycles = if self.double_speed {
-            let total = self.cpu_frac + cycles;
-            self.cpu_frac = total & 1;
-            total >> 1
-        } else {
-            cycles
-        };
 
         // Time advances even while the APU is powered off (NR52 bit 7 = 0).
         // Real hardware keeps driving the output DACs — they just sit at
@@ -1162,7 +940,6 @@ impl Sound {
         // disabled contribute no blip deltas, so an off APU synthesises exact
         // silence at zero extra cost.
         self.time += cycles;
-        self.grid_phase = (self.grid_phase + cycles) & 3;
 
         if self.time >= self.output_period {
             self.do_output();
@@ -1186,98 +963,6 @@ impl Sound {
         self.play_samples();
     }
 
-    /// One DIV-APU event: the 512 Hz tick that drives length, sweep and
-    /// envelope. Performs the action for the *current* step, then advances.
-    fn frame_seq_step(&mut self) {
-        if self.frame_seq_skip {
-            self.frame_seq_skip = false;
-            return;
-        }
-        if self.frame_seq_counter % 2 == 0 {
-            // Length expiry disables the channel itself (NR52 status bit),
-            // not just its output — see LengthCounter::step.
-            if self.channel1.length.step() {
-                self.channel1.enabled = false;
-            }
-            if self.channel2.length.step() {
-                self.channel2.enabled = false;
-            }
-            if self.channel3.length.step() {
-                self.channel3.enabled = false;
-            }
-            if self.channel4.length.step() {
-                self.channel4.enabled = false;
-            }
-        }
-        if self.frame_seq_counter % 4 == 2 {
-            self.channel1.sweep_step();
-        }
-        if self.frame_seq_counter == 7 {
-            self.channel1.volume.step();
-            self.channel2.volume.step();
-            self.channel4.volume.step();
-        }
-
-        self.frame_seq_counter = (self.frame_seq_counter + 1) % 8;
-    }
-
-    /// Are we in the *first half* of a 256 Hz length period — i.e. will the
-    /// next DIV-APU event leave the length counters alone? That is what the
-    /// NRx4 extra-length-clocking quirks key off (see `apply_nrx4_length`).
-    ///
-    /// A pending power-on skip counts as first half: the next event does
-    /// nothing at all, so the next length clock is a whole period away, which
-    /// is exactly the condition the quirk describes. SameSuite
-    /// `div_write_trigger_10` measures this — it is the extra length clock the
-    /// NR14 write performs itself that makes its channels expire two events
-    /// earlier than `div_write_trigger`'s.
-    fn first_half(&self) -> bool {
-        self.frame_seq_skip || self.frame_seq_counter % 2 == 1
-    }
-
-    /// Is the DIV bit that clocks the DIV-APU currently **set**?
-    ///
-    /// The frame sequencer is not a free-running divider: it is clocked by the
-    /// falling edge of a bit of the system counter that `DIV` exposes — bit 12
-    /// (`DIV` bit 4) at single speed, bit 13 at double speed, so the event rate
-    /// is 512 Hz either way (Pan Docs, "Audio Details" → DIV-APU). We keep the
-    /// event *phase* in `next_time` rather than a counter copy: the counter is
-    /// zero at `next_time - CLOCKS_PER_FRAME` and the bit is set over the
-    /// second half of the period, i.e. within `CLOCKS_PER_FRAME / 2` of the
-    /// next edge. `Sound::div_write` is what keeps that identity true.
-    fn div_apu_bit_set(&self) -> bool {
-        self.next_time.saturating_sub(self.time) <= CLOCKS_PER_FRAME / 2
-    }
-
-    /// The CPU wrote `DIV` (`$FF04`), resetting the system counter. If the
-    /// DIV-APU bit was set the reset drops it — a falling edge — so a DIV-APU
-    /// event fires *immediately*, and the next natural event is a full period
-    /// away. SameSuite `div_write_trigger` measures exactly this: it triggers
-    /// a length-enabled channel and then resets DIV while `DIV == $10`, once
-    /// per requested event, and reads back NR52.
-    ///
-    /// The caller must have caught the APU up to the write's own cycle first.
-    pub fn div_write(&mut self) {
-        if self.div_apu_bit_set() {
-            self.frame_seq_step();
-        }
-        self.next_time = self.time + CLOCKS_PER_FRAME;
-    }
-
-    /// CGB speed switch. The APU always runs off the unmodified 4.194304 MHz
-    /// clock, so at double speed it must advance at *half* the CPU's tick rate
-    /// (`do_cycle` is fed CPU T-cycles). The DIV-APU stays at 512 Hz because
-    /// the divider bit moves up one place at the same time — both facts are
-    /// captured by simply halving here and leaving `CLOCKS_PER_FRAME` alone.
-    pub fn set_double_speed(&mut self, double: bool) {
-        if double == self.double_speed {
-            return;
-        }
-        self.catch_up();
-        self.double_speed = double;
-        self.cpu_frac = 0;
-    }
-
     fn run(&mut self) {
         // Run frame sequencer
         while self.next_time <= self.time {
@@ -1287,9 +972,34 @@ impl Sound {
             self.channel3.run(self.prev_time, self.next_time);
             self.channel4.run(self.prev_time, self.next_time);
 
+            if self.frame_seq_counter % 2 == 0 {
+                // Length expiry disables the channel itself (NR52 status bit),
+                // not just its output — see LengthCounter::step.
+                if self.channel1.length.step() {
+                    self.channel1.enabled = false;
+                }
+                if self.channel2.length.step() {
+                    self.channel2.enabled = false;
+                }
+                if self.channel3.length.step() {
+                    self.channel3.enabled = false;
+                }
+                if self.channel4.length.step() {
+                    self.channel4.enabled = false;
+                }
+            }
+            if self.frame_seq_counter % 4 == 2 {
+                self.channel1.sweep_step();
+            }
+            if self.frame_seq_counter == 7 {
+                self.channel1.volume.step();
+                self.channel2.volume.step();
+                self.channel4.volume.step();
+            }
+
+            self.frame_seq_counter = (self.frame_seq_counter + 1) % 8;
             self.prev_time = self.next_time;
             self.next_time += CLOCKS_PER_FRAME;
-            self.frame_seq_step();
         }
 
         // Run remaining time
@@ -1419,17 +1129,6 @@ impl Sound {
                     self.channel3.waveram[self.channel3.wave_pos as usize / 2]
                 }
             }
-            // PCM12 / PCM34 (CGB only, undocumented but real): the live 4-bit
-            // digital output of each channel — CH1/CH3 in the low nibble,
-            // CH2/CH4 in the high nibble. These are read-only and are what
-            // every SameSuite APU test uses to observe the APU sample by
-            // sample (Pan Docs, "Audio Registers" → PCM12/PCM34).
-            0xFF76 => {
-                self.channel1.digital_output() | (self.channel2.digital_output() << 4)
-            }
-            0xFF77 => {
-                self.channel3.digital_output() | (self.channel4.digital_output() << 4)
-            }
             _ => 0xFF,
         }
     }
@@ -1484,8 +1183,7 @@ impl Sound {
                 self.channel1.length.wb(a, v);
             }
             0xFF12 => {
-                let live = self.channel1.enabled;
-                self.channel1.volume.write_nrx2(v, live);
+                self.channel1.volume.wb(a, v);
                 self.channel1.dac_enabled = v & 0xF8 != 0;
                 self.channel1.enabled =
                     self.channel1.enabled && self.channel1.dac_enabled;
@@ -1498,7 +1196,7 @@ impl Sound {
                 self.channel1.freq =
                     (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel1.calculate_period();
-                let fh = self.first_half();
+                let fh = self.frame_seq_counter % 2 == 1;
                 Self::apply_nrx4_length(
                     &mut self.channel1.length,
                     &mut self.channel1.enabled,
@@ -1507,7 +1205,7 @@ impl Sound {
                 );
                 self.channel1.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
-                    self.channel1.trigger(self.grid_phase);
+                    self.channel1.trigger();
                     // A trigger cannot enable a channel whose DAC is off
                     // (Pan Docs, Audio_details "Triggering").
                     self.channel1.enabled &= self.channel1.dac_enabled;
@@ -1518,8 +1216,7 @@ impl Sound {
                 self.channel2.length.wb(a, v);
             }
             0xFF17 => {
-                let live = self.channel2.enabled;
-                self.channel2.volume.write_nrx2(v, live);
+                self.channel2.volume.wb(a, v);
                 self.channel2.dac_enabled = v & 0xF8 != 0;
                 self.channel2.enabled =
                     self.channel2.enabled && self.channel2.dac_enabled;
@@ -1532,7 +1229,7 @@ impl Sound {
                 self.channel2.freq =
                     (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel2.calculate_period();
-                let fh = self.first_half();
+                let fh = self.frame_seq_counter % 2 == 1;
                 Self::apply_nrx4_length(
                     &mut self.channel2.length,
                     &mut self.channel2.enabled,
@@ -1541,7 +1238,7 @@ impl Sound {
                 );
                 self.channel2.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
-                    self.channel2.trigger(self.grid_phase);
+                    self.channel2.trigger();
                     self.channel2.enabled &= self.channel2.dac_enabled;
                 }
             }
@@ -1561,7 +1258,7 @@ impl Sound {
                 self.channel3.freq =
                     (self.channel3.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel3.calculate_period();
-                let fh = self.first_half();
+                let fh = self.frame_seq_counter % 2 == 1;
                 Self::apply_nrx4_length(
                     &mut self.channel3.length,
                     &mut self.channel3.enabled,
@@ -1595,8 +1292,7 @@ impl Sound {
             // Noise channel
             0xFF20 => self.channel4.length.wb(a, v),
             0xFF21 => {
-                let live = self.channel4.enabled;
-                self.channel4.volume.write_nrx2(v, live);
+                self.channel4.volume.wb(a, v);
                 self.channel4.dac_enabled = v & 0xF8 != 0;
                 self.channel4.enabled =
                     self.channel4.enabled && self.channel4.dac_enabled;
@@ -1608,7 +1304,7 @@ impl Sound {
                 self.channel4.calculate_period();
             }
             0xFF23 => {
-                let fh = self.first_half();
+                let fh = self.frame_seq_counter % 2 == 1;
                 Self::apply_nrx4_length(
                     &mut self.channel4.length,
                     &mut self.channel4.enabled,
@@ -1617,7 +1313,7 @@ impl Sound {
                 );
                 self.channel4.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
-                    self.channel4.trigger(self.grid_phase);
+                    self.channel4.trigger();
                     self.channel4.enabled &= self.channel4.dac_enabled;
                 }
             }
@@ -1679,23 +1375,6 @@ impl Sound {
                     self.channel2.enabled = false;
                     self.channel3.enabled = false;
                     self.channel4.enabled = false;
-                    // Powering off resets the square duty counters (gg8 wiki,
-                    // "Gameboy sound hardware" → Power Control). Every
-                    // SameSuite APU test power-cycles the APU before each
-                    // subtest precisely to get a known duty position, so this
-                    // is the zero the whole suite measures from.
-                    self.channel1.duty_pos = 0;
-                    self.channel1.duty_out = false;
-                    self.channel2.duty_pos = 0;
-                    self.channel2.duty_out = false;
-                    // CH3's sample buffer is part of the powered domain, so it
-                    // empties too. A trigger deliberately does *not* refill it
-                    // (Pan Docs, "Audio Details"), so without this a channel
-                    // re-triggered after a power cycle would report the sample
-                    // it was playing before the power-off for a whole period —
-                    // SameSuite `channel_3_first_sample` reads exactly that
-                    // stale nibble.
-                    self.channel3.sample_latch = 0;
                 }
                 if !self.on && will_be_on {
                     // Powering on resets the frame sequencer so its NEXT step
@@ -1704,26 +1383,7 @@ impl Sound {
                     // `next_time` is deliberately left alone (dmg_sound
                     // 07-len sweep period sync: "Powering up APU MODs next
                     // frame time with 8192" / "resets 128 Hz sweep divider").
-                    //
-                    // …unless the DIV-APU bit is already SET as the APU comes
-                    // up, in which case the first event is skipped and the
-                    // sequencer effectively starts at step 1. SameSuite
-                    // `div_write_trigger_10` states it in those words and
-                    // measures it: it waits for `DIV == $10` before powering
-                    // the APU on, and the observable difference is that the
-                    // next NRx4 length-enable write now lands in the "first
-                    // half" of a length period and so clocks length once
-                    // itself (see apply_nrx4_length).
                     self.frame_seq_counter = 0;
-                    self.frame_seq_skip = self.div_apu_bit_set();
-                    // The APU's own clock divider is held in reset while it is
-                    // powered down, so the 1 MHz grid the channel frequency
-                    // timers count on restarts here. That is what makes
-                    // SameSuite's measurements repeatable at all: every APU
-                    // subtest power-cycles the APU first, and the alignment
-                    // its `channel_N_align` tests measure is relative to *this*
-                    // instant, not to boot (see SQUARE_TRIGGER_ALIGN).
-                    self.grid_phase = 0;
                 }
                 self.on = will_be_on;
             }
@@ -2816,7 +2476,7 @@ mod tests {
     //!   1. the APU emits exactly the reported sample rate per emulated second
     //!      (so wall-clock speed, not resampling, governs perceived tempo), and
     //!   2. a programmed tone comes out at the correct pitch.
-    use super::{AudioPlayer, Sound, CLOCKS_PER_FRAME, CLOCKS_PER_SECOND};
+    use super::{AudioPlayer, Sound, CLOCKS_PER_SECOND};
     use std::sync::{Arc, Mutex};
 
     struct Capture {
@@ -2939,117 +2599,6 @@ mod tests {
                 n - expected
             );
         }
-    }
-
-    /// PCM12/PCM34 report each channel's live 4-bit digital output, CH1/CH3
-    /// in the low nibble and CH2/CH4 in the high nibble — the window every
-    /// SameSuite APU test observes the APU through. A channel that is off, or
-    /// whose DAC is off, reports zero.
-    #[test]
-    fn pcm_registers_report_each_channel_digital_output() {
-        let mut snd = Sound::new();
-        snd.set_player(Box::new(Capture {
-            rate: 44100,
-            samples: Arc::new(Mutex::new(Vec::new())),
-        }));
-        snd.set_mode(false); // CGB
-        snd.wb(0xFF26, 0x80); // power on
-        assert_eq!(snd.rb(0xFF76), 0x00, "nothing triggered yet");
-        assert_eq!(snd.rb(0xFF77), 0x00);
-
-        // CH2: duty 3 (high for six of eight positions), volume 9, no envelope.
-        snd.wb(0xFF16, 0xC0);
-        snd.wb(0xFF17, 0x90);
-        snd.wb(0xFF18, 0x00);
-        snd.wb(0xFF19, 0x80); // trigger, frequency 0 -> slowest sweep of the duty
-                              // Run until the duty latch has taken a high position.
-        let mut high = None;
-        for _ in 0..64 {
-            snd.do_cycle(2048 * 4);
-            snd.catch_up();
-            let v = snd.rb(0xFF76);
-            if v != 0 {
-                high = Some(v);
-                break;
-            }
-        }
-        assert_eq!(
-            high,
-            Some(0x90),
-            "CH2 output belongs in the high nibble of PCM12 and carries the envelope volume"
-        );
-
-        // Killing the DAC must zero it immediately, channel-enable and all.
-        snd.wb(0xFF17, 0x00);
-        snd.catch_up();
-        assert_eq!(snd.rb(0xFF76), 0x00, "a dead DAC reports zero");
-    }
-
-    /// Writing DIV clocks the frame sequencer when the DIV-APU bit is set: the
-    /// reset drops the bit, and a falling edge *is* the DIV-APU event. Pinned
-    /// through the length counter, which is what SameSuite `div_write_trigger`
-    /// reads back through NR52.
-    #[test]
-    fn a_div_write_clocks_the_frame_sequencer() {
-        for (advance, expect_clock) in [(0u32, false), (CLOCKS_PER_FRAME / 2, true)] {
-            let mut snd = Sound::new();
-            snd.set_player(Box::new(Capture {
-                rate: 44100,
-                samples: Arc::new(Mutex::new(Vec::new())),
-            }));
-            snd.set_mode(false);
-            snd.wb(0xFF26, 0x80);
-            // CH1: length 1, DAC on, trigger with length enabled.
-            snd.wb(0xFF11, 0x3F);
-            snd.wb(0xFF12, 0xF0);
-            snd.wb(0xFF14, 0xC0);
-            assert_eq!(snd.rb(0xFF26) & 1, 1, "channel 1 is on after the trigger");
-
-            snd.do_cycle(advance);
-            snd.catch_up();
-            snd.div_write();
-            snd.catch_up();
-            assert_eq!(
-                snd.rb(0xFF26) & 1 == 0,
-                expect_clock,
-                "DIV write with the DIV-APU bit {} should{} clock length",
-                if expect_clock { "set" } else { "clear" },
-                if expect_clock { "" } else { " not" },
-            );
-        }
-    }
-
-    /// At CGB double speed the CPU ticks twice as fast and the APU does not:
-    /// it is wired to the unmodified 4.194304 MHz clock. Feeding it CPU ticks
-    /// unhalved made every sound an octave high *and* — because the audio queue
-    /// paces the emulator — throttled CGB double-speed games to about half
-    /// speed. Same emulated second, same sample count, either way.
-    #[test]
-    fn double_speed_halves_the_apu_clock() {
-        let mut counts = Vec::new();
-        for double in [false, true] {
-            let (mut snd, cap) = tone(44100, 1750);
-            snd.set_double_speed(double);
-            // One emulated second of *CPU* ticks: twice as many at double speed.
-            let cpu_ticks = if double {
-                CLOCKS_PER_SECOND * 2
-            } else {
-                CLOCKS_PER_SECOND
-            };
-            // Small steps: `do_cycle` is fed instruction-sized ticks in
-            // practice, and blip's frame buffer is sized for that.
-            let chunk = 64;
-            for _ in 0..(cpu_ticks / chunk) {
-                snd.do_cycle(chunk);
-            }
-            counts.push(cap.lock().unwrap().len());
-        }
-        let (single, double) = (counts[0] as i64, counts[1] as i64);
-        assert!(
-            (single - double).abs() <= super::OUTPUT_SAMPLE_COUNT as i64,
-            "one emulated second must yield the same sample count at either \
-             speed: {single} single vs {double} double"
-        );
     }
 
     /// A tone programmed to ~440 Hz must come out at ~440 Hz. Proves the

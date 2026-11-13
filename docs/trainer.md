@@ -30,11 +30,6 @@ experience, Hidden Power's type and base power, and the shiny-if-traded verdict.
 **Sprite.** The focused Pokémon's front picture, decompressed from the cartridge. During a
 battle the focus is the opponent, because that is what is being watched.
 
-**Wild-encounter banner.** The moment a catchable wild Pokémon appears, a row across the top
-of the terminal names it, prints its DVs, and says whether it **would be shiny if traded to
-Gen 2** — see [the section below](#the-wild-encounter-banner). It does not need the panel to
-be open, and it is the only part of this feature that shows up uninvited.
-
 | Key | |
 |---|---|
 | `T` | show / hide the panel |
@@ -193,13 +188,8 @@ and does not get the cost handed back.
 
 - **Nothing is read per frame.** The plugin samples every `SAMPLE_EVERY` (6) emulated frames,
   about 10 Hz — a tenth of a second behind the game, which nobody can see.
-- **A hidden panel reads one byte.** `TrainerPlugin::set_active(false)` stops the party read
-  entirely; what survives is `watch_encounter`, which peeks `wIsInBattle` at the same 10 Hz and
-  returns. In the overworld that is **one byte, six times a second** — the price of the banner
-  working when nobody has the panel up, which is the whole point of it.
-- **The encounter verdict is latched, not sampled.** Once a wild battle's DVs are read, the
-  plugin holds the answer until the battle ends: no further reads, and the banner cannot
-  flicker.
+- **A hidden panel does no work at all.** `TrainerPlugin::set_active(false)` is set the moment
+  the panel is toggled off, and `on_events` returns immediately.
 - **Sprites are decompressed once per species and cached**, so an unchanged party costs
   nothing, and the encoded image is only rebuilt when the focused species or the palette
   changes.
@@ -215,129 +205,9 @@ Plain memory is exact, which is all a tracker needs.)
 
 ---
 
-## The wild-encounter banner
-
-> *"if a wild Pokémon is on screen, can we also confirm if it will be SHINY right there and
-> THEN so we don't miss out."*
-
-The party `★` answers the question for Pokémon you already own. This answers it **while a Ball
-is still unspent**, which is the only moment the answer changes a decision.
-
-### Why the answer exists that early
-
-Three facts, each from the disassembly, are what make it work
-([`src/trainer/encounter.rs`](../src/trainer/encounter.rs)):
-
-1. **A wild Pokémon's DVs are rolled when the battle starts.** `LoadEnemyMonData`
-   (`pokered/engine/battle/core.asm`) branches on `wIsInBattle`: a wild Pokémon gets two
-   `BattleRandom` bytes into `wEnemyMonDVs`, before the battle is even drawn.
-2. **Capture copies those exact bytes.** `_AddPartyMon`
-   (`pokered/engine/pokemon/add_mon.asm`) takes its `.copyEnemyMonData` branch for a Pokémon
-   caught in battle and copies `wEnemyMonDVs` verbatim into the new party entry. Nothing is
-   re-rolled, so the verdict shown at the encounter is still true of the Pokémon in the Ball.
-3. **The Gen 2 rule reads only DVs.** `CheckShininess` (`pokecrystal/engine/gfx/color.asm`):
-   defense, speed and special all exactly 10 and bit 1 of the attack DV set.
-
-### The wording is the feature
-
-**Gen 1 has no shiny Pokémon at all.** Nothing in Red or Blue is shiny, and no string in this
-feature says otherwise — every one of them, at every terminal width, reads *would be shiny if
-traded to Gen 2*. A unit test asserts exactly that: it renders the banner at every width from
-8 to 200 cells and fails if the word "shiny" ever appears without its qualifier. Getting this
-wrong would be worse than not shipping it, because the captain would act on it.
-
-### What gets a verdict, and what does not
-
-| Situation | Verdict? | Why |
-|---|---|---|
-| Wild encounter (grass, water, fishing, cave) | **yes** | `InitWildBattle` sets `wIsInBattle` = 1 |
-| Static / scripted (Snorlax, the birds, Mewtwo, Voltorbs, tower ghosts) | **yes** | `InitOpponent` falls through to `InitWildBattle` — an ordinary wild battle with rolled DVs |
-| Safari Zone | **yes**, labelled `SAFARI` | catchable; the Ball being weighed is a Safari Ball |
-| Trainer battle | **no** | Balls cannot catch a trainer's Pokémon, and its DVs are the *fixed* pair `ATKDEFDV_TRAINER`/`SPDSPCDV_TRAINER` = `$98`/`$88` — the same for every trainer Pokémon in the game, and never shiny. A verdict there is pure noise. |
-| The old man's catching demonstration | **no** | `wBattleType` = `BATTLE_TYPE_OLD_MAN`: real rolled DVs, but the Weedle is never added to the player's party |
-| Gift, starter, fossil, in-game trade | **no encounter to warn about** | see below |
-
-**Gift, starter and traded Pokémon are the honest gap.** They never enter a battle, so there
-is no moment before the decision — `_AddPartyMon` rolls their DVs with `Random` at the instant
-they are handed over (its `; Not wild.` branch), by which time they are already yours. Their
-verdict *is* shown, by the party panel's `★` reading the same DVs out of `wPartyMon*DVs`; it is
-just retrospective rather than a prompt. There is nothing to fix here — the information does
-not exist any earlier.
-
-**Two wild Pokémon you are shown but cannot catch:** an unidentified ghost in Pokémon Tower
-(no Silph Scope) and the ghost Marowak on 6F are both refused by `ItemUseBall` even though they
-are wild battles. They still get a banner. That is a known, small overclaim of *catchability* —
-never of shininess.
-
-### How it is surfaced
-
-The banner takes **a row of its own** across the top of the terminal, above the game picture
-and never on it (a terminal graphics image owns whole cells — see
-[`terminal-render.md`](terminal-render.md); a test asserts the two rectangles never intersect
-at any window size, in both the windowed and fullscreen layouts).
-
-- **A shiny verdict** fills the row: black on bright yellow, `★ WILD NIDORAN L7 WOULD BE SHINY
-  IF TRADED TO GEN 2 ★ DV 8/14/10/10/10 …`, padded edge to edge so it reads as a bar rather
-  than a sentence. It also raises a toast and rings the terminal bell — **once**, on the frame
-  the Pokémon appears, which is when the captain is looking at the game and not at a panel.
-- **An ordinary encounter** gets the same row, quietly: the species, the DVs, and *why* it is
-  not shiny (`0/3 tens, atk bit yes`). A near miss is interesting, and a banner that only ever
-  appears for a shiny gives no way to tell "working, and this one is ordinary" from "not
-  working".
-- The row **persists for the whole encounter**: the verdict is latched when the battle starts
-  and held until it ends, so it cannot flash past.
-- `shiny_alert` in `config.toml` — `on` (default: banner + toast + bell), `quiet` (no bell),
-  `off` (no row; the verdict still appears in the panel's battle block).
-
-**Terminal frontend only.** The trainer plugin is attached by `tui::load_session` and nowhere
-else, so the desktop (`glutin`) and web frontends have neither the panel nor the banner. That
-is the existing scope of the plugin, not a decision taken here.
-
-### It does not depend on the boot model
-
-The `Model` axis has landed, and for Pokémon Red/Blue it changes the **default**: the header's
-CGB flag is clear, so `Model::Auto` now resolves to `GbMode::Classic` — a real DMG boot — where
-this feature was originally developed under CGB compatibility mode. **Nothing here reads the
-model, and nothing here is laid out differently under one.**
-
-- `wEnemyMon` is at `$CFE5`, inside `$C000-$CFFF` — the *fixed* WRAM bank. There is no banking
-  question at all for the DVs.
-- `wIsInBattle` `$D057`, `wBattleType` `$D05A` and the party structures are in `$D000-$DFFF`,
-  which goes through `wrambank` — initialised to **1 in both MMU constructors**
-  (`MemoryManagementUnit::new` and `new_cgb`) and only ever changed by a write to `SVBK`
-  (`$FF70`), which a DMG game never makes. Same physical bytes either way.
-- The cartridge is identified from the ROM header's title and global checksum, not from the
-  running model, so `Game::detect` is unaffected.
-- Red/Blue has no CGB code path — it is a DMG game — so its WRAM layout is one layout.
-
-**Checked on both, not assumed.** `cargo test --release --test trainer` was run under
-`GB_MODEL=dmg` and `GB_MODEL=cgb`: three encounters each, every verdict agreeing with
-`wEnemyMonDVs` read independently.
-
-The one real difference is that `BattleRandom` is seeded from different startup state, so the
-*particular* Pokémon and DVs a given button sequence produces are not the same:
-
-| | `GB_MODEL=dmg` | `GB_MODEL=cgb` |
-|---|---|---|
-| 1st | PIDGEY L3 `$C4CA` @ step 3 | RATTATA L3 `$9F0B` @ step 13 |
-| 2nd | RATTATA L3 `$D42D` @ step 5 | RATTATA L3 `$41CA` @ step 17 |
-| 3rd | PIDGEY L3 `$4CCE` @ step 11 | PIDGEY L3 `$3870` @ step 34 |
-
-The harness never asserts specific DVs, only that the verdict matches the memory, so it holds
-under either model — but **do not pin a DV value in a test**, and do not expect the printed
-species and DVs to reproduce. They also move with *emulation timing*: the Mooneye core-timing
-work (real timer, 5-cycle interrupt dispatch, timed OAM DMA) changed every one of these numbers
-again, because `BattleRandom` is driven from `DIV` and the frame counter. That the values move
-while the verdicts keep agreeing is the point — the check is on the agreement, not the values.
-
-The trainer panel's battle block also gained the opponent's DVs on every battle, trainer
-battles included — `$98/$88` showing up every single time is itself worth being able to see.
-
----
-
 ## How this was verified
 
-Five checks, in increasing order of what they prove
+Four checks, in increasing order of what they prove
 ([`testharness/trainer.rs`](../testharness/trainer.rs)):
 
 1. **All 151 front sprites decode** to a square of 1..=7 tiles, in range, not a flat colour.
@@ -386,52 +256,6 @@ SPARKY is given the canonical shiny DV pair `$EA`/`$AA` on purpose, so the `★`
 derived layer are covered by the same run. The game's own CONTINUE screen independently
 confirms the badge and play-time addresses (`BADGES 2`, `TIME 12:34`).
 
-5. **A real wild encounter is driven, from a brand-new game.** This is the one the shiny
-   verdict stands or falls on. The harness plays a new game, has the *game* write a save,
-   edits in a party and one event flag, then **walks**: bedroom → stairs → front door → east
-   along Pallet Town → north through the fence gap → Route 1, and paces the grass at the
-   southern end until `wIsInBattle` reads 1. It then compares the latched verdict against
-   `wEnemyMonDVs` read independently, with the Gen 2 rule **re-implemented in the harness**
-   from the pokecrystal constants rather than by calling the code under test — and checks the
-   verdict clears when the battle ends. Three encounters per run, in about two dozen steps:
-
-   ```
-   [5] a real wild encounter
-       walked a new game to ROUTE_1, arriving at (34, 10)
-         step   3: PIDGEY L3 wEnemyMonDVs $C4CA -> DV 0/12/4/12/10 -> would not be shiny if traded to Gen 2
-                  banner:  WILD PIDGEY L3 · DV 0/12/4/12/10 · would NOT be shiny if traded to Gen 2 (1/3 tens, atk bit no)
-         step   5: RATTATA L3 wEnemyMonDVs $D42D -> DV 9/13/4/2/13 -> would not be shiny if traded to Gen 2
-         step  11: PIDGEY L3 wEnemyMonDVs $4CCE -> DV 0/4/12/12/14 -> would not be shiny if traded to Gen 2
-       3 wild encounter(s) in 11 steps, every verdict agrees
-       the same encounter with the canonical shiny DVs $EA/$AA:
-          ★ WILD PIDGEY L3 WOULD BE SHINY IF TRADED TO GEN 2 ★ DV 0/14/10/10/10 · nothing is shiny in Gen 1
-   ```
-
-   **It fails when it under-delivers.** Asking for three encounters and reporting success on one
-   is the same defect class the suite was just cleaned of — a check quietly doing less than it
-   claims — so a short run is a FAIL, not a pass with a smaller number. That rule earned its
-   keep immediately: under CGB the walk wedged after the second battle and spent its whole
-   budget pressing a direction key into a menu. Cause: the post-battle "Got away safely!"
-   clean-up pressed **A**, and an A one frame after the text closes opens the START menu, which
-   eats every direction key thereafter. It presses **B** now — B advances a text box just as A
-   does, closes a menu, and can never open one — and the pacing loop detects a position that
-   has not moved for eight steps, presses B and re-anchors, reporting how many times it had to.
-
-   **Two traps this ran into, both worth not rediscovering.** (a) *You cannot teleport the
-   player by editing `wCurMap`.* `LoadSAV` (`pokered/engine/menus/save.asm`) sets
-   `BIT_NO_PREVIOUS_MAP` on `wCurMapTileset` right after restoring the main data, and
-   `LoadMapHeader` (`home/overworld.asm`) sees that bit, clears it and **returns without
-   loading the header** — the whole `wCurMapHeader` block lives in the save, so on a continue
-   the game trusts it. Change the map without the header and the game reads the new map's
-   blocks through the old map's `wCurMapDataPtr`; the observed result is a jump into `rst $38`
-   or an illegal opcode within a second. Hence walking. (b) *Oak stops a new game at the north
-   exit of Pallet Town* — `PalletTownDefaultScript` opens with
-   `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`, so setting that one bit (`wEventFlags`
-   `$D747`, bit 0) skips the entire introduction, the starter choice and the rival battle.
-   A shiny wild Pokémon is 1 in 8192, so no run will meet one; what the harness can and does
-   check is that the same real encounter struct with the canonical `$EA`/`$AA` pair flips the
-   verdict and renders the loud banner.
-
 **The save is never the user's.** The ROM and its battery file are copied into `target/`
 before anything runs, because the harness presses buttons at menus and the MBC writes saves
 next to the ROM path.
@@ -443,12 +267,6 @@ next to it are entirely zero — so there was no existing game to read a real pa
 Check 3 reports that honestly rather than showing the title-screen demo's leftovers, and check
 4 exists precisely because of it. A human with a save in progress should press `T` and confirm
 the panel matches their party; that is the one thing a harness cannot do.
-
-**Nobody has yet seen a shiny-if-traded banner on a real encounter**, because the odds are 1
-in 8192 — the harness proves the reads and the rule against the machine, and proves the loud
-rendering with substituted DVs, but the two halves have never met in one live encounter. The
-wording and the layout of that banner are worth a human's eyes; `shiny_alert = quiet` is there
-for anyone who does not want the bell.
 
 ---
 
@@ -490,16 +308,10 @@ In rough order of value:
 
 1. **Per-run memory** — enemy moves seen, levels encountered, route data. The thing above.
 2. **Type effectiveness against the current opponent** — the type chart is in the ROM.
-3. **Catch odds** — the catch rate is already read; the formula is in `pokered`. It belongs
-   *next to the shiny banner*: "would be shiny, and a Great Ball has an N% chance" is the
-   complete answer to the question the banner half-answers.
-4. **The ghost exception.** Two wild Pokémon get a banner and cannot be caught — an
-   unidentified Pokémon Tower ghost and the ghost Marowak on 6F (`ItemUseBall`,
-   `pokered/engine/items/item_effects.asm`). Suppressing them needs `wCurMap`, the Silph Scope
-   flag and `RESTLESS_SOUL`; small, and not done.
-5. **Gender-if-traded** — needs the Gen 2 gender-ratio table.
-6. **Yellow, then Gen 2** — see above.
-7. **A `peek_bank(bank, addr)` on `DebugView`** so a plugin can read cartridge tables without
+3. **Catch odds** — the catch rate is already read; the formula is in `pokered`.
+4. **Gender-if-traded** — needs the Gen 2 gender-ratio table.
+5. **Yellow, then Gen 2** — see above.
+6. **A `peek_bank(bank, addr)` on `DebugView`** so a plugin can read cartridge tables without
    the frontend handing it the ROM; see below.
 
 ## Feedback on the plugin contract

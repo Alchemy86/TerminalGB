@@ -4,16 +4,10 @@
 > OUT for things to plumb into and play, or even a webcam to PICK IT UP DIRECTLY!! like a
 > camera feed!"*
 
-**Yes to both, and the webcam needs no second process.** The frame stream is in the emulator
-([`src/video.rs`](../src/video.rs)), and so is the camera: point `video_out` at a
-`v4l2loopback` node, press `v`, and the game appears in Chrome, Meet, Discord or OBS. The
-emulator negotiates the device's format itself (`VIDIOC_S_FMT`) and writes the frames. The
-`ffmpeg` bridge in [`tools/virtual-camera.sh`](../tools/virtual-camera.sh) still works and is
-still the route on macOS/Windows, but it is no longer the one you are meant to use on Linux.
-
-**Every `video_*` setting is safe to put in `config.toml`.** No destination can stop the
-emulator from starting — not a FIFO with nothing reading it, not a camera that does not exist.
-See §5a.
+**Yes to both.** The frame stream is in the emulator ([`src/video.rs`](../src/video.rs)); the
+webcam is one `ffmpeg` process away, because `v4l2loopback` is a kernel module that needs root
+to install and we will not ship untested `ioctl` code to avoid one extra process. Both routes,
+the exact commands, and what was actually captured as proof, are below.
 
 This is the **pixels** half of the emit surface in [`docs/debugging.md`](debugging.md).
 [`docs/telemetry.md`](telemetry.md) publishes the *numbers* of every frame as NDJSON; this
@@ -54,16 +48,13 @@ implemented *as* environment overrides, so there is no third precedence rule to 
 
 | What | Flag | Env | `config.toml` | Values |
 |---|---|---|---|---|
-| destination | `--video-out` | `GB_VIDEO_OUT` | `video_out` | `-`/`stdout`, a file, a **FIFO**, a **`/dev/videoN` camera**, a directory, `off` |
+| destination | `--video-out` | `GB_VIDEO_OUT` | `video_out` | `-`/`stdout`, a file, a FIFO, a directory, `off` |
 | pixel format | `--video-format` | `GB_VIDEO_FORMAT` | `video_format` | `rgba` (default), `rgb24`, `yuyv` |
 | frame size | `--video-size` | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `640x480` |
 | picture source | `--video-source` | `GB_VIDEO_SOURCE` | `video_source` | `native` (default), `display` |
 | pacing | `--video-pace` | `GB_VIDEO_PACE` | `video_pace` | `realtime` (default), `emulated` |
 | recordings dir | — | — | `video_dir` | default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy` |
 | camera to verify | — | — | `video_device` | a `/dev/videoN` loopback node (label check only) |
-
-A `/dev/videoN` destination ignores `video_format` and `video_size`: a camera negotiates its own
-(§5). Everything here is **safe to set** — see §5a.
 
 In the terminal frontend, **`v` starts and stops the stream while the game runs** — see §6.
 
@@ -127,107 +118,71 @@ never changes; a frame of any other size is **letterboxed** into it:
 `160x144` is an unusual camera resolution and some consumers reject it, which is why
 `--video-size 640x480` exists and is what `tools/virtual-camera.sh` uses.
 
-## 5. The virtual webcam — run the game, press `v`, done
+## 5. The virtual webcam
 
-### Setup: one command, once, and then never again
+### Status on this box: **not available, and here is exactly why**
 
-```toml
-# ~/.config/gameboy/config.toml
-video_out = "/dev/video10"
-```
+`v4l2loopback` is not installed here — `/dev/video0` and `/dev/video1` are a real UVC webcam,
+`lsmod | grep v4l2loopback` finds nothing, and `modinfo v4l2loopback` reports
+`Module not found`. Installing it means a kernel module, which means root, which is not this
+crew's to do. **So the virtual camera has not been demonstrated end to end.** What *has* been
+demonstrated is the whole stream up to the device: the exact YUYV 640×480 bytes the loopback
+device would receive, accepted and decoded by `ffmpeg` (§7).
 
-That is the whole emulator-side configuration. Size and pixel format are **detected, not
-configured**: a V4L2 node is negotiated as YUYV at 640×480 (the size every consumer accepts),
-whatever `video_format` / `video_size` say, and whatever the driver answers with is what gets
-written. There is nothing to keep in sync between two programs any more, which is exactly the
-class of mistake that used to send a 160×144 RGBA stream at a bridge expecting 640×480 YUYV.
-
-The one remaining setup step is the kernel module, which needs root **once**:
+### The route that works
 
 ```bash
+tools/virtual-camera.sh --name "POKEMON BLUE" --size 640x480
+```
+
+It detects the module, finds (or explains how to create) a loopback node, checks the label, and
+then runs the bridge. Without the module it prints the install commands and exits 2 rather than
+failing obscurely. By hand:
+
+```bash
+# once, needs root
 sudo dnf install akmod-v4l2loopback v4l2loopback-utils     # Fedora
 sudo apt install v4l2loopback-dkms v4l-utils               # Debian/Ubuntu
 sudo pacman -S v4l2loopback-dkms v4l-utils                 # Arch
+sudo modprobe v4l2loopback video_nr=10 card_label="POKEMON BLUE" exclusive_caps=1
 
-# a camera that survives a reboot
-echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
-echo 'options v4l2loopback devices=1 video_nr=10 card_label="Game Boy" exclusive_caps=1' \
-  | sudo tee /etc/modprobe.d/v4l2loopback.conf
-sudo modprobe -r v4l2loopback; sudo modprobe v4l2loopback
+# the bridge
+mkfifo /tmp/gb.raw
+ffmpeg -f rawvideo -pix_fmt yuyv422 -s 640x480 -framerate 59.7275 -i /tmp/gb.raw \
+       -f v4l2 -pix_fmt yuyv422 /dev/video10
+
+# the emulator
+cargo run --release --example terminal -- game.gb \
+    --video-out /tmp/gb.raw --video-format yuyv --video-size 640x480
 ```
 
 `exclusive_caps=1` is what makes Chrome, Firefox and Zoom accept the device (without it the node
-advertises both capture and output and some consumers skip it). The emulator prints these exact
-commands if the module is missing — it is the only thing left that it cannot do for you.
+advertises both capture and output and some consumers skip it).
 
-### How it works
+### Why the emulator does not write to `/dev/videoN` itself
 
-A V4L2 output node is not a file. Writing raw bytes at one and getting no error proves
-**nothing**: an un-negotiated write is accepted and produces nothing a consumer can read. The
-emulator therefore does what `ffmpeg -f v4l2` does:
+A V4L2 output device needs its format negotiated with `VIDIOC_S_FMT` before the first `write()`.
+That is not hard — but it cannot be *tested* without the kernel module, which needs root to
+install, and hand-written `ioctl` bindings that no test has ever exercised are worse than no
+code at all. Pointing `video_out` at a `/dev/video*` node is therefore refused with the exact
+recipe above rather than failing with `EINVAL` halfway through a stream. One extra process buys
+format conversion, scaling and MJPEG for free.
 
-1. `VIDIOC_QUERYCAP` — confirm the node is a video *output*. A real webcam is a capture device
-   and is refused by name (`/dev/video1 is "Full HD webcam" — a real camera, which can only be
-   read from`), with the loopback nodes on the machine listed as the thing you probably meant.
-2. `VIDIOC_S_FMT` with `V4L2_BUF_TYPE_VIDEO_OUTPUT` + `V4L2_PIX_FMT_YUYV` at 640×480. **What
-   comes back is authoritative** — the driver may adjust the geometry, and `bytesperline` is
-   the row stride, which is not necessarily `width * 2`. Frames are re-strided if it asks.
-3. `write(2)` one `sizeimage` frame at a time, non-blocking.
+### Naming the camera after the game
 
-The picture is scaled by the same integer-nearest path everything else uses and letterboxed, not
-stretched (§4): 160×144 → 480×432 centred in 640×480 with black bars.
-
-### No new dependency, and why
-
-The maintained V4L2 crates (`v4l`, `v4l2-sys-mit`) are permissively licensed but link
-**libv4l2**, a *system* library. This repo has been bitten by exactly that before — `cpal`
-pulling in ALSA made a fresh clone fail to build until audio was feature-gated — and the point
-of this work is that a new user has *fewer* setup steps, not another `-devel` package. So the
-kernel UAPI is spoken directly through the `libc` dependency that is already here, the same way
-[`src/shmframe.rs`](../src/shmframe.rs) speaks POSIX shared memory.
-
-Hand-writing UAPI structs is the risk that buys, and it is bounded by making a mistake a
-**compile error**: an `ioctl` request number encodes `sizeof` the struct it carries, so
-`VIDIOC_QUERYCAP` and `VIDIOC_S_FMT` are computed from our own definitions and then
-`const`-asserted against the values the kernel headers publish (`0x80685600` / `0xc0d05605`). A
-layout mistake cannot reach a running program. Everything is behind
-`#[cfg(all(target_os = "linux", feature = "libc"))]`; other targets keep the `ffmpeg` recipe.
-
-### The bridge is still there
-
-[`tools/virtual-camera.sh`](../tools/virtual-camera.sh) still works and is still the answer on a
-box with no `v4l2loopback`, and on macOS (OBS's virtual camera) and Windows (DirectShow). It now
-reads a **sidecar descriptor** the emulator writes beside a FIFO (`<fifo>.gbvideo`) so its
-geometry, pixel format and device label come from the stream rather than from a second copy of
-the same numbers.
-
-### Naming the camera after the game — what is actually possible
-
-"POKEMON BLUE" in a camera picker beats "Dummy video device (0x0000)", and the honest answer is
-that **the emulator cannot set it.** This is settled, not assumed:
-
-* the label is the `card_label` module parameter, fixed when the device is *created*;
-* `/sys/class/video4linux/videoN/name` is `-r--r--r--` and root-owned — checked on a live
-  device, not inferred;
-* `modinfo v4l2loopback` lists no other writable route (`dev_debug`, `format`, `max_openers`
-  are the only writable sysfs attributes, and none of them is the name);
-* upstream `v4l2loopback-ctl` has `add`, `delete`, `set-fps`, `set-caps`, `set-timeout-image`
-  — and no rename;
-* `VIDIOC_S_FMT` negotiates a *format*, never an identity.
-
-So changing it means deleting and re-adding the device as root, which drops every consumer
-attached to it. **A per-launch `sudo` prompt is not something this emulator will ever do**, so
-the supported answer is a static label chosen once at setup (`card_label="Game Boy"` above),
-and a per-game one only if you want to run the setup command again:
+"POKEMON BLUE" in a camera picker beats "Dummy video device (0x0000)". The label comes from the
+`card_label` module parameter at load time, or from `v4l2loopback-ctl add -n`:
 
 ```bash
-sudo v4l2loopback-ctl delete /dev/video10
 sudo v4l2loopback-ctl add -n "POKEMON BLUE" /dev/video10
 ```
 
-What the emulator *can* do it does: set `video_device = "/dev/video10"` in `config.toml` and it
-reads the device's label from sysfs, checks it against the running cartridge, and tells you the
-two commands to fix it if they disagree:
+**A v4l2loopback device cannot be renamed while it exists.** The upstream README documents
+`add`, `delete`, `set-fps`, `set-caps` and `set-timeout-image` — and no rename; the only way to
+change a label is to delete and re-create the device, which needs root and drops every consumer
+attached to it. So the emulator does the one useful thing it *can* do: set `video_device =
+"/dev/video10"` in `config.toml` and it reads the device's label from sysfs, checks it against
+the running cartridge, and tells you the two commands to fix it if they disagree:
 
 ```
 video: /dev/video10 is labelled "TETRIS" but you are playing "POKEMON BLUE" — a v4l2loopback
@@ -254,55 +209,16 @@ formatting.
 An RTMP stream key is the same idea one process further out:
 `… | ffmpeg -i - -f flv rtmp://host/live/$(basename gb-POKEMON_BLUE)`.
 
-## 5a. No destination can stop the emulator from starting
-
-This is a promise, and it has a regression test behind it
-(`a_configured_fifo_with_no_consumer_does_not_stop_the_emulator_starting`).
-
-It did not used to be true. `open(2)` on a **FIFO** for writing blocks until a reader attaches,
-so `video_out = "/tmp/gb.raw"` in `config.toml` — which this page told people to write — parked
-the emulator in `open` during startup, *before the terminal UI existed*. The user saw one line
-of text and a process that could only be killed. `wchan` read `wait_for_partner`.
-
-Three rules now, for every destination that has something at the far end:
-
-1. **The open never blocks.** A FIFO is opened `O_NONBLOCK` and `ENXIO` ("no reader yet")
-   becomes the state `waiting`, not a wait. A camera's `open` + `VIDIOC_S_FMT` are bounded
-   driver calls, and a device that is missing, busy or not an output is also `waiting`.
-2. **Attach late, and survive the far end leaving.** The open is retried every 250 ms while the
-   stream is armed, so *starting the emulator first and the consumer second works exactly as
-   well as the other order*. A consumer that quits gives us `EPIPE`; the stream drops back to
-   `waiting` and picks up the next one. `SIGPIPE` is set to `SIG_IGN` before the first byte, so
-   a consumer quitting can never kill the process — the FFI build is a `cdylib` where Rust's
-   own runtime has not done that for us.
-3. **A slow or stalled consumer costs frames, never frame time.** Writes are non-blocking; a
-   full pipe buffer drops the frame and counts it (`stalled`). Nothing about the consumer's
-   speed can become emulation time — the same rule the audio player had to learn
-   (`docs/audio.md` §4c). Because `rawvideo` is positional, a frame that was only partly
-   written is *finished* before the next one starts, so the consumer sees whole frames or none.
-
-Chosen over the alternative — deferring the open until `v` is pressed — because deferring only
-moves the hang: the captain's config auto-arms the stream at startup, and pressing `v` in a TUI
-that is already in the alternate screen would have hung it with the UI up and no way to cancel.
-Non-blocking fixes it everywhere at once, and it is what makes late attach fall out for free.
-
 ## 6. Toggling it live (terminal frontend)
 
 `v` arms and disarms the stream mid-game — no restart.
 
 * With `video_out` configured it simply starts/stops that destination.
 * With nothing configured it records to a file named after the game in `video_dir`.
-* **`V` (shifted) always records a file**, whatever `video_out` says. Feeding a camera and
-  keeping a recording are different jobs and now have different keys — sharing one meant a
-  configured camera made "record a clip" unreachable, and before that it meant "feed the
-  camera" silently wrote a 160×144 file nobody was reading.
-* The **Status panel**'s `Video` row distinguishes all three states and says *where*:
-  `off` · `◌ wait video10` (armed, nothing on the other end yet) · `● LIVE 12M video10`
-  (feeding a consumer) · `● REC 12M POKEMON_BLUE-….raw` (writing a file). `LIVE` and `REC` are
-  deliberately not interchangeable words: the old row said `LIVE` for a recording, which is how
-  a camera that was never being fed looked like it was working.
-* A toast confirms both directions (`● LIVE → /dev/video10`, `REC stopped: 3600 frames,
-  316.4 MB → …`), and the full detail goes into the `?` overlay's notices.
+* The **Status panel** carries a `Video` row: `off`, or `● LIVE 12M`. You are never left
+  guessing whether you are live.
+* A toast confirms both directions (`● LIVE → /tmp/gb.raw`, `Video stream stopped — 3600
+  frames, 316.4 MB`), and the full `ffmpeg` command goes into the `?` overlay's notices.
 * Loading a different ROM re-opens a *game-named* stream under the new name; a FIFO or file you
   chose yourself keeps running across ROM switches, because its consumer is attached to that
   path.
@@ -325,28 +241,11 @@ Run on this box, with the vendored MIT `dmg-acid2` ROM:
 | `video_out --frames 300 \| ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - -pix_fmt yuv420p acid2.mp4` | 160×144, **300 frames, 23891/400 = 59.7275 fps**, 137 KB. Extracted frame 300 is the acid2 face, "HELLO WORLD!" and all. |
 | `video_out --frames 240 --format yuyv --size 640x480 --source display --palette green --upscale lcd --factor 3 \| ffmpeg -f rawvideo -pix_fmt yuyv422 …` | 640×480, 240 frames, 59.7275 fps. Decoded frame: green palette, LCD grid, **pillar/letterboxed with black bars, not stretched**. |
 | `video_out --frames 120 --pace realtime --out /tmp/gb.raw` with `ffmpeg` reading the FIFO | 120 frames, **duration 2.009 s** (120 / 59.7275 = 2.009). 0 duplicated, 0 dropped. |
-| `video_out --out /dev/video10` | **Negotiated 640×480 YUYV and wrote frames.** See the camera row below. |
-| `tools/virtual-camera.sh` | Found `/dev/video10` labelled "Game Boy", read the sidecar descriptor, bridged the FIFO. |
+| `video_out --out /dev/video10` | Refused, with the `mkfifo` + `-f v4l2` recipe and the install commands. |
+| `tools/virtual-camera.sh --name "POKEMON BLUE"` | Detected the missing module, printed the install + `card_label="POKEMON BLUE"` commands, exit 2. |
 
 Artefacts land in `target/video-proof/` (gitignored). Reproduce all of it with the commands
 above; nothing here needs a terminal, a window or a human.
-
-### The camera, end to end — what was run and what was seen
-
-A write that returns success is **not** evidence: an un-negotiated write to a V4L2 node is
-accepted and produces nothing. Every claim below is a *consumer decoding the device*.
-
-| Step | Consumer | What was observed |
-|---|---|---|
-| Terminal frontend with `video_out = "/dev/video10"`, no bridge anywhere | `ffmpeg -f v4l2 -i /dev/video10 → PNG` | The game, 640×480, right way up, correct shades, pillar/letterboxed. Status row `● LIVE … video10`, device `state` = `capture`. |
-| Same, while `cpu_instrs` ran | same, 1 fps for 8 s | Frame 1 showed `10` in progress, frame 8 showed `10:ok 11` — **the picture moves**. |
-| Same, Pokémon Blue intro | same, 6 fps for 2 s | 5 distinct frames of 12: the Gengar/Nidorino animation, mid-motion. |
-| Same | **`ffplay -f v4l2 -i /dev/video10`**, window screenshotted | A real media player window displaying the game, live. |
-| Consumer killed mid-stream | — | Emulator stayed `● LIVE`, `emu 60` (full speed), byte counter still climbing. |
-| Second emulator started while the device was **busy** | — | Started normally, reported `already being fed by another program`, ran at full speed, streamed nothing. |
-| …then the first emulator quit | `ffmpeg -f v4l2` | The waiting one **attached on its own** and the consumer saw *its* ROM. No restart. |
-| `video_out --out /dev/video1` (a real UVC webcam) | — | Refused by name, listing `/dev/video10 ("Game Boy")` as the node meant. Emulator ran on. |
-| `video_out --out /dev/video233` (no such node) | — | Started, `does not exist — retrying`, full speed, exit 0. |
 
 ## 8. Cost
 

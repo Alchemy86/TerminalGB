@@ -262,53 +262,6 @@ impl RenderPath {
     }
 }
 
-/// How loudly to announce a wild encounter's shiny-if-traded verdict.
-///
-/// The banner exists to be impossible to miss, so "on" is the default and
-/// includes the terminal bell — but a bell is exactly the sort of thing a person
-/// wants to be able to switch off, and someone watching a stream may want the
-/// row gone entirely. See [`crate::trainer::encounter`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ShinyAlert {
-    /// Banner for every catchable wild encounter, plus a toast and the terminal
-    /// bell when one would be shiny in Gen 2 (default).
-    #[default]
-    On,
-    /// The same, without the bell.
-    Quiet,
-    /// Nothing. The verdict is still in the trainer panel's battle section.
-    Off,
-}
-
-impl ShinyAlert {
-    fn parse(s: &str) -> Option<ShinyAlert> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "on" | "true" | "yes" | "1" | "bell" => Some(ShinyAlert::On),
-            "quiet" | "silent" | "nobell" => Some(ShinyAlert::Quiet),
-            "off" | "false" | "no" | "0" => Some(ShinyAlert::Off),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            ShinyAlert::On => "on",
-            ShinyAlert::Quiet => "quiet",
-            ShinyAlert::Off => "off",
-        }
-    }
-
-    /// Whether the encounter row is drawn at all.
-    pub fn shows_banner(self) -> bool {
-        self != ShinyAlert::Off
-    }
-
-    /// Whether a shiny verdict rings the terminal bell.
-    pub fn rings(self) -> bool {
-        self == ShinyAlert::On
-    }
-}
-
 /// The parsed terminal-frontend configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -330,9 +283,6 @@ pub struct Config {
     pub transmit_scale: TransmitScale,
     /// Which render path the game picture uses. See [`RenderPath`].
     pub render_path: RenderPath,
-    /// How loudly a wild Pokémon's shiny-if-traded verdict is announced. See
-    /// [`ShinyAlert`].
-    pub shiny_alert: ShinyAlert,
     /// Where to append NDJSON run telemetry, or `None` (the default) for off.
     /// See [`crate::telemetry`].
     pub telemetry: Option<String>,
@@ -358,9 +308,6 @@ pub struct Config {
     /// Trade file for the Gen 1 link partner, or `None` for its built-in offer.
     /// See [`crate::plugin::gen1::spec`].
     pub gen1_trade: Option<String>,
-    /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
-    /// built-in presets. See [`crate::plugin::battle::preset`].
-    pub battles: Option<String>,
 }
 
 impl Default for Config {
@@ -375,7 +322,6 @@ impl Default for Config {
             cell_scale: CellScale::default(),
             transmit_scale: TransmitScale::default(),
             render_path: RenderPath::default(),
-            shiny_alert: ShinyAlert::default(),
             telemetry: None,
             screenshot_dir: None,
             video_dir: None,
@@ -383,7 +329,6 @@ impl Default for Config {
             video: crate::video::RawSettings::default(),
             plugins: Vec::new(),
             gen1_trade: None,
-            battles: None,
         }
     }
 }
@@ -534,12 +479,6 @@ impl Config {
                 None => warn.push(bad("render_path", v, "fast, legacy")),
             }
         }
-        if let Some(v) = get("shiny_alert") {
-            match ShinyAlert::parse(v) {
-                Some(a) => cfg.shiny_alert = a,
-                None => warn.push(bad("shiny_alert", v, "on, quiet, off")),
-            }
-        }
         if let Some(v) = get("telemetry") {
             let v = v.trim();
             cfg.telemetry = if v.is_empty()
@@ -616,14 +555,6 @@ impl Config {
         if let Some(v) = get("gen1_trade") {
             let v = v.trim();
             cfg.gen1_trade = if v.is_empty() || v.eq_ignore_ascii_case("off") {
-                None
-            } else {
-                Some(v.to_string())
-            };
-        }
-        if let Some(v) = get("battles") {
-            let v = v.trim();
-            cfg.battles = if v.is_empty() || v.eq_ignore_ascii_case("off") {
                 None
             } else {
                 Some(v.to_string())
@@ -803,22 +734,6 @@ mod tests {
         assert_eq!(cfg.keys.b, 'k');
         assert_eq!(cfg.keys.start, 'n');
         assert_eq!(cfg.keys.select, 'm');
-    }
-
-    /// The battle plugin's preset file, alongside the link partner's trade
-    /// file. A key that is not read by `parse_reporting`'s `get(...)` list is
-    /// reported as *unknown*, so a new key that is only added to the struct
-    /// looks broken to the user — this pins both halves.
-    #[test]
-    fn the_battle_preset_file_is_configurable_and_optional() {
-        assert_eq!(Config::default().battles, None);
-        let c = Config::parse("plugins = gen1-battle\nbattles = '/tmp/b.preset'\n");
-        assert_eq!(c.plugins, vec!["gen1-battle".to_string()]);
-        assert_eq!(c.battles.as_deref(), Some("/tmp/b.preset"));
-        assert_eq!(Config::parse("battles = off\n").battles, None);
-        let (_, warn) =
-            Config::parse_reporting("plugins = gen1-battle\nbattles = /tmp/b\n");
-        assert!(warn.is_empty(), "{warn:?}");
     }
 
     #[test]

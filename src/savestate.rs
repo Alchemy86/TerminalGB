@@ -45,11 +45,7 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// v4: the timer became the hardware's single 16-bit system counter — `div`
 /// (u16) plus the TIMA-overflow reload latches — instead of two independent
 /// divisors (Mooneye `acceptance/timer/*`).
-/// v5: APU sample-accuracy state — the double-speed clock divider
-/// (`Sound::double_speed`, `cpu_frac`, so CGB double-speed audio does not come
-/// back an octave high), the square duty output latch, the 1 MHz grid phase and
-/// the pending DIV-APU power-on skip (SameSuite `apu/*`).
-pub const FORMAT_VERSION: u16 = 5;
+pub const FORMAT_VERSION: u16 = 4;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

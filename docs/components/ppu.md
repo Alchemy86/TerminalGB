@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`50ecb56`](https://github.com/Alchemy86/gameboy/tree/50ecb56d60eaa1153604ae57ca887959688eeb39) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -80,23 +80,23 @@ mode 0 (HBlank): remaining 204                    (mod.rs:286-287)
 line >= 144  → mode 1 (VBlank)                    (mod.rs:267)
 ```
 
-`renderscan` ([`mod.rs:570`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L570)) runs when the line's drawing completes;
-it calls `draw_bg` ([`mod.rs:600`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L600), window folded in) then
-`draw_sprites` ([`mod.rs:702`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L702)). VBlank sets the `0x01` interrupt and
-`updated = true` ([`mod.rs:323`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L323)).
+`renderscan` ([`mod.rs:535`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L535)) runs when the line's drawing completes;
+it calls `draw_bg` ([`mod.rs:565`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L565), window folded in) then
+`draw_sprites` ([`mod.rs:667`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L667)). VBlank sets the `0x01` interrupt and
+`updated = true` ([`mod.rs:313`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L313)).
 
 **The 10-sprite limit IS modelled** — `draw_sprites` collects into a 10-slot array and
-breaks once full ([`mod.rs:710`,`721`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L710)). 8×16 mode masks the tile
-LSB ([`mod.rs:737`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L737)).
+breaks once full ([`mod.rs:675`,`686`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L675)). 8×16 mode masks the tile
+LSB ([`mod.rs:702`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L702)).
 
-**STAT/LYC** — `check_interrupt_lyc` ([`mod.rs:304`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L304)) raises `0x02`
+**STAT/LYC** — `check_interrupt_lyc` ([`mod.rs:295`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L295)) raises `0x02`
 when `line == lyc` and enabled; mode-entry STAT interrupts fire in `change_mode`
-([`mod.rs:310`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L310)).
+([`mod.rs:301`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L301)).
 
 **Palettes** — DMG `get_monochrome_pal_val` maps to greys 255/192/96/0
-([`mod.rs:561`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L561)); CGB packs 5-bit RGB in `BCPD`/`OCPD` writes
-([`mod.rs:502`,`522`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L502)) and outputs via `setrgb` with a Gambatte-style
-colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L585)).
+([`mod.rs:526`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L526)); CGB packs 5-bit RGB in `BCPD`/`OCPD` writes
+([`mod.rs:467`,`487`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L467)) and outputs via `setrgb` with a Gambatte-style
+colour-correction curve ([`mod.rs:550`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L550)).
 
 ### Honest approximations
 
@@ -127,37 +127,21 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
   STAT sources feed **one** shared interrupt line; an interrupt only fires on its
   *rising edge*, so a second source going active while the line is already high does
   **not** re-trigger. Here each source ORs `0x02` independently
-  ([`mod.rs:306`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L306)) — no edge detection. (Pan Docs — [STAT](https://gbdev.io/pandocs/STAT.html).)
+  ([`mod.rs:297`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L297)) — no edge detection. (Pan Docs — [STAT](https://gbdev.io/pandocs/STAT.html).)
 - **The DMG STAT write bug — NOT modelled.** On DMG, writing *any* value to `STAT`
   (even `0x00`) during OAM scan / HBlank / VBlank / LY=LYC can spuriously fire the STAT
   interrupt, as if `0xFF` were written for one M-cycle. Two commercial games depend on it.
 - **Mid-scanline `SCX`/`SCY`/`WX`/`WY`/palette writes** are a legitimate technique
   (parallax, status bars). With whole-line rendering (§4) these land at line granularity,
-  not pixel granularity. This is what the **Mealybug Tearoom** suite measures, and
-  [`docs/mealybug.md`](../mealybug.md) is the scoping of what fixing it would take.
-- **The window's frame-long "Y condition"** is latched at the *start of a scanline* when
-  `WY == LY`, and **does not depend on `LCDC` bit 5** — a game may latch it on a line where
-  the window is disabled and enable the window later in the same frame (Pan Docs, "Window
-  rendering criteria"). Modelled in the mode-2 arm of `change_mode` via
-  `check_wy_trigger`; cleared on VBlank. *Not* modelled: Pan Docs' GBC-only note that
-  clearing `LCDC` bit 5 resets the condition.
+  not pixel granularity.
 - **The window's internal line counter** only advances on lines where the window is
-  visible — modelled via `wy_pos` ([`mod.rs:605`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L605)).
-- **Entering mode 1 raises STAT for the mode-1 *or* the mode-2 select bit.** AntonioND's
-  TCAGBD §8.7 gives the internal signal as
-  `(ScreenMode = 1) AND (STAT.ENABLE_VBL || STAT.ENABLE_OAM)` — "Not only VBL!!". A program
-  that enables only the mode-2 source still takes a STAT interrupt at `LY = 144`, and
-  missing it puts a whole frame's worth of per-STAT state on the wrong parity of lines.
-  Modelled; pinned by `gpu::tests::entering_vblank_raises_stat_for_the_mode_2_source_too`.
+  visible — modelled via `wy_pos` ([`mod.rs:570`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L570)).
 - **OAM DMA restricted-bus interaction** — see [MMU](mmu.md); OAM writes during a real DMA
   are blocked, which this emulator does not enforce.
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today:** the framebuffer itself is pinned (dmg-acid2 frame hash in
-> `testharness/baseline.txt`, #12), two window/STAT behaviours have unit tests (#13, #14),
-> and the mid-mode-3 gap is *measured* rather than merely asserted (#15). The mode/LYC
-> timing items below are still uncovered.
+> **Coverage today: none.** Framebuffer/timing tests do not exist yet.
 
 1. **Frame geometry.** A full frame is 154 lines × 456 dots = **70,224 dots**; `LY` cycles
    `0→153→0`. *(Not covered.)*
@@ -188,20 +172,6 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
     hash, and a pixel diff against `third_party/dmg-acid2/reference-dmg.png` shows **zero
     differing pixels** across the four gray levels (only the exact shade constants differ,
     a palette choice). The PPU already draws the acid2 face correctly.
-13. **The window Y condition latches with the window disabled.** With `WY = 5` and `LCDC`
-    bit 5 clear, reaching `LY = 5` must latch the condition so the window appears if it is
-    enabled later in the frame. **COVERED** —
-    `gpu::tests::the_wy_condition_latches_while_the_window_is_disabled`, and Mealybug
-    `m2_win_en_toggle` is pixel-exact against all three hardware references.
-14. **Mode 1 raises STAT for the mode-2 select bit.** With `STAT = $20` (mode-2 source only)
-    and mode-1 select clear, entering `LY = 144` must still request a STAT interrupt.
-    **COVERED** — `gpu::tests::entering_vblank_raises_stat_for_the_mode_2_source_too`, plus
-    `mooneye/acceptance/ppu/vblank_stat_intr-GS`, which this turned from red to green.
-15. **Mid-mode-3 register writes take effect part-way along the line.** Writing `BGP`,
-    `LCDC`, `SCX`, `SCY` or `WX` during mode 3 must change only the pixels drawn after the
-    write, at the fetcher's own granularity. **Expected to FAIL — whole-line rendering.**
-    *(Covered as a measurement by `cargo run --release --example mealybug`: 1 of 31 ROMs
-    pixel-exact. Scoping in [`docs/mealybug.md`](../mealybug.md).)*
 
 ## 7. Test ROMs that exercise it
 
@@ -209,8 +179,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
 |---|---|---|
 | **dmg-acid2** (Matt Currie) | A single-frame BG/window/sprite composition that draws a face; any PPU feature bug distorts it | The best cheap visual PPU regression check — see [testing](../testing.md). |
 | **cgb-acid2** | The CGB equivalent (colour palettes, attributes, priority) | CGB attribute/palette/priority bugs. |
-| **Mooneye `acceptance/ppu/`** (`intr_1_2_timing`, `intr_2_0_timing`, `lcdon_timing`, `stat_irq_blocking`, `vblank_stat_intr`, …) | Exact mode/STAT/LYC interrupt timing | Directly targets §4/§5 approximations. `intr_1_2_timing-GS` and `vblank_stat_intr-GS` pass; the other 10 are mode-3/STAT-blocking/LCD-on reds. Run with `cargo run --release --example mooneye_scout -- <suite>/acceptance`. |
-| **Mealybug Tearoom** (Matt Currie) | PPU register writes *during* mode 3, against DMG / CPU CGB C / CPU CGB D reference screenshots | Directly targets the whole-line renderer. **1 of 31 ROMs pixel-exact**; run it with `cargo run --release --example mealybug -- --dir <checkout>`. Full accounting and the cost of the rest: [`docs/mealybug.md`](../mealybug.md). |
+| **Mooneye `acceptance/ppu/`** (`intr_1_2_timing`, `intr_2_0_timing`, `lcdon_timing`, `stat_irq_blocking`, `vblank_stat_intr`, …) | Exact mode/STAT/LYC interrupt timing | Directly targets §4/§5 approximations — expected reds. **Not the declared submodule; not wired.** |
 | **Blargg `oam_bug`** | The OAM corruption bug (DMG) | Fails — the bug isn't modelled. |
 | **Blargg `cgb_sound`** shares no PPU code, but its screenshot is in the repo as "failing" | — | (APU, listed under [APU](apu.md).) |
 

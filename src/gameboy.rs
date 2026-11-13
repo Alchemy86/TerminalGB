@@ -50,19 +50,6 @@ pub fn load_rom(filepath: &str) -> Result<(Vec<u8>, std::path::PathBuf), String>
 // Match rboy's timing: (4194304 / 1000 * 16) = ~67,109 cycles per 16ms frame
 pub const CYCLES: u32 = 67109;
 
-/// T-cycles in one DMG frame: 70,224 at 4.194304 MHz is 59.7275 Hz.
-pub const FRAME_TICKS: u32 = 70224;
-
-/// The most T-cycles [`Gameboy::frame`] will execute in one call.
-///
-/// A frame's worth plus a margin. The margin exists because a single
-/// instruction can carry the GPU a few cycles past the frame boundary, so with
-/// the LCD on the `updated` break always arrives first and this cap is dead
-/// code — which is what makes it safe to apply unconditionally. With the LCD
-/// off there is no `updated` break at all, and this is the only thing standing
-/// between a frame-paced frontend and an unbounded run.
-pub const FRAME_TICKS_CAP: u32 = FRAME_TICKS + 64;
-
 /// Launch the terminal frontend. `initial_rom` starts straight into that game;
 /// `None` opens the ROM picker. This is the entry point terminal binaries
 /// should use — it lets the TUI own ROM loading, so the picker and in-app ROM
@@ -157,9 +144,6 @@ impl Gameboy {
                 if s.source == crate::video::Source::Display && s.size.is_none() {
                     s.size = Some((out_w as u32, out_h as u32));
                 }
-                // The game's name travels with the stream, so a FIFO's sidecar
-                // descriptor can label the virtual camera after the cartridge.
-                s.title = Some(self.rom_title());
                 let (v, err) = crate::video::VideoOut::open(s);
                 if let Some(e) = err {
                     eprintln!("gameboy: {e}");
@@ -371,38 +355,14 @@ impl Gameboy {
         result
     }
 
-    /// Advance the machine by one frame — **or by one frame's worth of time**,
-    /// whichever comes first.
-    ///
-    /// The second half of that is not a nicety. `Gpu::do_cycle` returns
-    /// immediately while the LCD is off, so `updated` never fires and this loop
-    /// has no other exit: a frame-paced frontend then runs the CPU without
-    /// bound for as long as the game leaves the screen off. Measured on
-    /// Pokémon Blue's boot, one call executed **845,836** cycles instead of
-    /// 70,224 — twelve frames of emulation charged to one 16.743 ms slot, with
-    /// the APU emitting the matching burst of samples that the audio queue's
-    /// latency bound then has to throw away (`docs/audio.md` §4c).
-    ///
-    /// [`FRAME_TICKS`] is the real thing: 70,224 T-cycles at 4.194304 MHz is
-    /// 59.7275 Hz. The cap carries a small margin because a single instruction
-    /// can overshoot the boundary by a few cycles, so with the LCD **on** the
-    /// cap is unreachable and this is byte-for-byte the old behaviour — the
-    /// `updated` break always comes first. Only the LCD-off case changes, which
-    /// is the whole bug.
     pub fn frame(&mut self) {
         let waitticks = (4194304f64 / 1000.0 * 16.0).round() as u32;
         let mut ticks = 0;
-        let mut total = 0u32;
 
         'outer: loop {
             while ticks < waitticks {
-                let step = self.cpu.do_cycle();
-                ticks += step;
-                total += step;
+                ticks += self.cpu.do_cycle();
                 if self.check_and_reset_gpu_updated() {
-                    break 'outer;
-                }
-                if total >= FRAME_TICKS_CAP {
                     break 'outer;
                 }
             }
@@ -582,84 +542,5 @@ impl Gameboy {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_audio_fast_forward(&mut self, enabled: bool) {
         self.cpu.memory.set_audio_fast_forward(enabled);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A 32 KiB cartridge that turns the LCD **off** and then counts in a tight
-    /// loop forever, writing the count to HRAM so a test can read how far it
-    /// got. No commercial ROM, no vendored binary — see `testharness/battery.rs`
-    /// for the same technique.
-    ///
-    /// One iteration is 52 T-cycles: `INC HL` 8, `LD A,H` 4, `LDH [n],A` 12,
-    /// `LD A,L` 4, `LDH [n],A` 12, `JR` (taken) 12.
-    const LOOP_TICKS: u32 = 52;
-
-    fn lcd_off_spinner() -> Vec<u8> {
-        let mut rom = vec![0u8; 0x8000];
-        rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]); // NOP; JP $0150
-        rom[0x134..0x13F].copy_from_slice(b"LCDOFFSPIN\0");
-        rom[0x147] = 0x00; // ROM only
-        rom[0x148] = 0x00; // 32 KiB
-        rom[0x149] = 0x00; // no RAM
-        let prog: &[u8] = &[
-            0xAF, // XOR A            -> A = 0
-            0xE0, 0x40, // LDH [$FF40], A  -> LCDC = 0, LCD off
-            0x21, 0x00, 0x00, // LD HL, $0000
-            // loop:
-            0x23, // INC HL
-            0x7C, // LD A, H
-            0xE0, 0x80, // LDH [$FF80], A
-            0x7D, // LD A, L
-            0xE0, 0x81, // LDH [$FF81], A
-            0x18, 0xF7, // JR loop  (-9)
-        ];
-        rom[0x150..0x150 + prog.len()].copy_from_slice(prog);
-        rom
-    }
-
-    /// With the LCD off `Gpu::do_cycle` never sets `updated`, so `frame`'s only
-    /// exit is the cycle cap. Without it this call **never returns at all** for
-    /// this ROM, and returns after 845,836 cycles for a game that switches the
-    /// screen back on later (`docs/audio.md` §4c) — twelve frames of emulation,
-    /// and twelve frames of audio, charged to one 16.743 ms slot.
-    ///
-    /// Run on a worker thread with a deadline so a regression **fails** instead
-    /// of hanging a CI job forever.
-    #[test]
-    fn a_frame_with_the_lcd_off_still_lasts_exactly_one_frame() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut gb = Gameboy::new(lcd_off_spinner(), None);
-            let count = |gb: &mut Gameboy| {
-                ((gb.peek(0xFF80) as u32) << 8) | gb.peek(0xFF81) as u32
-            };
-            // Switching the LCD off publishes one frame (the screen goes
-            // blank), so the first call ends there. Every call *after* that has
-            // no `updated` to break on and is the case under test.
-            gb.frame();
-            gb.frame();
-            let before = count(&mut gb);
-            gb.frame();
-            let _ = tx.send((before, count(&mut gb)));
-        });
-        let (before, after) = rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("frame() never returned with the LCD off — the cap is gone");
-        assert!(before > 0, "the test ROM never reached its loop");
-        let iters = after - before;
-
-        // The loop is entered a few cycles in, so allow a little slack either
-        // side; what must not happen is *multiples* of a frame.
-        let expected = FRAME_TICKS / LOOP_TICKS;
-        assert!(
-            iters > expected - 20 && iters < expected + 20,
-            "ran {iters} iterations ({} cycles), expected about {expected} \
-             ({FRAME_TICKS} cycles) — one frame's worth, not several",
-            iters * LOOP_TICKS
-        );
     }
 }

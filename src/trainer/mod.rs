@@ -46,7 +46,6 @@
 //! run wants. Each is additive on top of this data.
 
 pub mod derived;
-pub mod encounter;
 pub mod gen1;
 pub mod rom;
 pub mod sprite;
@@ -55,8 +54,7 @@ pub mod text;
 use std::collections::HashMap;
 
 use crate::plugin::{Capability, Event, Machine, Plugin};
-use encounter::WildEncounter;
-use gen1::{addr, battle, party, BattleKind, BattleType, Dvs, Mon, Status};
+use gen1::{addr, battle, party, BattleKind, Dvs, Mon, Status};
 
 /// How often the party is re-read, in emulated frames. Six frames is about
 /// 10 Hz — a tenth of a second behind the game, which no one can see, for a
@@ -146,9 +144,6 @@ pub struct TrainerState {
     pub badges: u8,
     pub party: Vec<Mon>,
     pub battle: BattleKind,
-    /// Which flavour of wild battle, when [`TrainerState::battle`] is
-    /// [`BattleKind::Wild`]. Meaningless otherwise.
-    pub battle_type: BattleType,
     /// The opposing Pokémon, present only during a battle.
     pub opponent: Option<Mon>,
     /// The player's active Pokémon as the battle engine sees it — its stats
@@ -182,16 +177,9 @@ pub struct TrainerPlugin {
     /// in practice by however many distinct Pokémon a player meets.
     sprites: HashMap<u8, Option<SpriteImage>>,
     /// Whether the frontend is currently showing the view. When it is not, the
-    /// plugin still runs [`TrainerPlugin::watch_encounter`] — one byte at
-    /// ~10 Hz — and nothing else.
+    /// plugin does no work at all.
     active: bool,
     last_sample: u64,
-    /// The current wild encounter's verdict, latched. See [`encounter`].
-    encounter: Option<WildEncounter>,
-    /// Bumped every time a *new* encounter is latched, so a frontend can tell
-    /// "a Pokémon just appeared" from "the same one is still there" without
-    /// cloning or comparing the encounter itself.
-    encounter_seq: u64,
     /// Set once by [`TrainerPlugin::on_attach`] so the frontend can explain the
     /// refusal instead of showing an empty panel.
     detected_title: String,
@@ -214,8 +202,6 @@ impl TrainerPlugin {
             sprites: HashMap::new(),
             active: false,
             last_sample: 0,
-            encounter: None,
-            encounter_seq: 0,
             detected_title: String::new(),
         }
     }
@@ -255,88 +241,6 @@ impl TrainerPlugin {
 
     pub fn is_active(&self) -> bool {
         self.active
-    }
-
-    /// The wild encounter currently on screen, if the game is in one a Ball can
-    /// be spent on. `None` in the overworld, in a trainer battle, and during the
-    /// old man's catching demonstration — see [`encounter::applies`].
-    ///
-    /// **Live whether or not the panel is open.** An encounter is exactly the
-    /// moment nobody is looking at a stats panel, so the watch is not gated on
-    /// [`TrainerPlugin::set_active`].
-    pub fn encounter(&self) -> Option<&WildEncounter> {
-        self.encounter.as_ref()
-    }
-
-    /// Counts encounters latched since the session started. A frontend that
-    /// remembers the last value it saw can raise a one-shot alert (a toast, a
-    /// bell) exactly once per Pokémon.
-    pub fn encounter_seq(&self) -> u64 {
-        self.encounter_seq
-    }
-
-    /// Pretend the cartridge was recognised, so [`TrainerPlugin::status`] can be
-    /// checked without one. Not compiled outside the crate's own unit tests.
-    #[cfg(test)]
-    pub fn set_game_for_test(&mut self, game: Option<Game>) {
-        self.game = game;
-    }
-
-    /// Plant an encounter without a cartridge, so the frontend's layout and
-    /// alert behaviour can be tested against a synthetic ROM. Not compiled
-    /// outside the crate's own unit tests.
-    #[cfg(test)]
-    pub fn set_encounter_for_test(&mut self, enc: Option<WildEncounter>) {
-        if enc.is_some() {
-            self.encounter_seq += 1;
-        }
-        self.encounter = enc;
-    }
-
-    /// The whole per-frame cost when the panel is closed: read `wIsInBattle`,
-    /// and in a wild battle whose verdict is not yet latched, read enough of
-    /// `wEnemyMon` to latch it.
-    ///
-    /// Ordinary case, in the overworld: **one byte, six times a second.**
-    fn watch_encounter(&mut self, machine: &mut Machine<'_, '_>) {
-        let view = &mut Reads(machine);
-        let in_battle = view.peek(addr::IS_IN_BATTLE);
-        // The second byte is only read once the first has said "wild battle",
-        // so the overworld really does cost one peek.
-        let battle_type = if BattleKind::from_flag(in_battle) == BattleKind::Wild {
-            view.peek(addr::BATTLE_TYPE)
-        } else {
-            0
-        };
-        if !encounter::applies(in_battle, battle_type) {
-            self.encounter = None;
-            return;
-        }
-        // Already decided for this battle: the DVs cannot change under us, and
-        // holding the verdict is what makes it persist for the encounter.
-        if self.encounter.is_some() {
-            return;
-        }
-        let species = view.peek(addr::ENEMY_MON + battle::SPECIES);
-        let dex = self.tables.dex_number(species);
-        let level = view.peek(addr::ENEMY_MON + battle::LEVEL);
-        let hp = view.peek_be16(addr::ENEMY_MON + battle::HP);
-        let max_hp = view.peek_be16(addr::ENEMY_MON + battle::MAX_HP);
-        if !encounter::looks_populated(dex, level, hp, max_hp) {
-            return;
-        }
-        self.encounter = Some(WildEncounter {
-            species,
-            dex,
-            name: self.tables.species_name(species),
-            level,
-            dvs: Dvs::from_bytes(
-                view.peek(addr::ENEMY_MON + battle::DVS),
-                view.peek(addr::ENEMY_MON + battle::DVS + 1),
-            ),
-            kind: BattleType::from_flag(battle_type),
-        });
-        self.encounter_seq += 1;
     }
 
     /// The cached sprite for a species, decompressing it on first use.
@@ -398,7 +302,6 @@ impl TrainerPlugin {
         }
 
         st.battle = BattleKind::from_flag(view.peek(addr::IS_IN_BATTLE));
-        st.battle_type = BattleType::from_flag(view.peek(addr::BATTLE_TYPE));
         if st.battle != BattleKind::None {
             let mut nick = [0u8; gen1::NAME_LENGTH as usize];
             view.peek_into(addr::ENEMY_MON_NICK, &mut nick);
@@ -563,16 +466,10 @@ impl Plugin for TrainerPlugin {
     }
 
     fn status(&self) -> String {
-        match (self.game, self.encounter.as_ref()) {
-            (None, _) => "unsupported cartridge".to_string(),
-            // A live encounter outranks the party count: it is the thing the
-            // status line exists to make un-missable.
-            (Some(_), Some(e)) if e.would_be_shiny() => {
-                format!("★ {} would be SHINY if traded", e.name)
-            }
-            (Some(_), Some(e)) => format!("wild {} DV {}", e.name, e.dv_string()),
-            (Some(_), None) if !self.active => "idle".to_string(),
-            (Some(_), None) => format!("{} in party", self.state.party.len()),
+        match self.game {
+            None => "unsupported cartridge".to_string(),
+            Some(_) if !self.active => "idle".to_string(),
+            Some(_) => format!("{} in party", self.state.party.len()),
         }
     }
 
@@ -582,7 +479,7 @@ impl Plugin for TrainerPlugin {
     }
 
     fn on_event(&mut self, event: &Event, machine: &mut Machine) {
-        if self.game.is_none() {
+        if self.game.is_none() || !self.active {
             return;
         }
         let Event::Frame { number } = *event else {
@@ -592,14 +489,7 @@ impl Plugin for TrainerPlugin {
             return;
         }
         self.last_sample = number;
-        // The encounter watch runs whether or not the panel is open: a wild
-        // Pokémon appearing is exactly the moment nobody has a stats panel up,
-        // and it costs one byte at ~10 Hz. The full party read stays gated on
-        // the panel being visible.
-        self.watch_encounter(machine);
-        if self.active {
-            self.sample(machine);
-        }
+        self.sample(machine);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -635,42 +525,6 @@ mod tests {
         let msg = p.refusal().expect("an unknown game must be refused");
         assert!(msg.contains("TETRIS"), "the refusal names the cartridge");
         assert!(msg.contains("Red/Blue"), "and says what it does support");
-    }
-
-    /// The Status panel's plugin row is a *second* place the verdict shows up
-    /// with the trainer panel closed, so it is held to the same wording rule as
-    /// the banner: never bare "shiny".
-    #[test]
-    fn the_plugin_status_line_carries_the_verdict() {
-        use encounter::WildEncounter;
-        use gen1::Dvs;
-        let mut p = TrainerPlugin::new(Vec::new());
-        p.set_game_for_test(Some(Game::Blue));
-        let mut enc = WildEncounter {
-            species: 0x24,
-            dex: 16,
-            name: "PIDGEY".into(),
-            level: 3,
-            dvs: Dvs::from_bytes(0xEA, 0xAA), // the canonical shiny pair
-            kind: BattleType::Normal,
-        };
-        p.set_encounter_for_test(Some(enc.clone()));
-        let s = p.status();
-        assert!(s.contains('★') && s.contains("SHINY"), "{s:?}");
-        assert!(s.contains("if traded"), "never bare shiny: {s:?}");
-        assert!(s.contains("PIDGEY"), "{s:?}");
-
-        // An ordinary encounter still names the Pokémon and its DVs, and never
-        // uses the word at all.
-        enc.dvs = Dvs::from_bytes(0x9A, 0x88);
-        p.set_encounter_for_test(Some(enc));
-        let s = p.status();
-        assert!(!s.to_uppercase().contains("SHINY"), "{s:?}");
-        assert!(s.contains("wild PIDGEY") && s.contains("DV "), "{s:?}");
-
-        // With no encounter it falls back to the panel-closed state.
-        p.set_encounter_for_test(None);
-        assert_eq!(p.status(), "idle");
     }
 
     #[test]

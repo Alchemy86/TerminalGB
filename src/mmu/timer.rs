@@ -106,12 +106,6 @@ impl Timer {
             // Writing DIV clears the whole 16-bit counter. If the tap bit was
             // high this is a falling edge and TIMA increments — that is the
             // behaviour `timer/div_write` and `timer/rapid_toggle` check.
-            //
-            // Clearing *all sixteen* bits also matters outside the timer: the
-            // APU's frame sequencer is clocked off the same counter, so a
-            // residual sub-DIV value here desynchronises the DIV-APU event
-            // (SameSuite `div_write_trigger` waits for `DIV == $10` and then
-            // resets DIV to force one). See `Sound::div_write`.
             0xFF04 => self.set_div(0),
             0xFF05 => {
                 if self.reloading {

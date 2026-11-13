@@ -109,19 +109,16 @@ lines per fix, not a process document.
 - Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
   OAM-corruption bug not modelled (`oam_bug` red-by-design — 3 of its 8 sub-tests pass; it
   is a DMG hardware *defect*); PPU mode 3 fixed-length (needs a cycle-stepped PPU — it
-  costs us Mealybug 0/71). *(The "CGB double-speed switch does not take effect" entry that
-  used to sit here was a misdiagnosis and is gone — the switch was working; the APU was
-  clocked at CPU speed, so a ROM that synchronises through the APU could not see it. See
-  the SameSuite APU section.)*
+  costs us Mealybug 0/71); the CGB double-speed switch does not take effect (see the
+  `interrupt_time` note below).
 - **The timer, interrupt dispatch and OAM DMA are no longer non-goals** — all three are
   modelled now; see the "Core timing" section below. Two claims that used to live in this
   list are gone for good: the timer divergence did *not* have "no wired test" (Mooneye
   `acceptance/timer/*` wires it, and we were failing 10 of 13 — now 13/13), and OAM DMA
   being instantaneous was not merely a DMA inaccuracy, it made 14 Mooneye *instruction*-
-  timing tests unmeasurable. **`interrupt_time` now PASSES** — and it took both halves of
-  that day's work: the 5-cycle dispatch fix supplies the correct 13 cycles, the APU
-  base-clock fix lets the ROM see the double-speed switch it makes halfway through.
-  Neither turns it green alone.
+  timing tests unmeasurable. `interrupt_time` still prints **Failed**, but no longer for
+  the dispatch-timing reason recorded here before: it now measures the correct 13 cycles
+  and fails on the double-speed switch instead.
 - `get_mbc` (`src/mbc/mod.rs`) returns MBC3 for **any** cartridge when built without a
   filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled
@@ -216,65 +213,13 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   three plus the 11 PPU tests are the whole remaining red list.
 - **`blargg/interrupt_time` moves `$0C` → `$0D` and `$0D` is CORRECT** —
   `tests/interrupt_time/interrupt_time.s` says "Should take 13 cycles at either speed". Any
-  baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. It then still
-  said `Failed` because rounds 3 and 4 printed speed `00` after `cpu_fast` — which read as
-  "the CGB double-speed switch is not taking effect" and **was wrong about the component**.
-  The switch worked; the ROM syncs through the APU (`apu.s` spins on `NR52`) and the APU
-  was clocked at CPU speed, so at double speed it ran twice as fast and the sync missed.
-  With the APU on the base clock the ROM prints `01` and **`Passed`**. Worth remembering as
-  a class: *when a test synchronises through one subsystem to measure another, its failure
-  names the wrong one.*
-- **Do not read wall-clock timings from a run with the `audio` feature enabled** — that
-  slowdown (17.9 ms/frame vs 0.29 ms) was the *player pacing the emulator*, since fixed;
-  the ~6 % figure above was measured with no APU installed, so it isolates this change.
-
-## PPU: Mealybug Tearoom and the mid-scanline question (`src/gpu/`)
-
-- **Full scoping, with the split of what is winnable now versus what needs the rewrite:
-  [`docs/mealybug.md`](docs/mealybug.md).** Score today **1 of 31 ROMs** pixel-exact against
-  all three hardware reference sets (was 0). Measure it with
-  `cargo run --release --example mealybug -- --dir <mealybug checkout>` — ROMs and reference
-  screenshots are **not vendored**, they come from a run-time path like `POKERED_GFX` does.
-- **Score each column on the machine its reference was photographed on.** These cartridges have
-  no CGB flag, so `Model::Auto` gives a DMG — right for `DMG-blob`, wrong for `CPU CGB C`/`CPU
-  CGB D`, which are a Color console running the same DMG cartridge in compat mode.
-  `examples/mealybug` runs both and compares each column to its own frame. They render
-  identically *today* (`GbMode::Classic` and `ColorAsClassic` share the renderer) — that must
-  stop being true once mode 3 is modelled, which is exactly why the suite ships three sets.
-- **Three independent blockers stood between us and the remaining rows, and all three must be
-  true at once for ANY row to pass. One is now closed:**
-  1. **Whole-line rendering.** `renderscan` runs once at the mode 3 → 0 transition. Open; this
-     is the structural one.
-  2. ~~Interrupt dispatch 16 vs 20 T-cycles~~ — **closed** by the core-timing work. *Measured*
-     on both sides: tracing every `BGP` write on line 1 of `m3_bgp_change` gave dots
-     76/92/104/164/176/236/248 before and **80/96/108/168/180/240/252 now**, which is exactly
-     what the ROM's own cycle comments intend. **Mid-mode-3 writes now land on the right dot to
-     the cycle** — the substrate a fetcher-accurate PPU needs is already correct.
-  3. **VRAM starts zeroed; hardware hands over the boot ROM's logo tiles + the `®` at tile
-     `$19`.** 18 of the 31 ROMs depend on it (12 write no tile data of their own at all), so
-     their frames are wrong before timing is considered. **Do this before the FIFO**, or every
-     failure after the rewrite has two candidate causes. Shipping the `®` glyph is a
-     licence/policy call — flagged, not taken.
-- **Two real PPU bugs that only a Mealybug ROM caught** (both fixed, both with unit tests in
-  `src/gpu/mod.rs` proven to fail when reverted):
-  - **The window "Y condition" must latch independent of LCDC bit 5.** Pan Docs, "Window
-    rendering criteria": at the start of each scanline, `WY == LY` latches it for the frame;
-    nothing about the enable bit. We tested `win_on` first, so a game that sets `WY` while the
-    window is off and enables it later in the frame **never showed the window at all**.
-  - **Entering mode 1 raises STAT for the mode-1 *or* the mode-2 select bit.** AntonioND
-    TCAGBD §8.7: `(ScreenMode = 1) AND (STAT.ENABLE_VBL || STAT.ENABLE_OAM)` — "Not only
-    VBL!!". Missing the `LY=144` fire loses one STAT interrupt per frame and puts everything
-    the handler toggles on the wrong parity of scanlines. Also flips
-    `mooneye/acceptance/ppu/vblank_stat_intr-GS` FAIL → PASS (**acceptance 52 → 53**, PPU reds
-    11 → 10). **A PPU test ROM caught an interrupt bug** — an argument for scoring screens, not
-    only serial verdicts.
-- **Calibration before anyone promises a number:** on the shootout's 24 published Mealybug
-  rows, SameBoy scores 15, **bgb scores 2**, PyBoy 0. This is not a suite a competent
-  cycle-stepped PPU sweeps.
-- **After editing `src/gpu/mod.rs`, re-anchor `docs/components/ppu.md` by content.**
-  `make docs-links` reported "rewrote 0 references" for a change that shifted every line after
-  295 by +9 and after 535 by +35 — `docs-check` only catches out-of-range rot. Fix the
-  `path:line` spans by hand, then re-run `make docs-check`.
+  baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. The ROM still
+  says `Failed` for an unrelated reason its own output shows: rounds 3 and 4 print speed
+  `00` after `cpu_fast`, so the **CGB double-speed switch is not taking effect**. That is a
+  separate finding and it also explains `daid/speed_switch_timing_*`.
+- **Do not read wall-clock timings from a run with the `audio` feature enabled** — a crew is
+  fixing a ~62× slowdown there (17.9 ms/frame vs 0.29 ms). The ~6 % figure above was
+  measured with no APU installed, so it isolates this change.
 
 ## Test-ROM correctness harness
 
@@ -450,13 +395,13 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   **no sound card**: it attaches the real producer half with no consumer so the queue
   saturates, and fails above 4 ms/frame or below 4x real time. Teeth proven: 29.6 ms and
   0.57x against the old policy. Full write-up + conformance record: `docs/audio.md` §4c.
-- **A frame-paced loop ran the machine unbounded while the LCD was off — FIXED** by
-  `FRAME_TICKS_CAP` in `Gameboy::frame` (see its own section below). `Gpu::do_cycle` returns
-  immediately when `!lcd_on`, so `updated` never fires and the loop had no other exit;
-  measured on Pokémon Blue's boot, one "frame" ran **845,836** cycles instead of 70,224 and
-  the APU emitted the matching burst, which the queue's latency bound then discarded. It was a
-  **frontend pacing** defect, not an audio one, and it was the only remaining source of
-  playback discards. It was never to be "fixed" in `sound.rs`, and it was not.
+- **A frame-paced loop runs the machine unbounded while the LCD is off** (`Gpu::do_cycle`
+  returns immediately when `!lcd_on`, so `updated` never fires). Measured on Pokémon Blue's
+  boot: one "frame" ran **845,836** cycles instead of 70,224, and the APU emitted the matching
+  burst — which the queue's latency bound then discards. That is a **frontend pacing** defect,
+  not an audio one, and it is the only remaining source of playback discards (all inside the
+  first 20 s of a cold boot; zero thereafter). Cap an iteration by cycles as well as by
+  `gpu.updated` if it ever matters. Do not "fix" it in `sound.rs`.
 - **Small blocks broke the consumer-stall detector (fixed; don't reintroduce).** It compared
   the callback counter against the previous `play()`. Fine at 45 ms/block, but at 5.8 ms one
   frame pushes several blocks back-to-back with no callback between them, so every block after
@@ -487,11 +432,9 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   `apply_nrx4_length`; sweep state fully reloads on trigger + negate-exit disable quirk;
   NR52 power-off zeroes NR10–NR51 *while still on* (clearing after `on=false` is a no-op),
   DMG preserves length counters across power and allows NRx1 length writes while off, and
-  power-on resets the frame sequencer to step 0 (DIV divider keeps running — but see the
-  SameSuite section below: with the DIV-APU bit already set, the first event is *skipped*);
-  a powered-off APU still emits silence at full sample rate (never stall the stream). Save-state format is
-  v4 (v2 added APU shadow regs + flags; v3 added `WaveChannel::since_fetch`; v4 added the
-  double-speed clock divider, the duty latch, the 1 MHz grid phase and the DIV-APU skip).
+  power-on resets the frame sequencer to step 0 (DIV divider keeps running); a powered-off
+  APU still emits silence at full sample rate (never stall the stream). Save-state format is
+  v3 (v2 added APU shadow regs + flags; v3 added `WaveChannel::since_fetch`).
 - **DMG wave-RAM window (dmg_sound 9/12 → 12/12) — things to preserve:** the APU clock is
   stepped per memory access (see the timer sharp-edge above) — without it no wave-window
   constant can be right, since `catch_up()` would sync to instruction boundaries only.
@@ -513,89 +456,6 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   a frame emits 16.7 ms of audio in one go, and that burst dominates the cushion. Stepping
   emulation in sub-frame chunks would roughly halve the required cushion again (towards
   ~30 ms end-to-end). That changes the frontends, not the audio code.
-
-
-## SameSuite APU accuracy (2/61 → 49/61) — `src/sound.rs`
-
-**Full write-up: [`docs/components/apu.md`](docs/components/apu.md) §8; per-fix conformance
-records in [`docs/conformance-notes.md`](docs/conformance-notes.md).** Read those before
-touching APU timing — every constant below is *measured* against a named test, not chosen.
-
-- **Run the suite:** `cargo run --release --example samesuite -- <dir> [--dump] [--frames N]`.
-  It reads SameSuite's own `RESULT_CODE` at `$CFFE` (`"P"`/`"F"`) — the ROM's verdict, not a
-  screenshot. `--dump` prints the measurement table for debugging against the test's `.asm`.
-  ROMs: `LIJI32/SameSuite` (source only) or the prebuilt copies in `gbdev/GBEmulatorShootout`
-  under `testroms/samesuite/`. **Score against the shootout's published 61**, not the 69 ROMs
-  in the directory — the 8 `*-cgb0B`/`-cgbB`/`-cgb0BC`/`-A` variants encode *older* CGB
-  revisions and are deliberately not chased (we target CGB-E).
-- **The APU only runs when a player is installed.** `Sound::do_cycle` returns immediately
-  when `player.is_none()`, so a harness with no `enable_audio` call has *no APU at all* —
-  not a quiet one. Any APU measurement without a player is measuring nothing.
-- **PCM12/PCM34 (`$FF76`/`$FF77`) are the whole interface.** 57 of the 61 tests are
-  unreachable without them. The MMU routes them to `Sound::rb` with a `catch_up()` first,
-  exactly like NRxx. Low nibble CH1/CH3, high nibble CH2/CH4; zero when the channel or its
-  DAC is off.
-- **The frame sequencer is DIV-driven.** Falling edge of system-counter bit 12 (bit 13 at
-  double speed) — so `Sound::div_write()` (called from the MMU's `$FF04` path, after
-  `catch_up`) fires an event when the bit was set, and resets the phase. `div_apu_bit_set()`
-  derives the bit from `next_time - time` rather than keeping a counter copy; that identity
-  only holds because `div_write` resets both. **`Timer::wb($FF04)` must zero `internaldiv`
-  as well as `divider`** — leaving the sub-DIV counter running desynchronises everything
-  clocked off the same counter and made the whole `div_*` group non-deterministic.
-- **Power-on while the DIV-APU bit is set skips the first event** (`frame_seq_skip`), and a
-  pending skip counts as `first_half()` for the NRx4 extra-length-clock quirk. Both halves
-  are needed: without the skip `div_trigger_volume_10` fails, without the `first_half`
-  clause `div_write_trigger_10` does.
-- **The APU runs off the base clock.** `Sound::set_double_speed` (from
-  `MemoryManagementUnit::switch_speed`) halves the CPU T-cycles it is handed. Before this,
-  CGB double-speed games played an octave high *and* — because the audio queue paces the
-  emulator — ran at about half speed: Blargg `cpu_instrs` measured **33.7 fps / 48% of
-  frames late before, 59.70 fps / 0% after**.
-- **`grid_phase`** tracks the APU's position on its free-running 1 MHz (4 T) grid, kept
-  separately from `time` because `do_output` rebases `time` by `output_period` (24344 T,
-  not a multiple of 4). **APU power-on resets it** — that is what makes SameSuite's
-  measurements repeatable, since every subtest power-cycles the APU first.
-- **Measured trigger constants — do not "tidy" these:** `SQUARE_TRIGGER_DELAY = 6` T
-  (`channel_N_delay`), `SQUARE_TRIGGER_ALIGN = 0` (`channel_N_align`, double speed),
-  `SQUARE_RESTART_SPEEDUP = 4` T (`channel_N_restart` — a re-trigger is one tick shorter and
-  does *not* reset the duty position), `WAVE_TRIGGER_DELAY = 4` T (`channel_3_delay` **and**
-  Blargg `dmg_sound` 09/10/12 — this one is doubly constrained), `NOISE_TRIGGER_DELAY = 2`
-  with `NOISE_TRIGGER_ALIGN = 0`.
-- **Square duty output is a LATCH** (`duty_out`), not `DUTY_PATTERN[duty][duty_pos]`. It
-  updates only at a frequency-timer expiry, so a freshly powered channel reads 0 for its
-  whole first position. Power-off resets `duty_pos` *and* `duty_out`. The duty table is the
-  canonical Pan Docs one — ours used to be rotated, which sounds identical and is measurable.
-- **CH3 advances its position before fetching**, so a triggered wave channel starts at
-  sample **1**, never 0; and its `sample_latch` empties on power-off (a trigger does not
-  refill it). The stale latch is what `channel_3_first_sample` actually measures.
-- **CH4's trigger reloads only the NR43 divisor**, not the shift stage above it:
-  `delay = divisor + (period - divisor)/2`. Getting this right fixed all four LFSR tests at
-  once, because they reconstruct the LFSR from 128 consecutive samples and rotate wholesale
-  if the first sample is off.
-- **NRx2 does not reload the live volume** (`VolumeEnvelope::write_nrx2`) — only a trigger
-  does. Writing it while the channel plays is "zombie mode", and the rule is **CGB revision
-  E's**, derived from `channel_N_volume`'s twelve old/new direction+period combinations. The
-  gg8-wiki DMG formula does not fit and must not be substituted.
-- **Still failing (12), scoped not half-built** — see `docs/components/apu.md` §8: the long
-  half of `nrx2_glitch` needs the envelope's internal delay counter; the three sweep tests
-  turn on a 4 T race between the DIV-APU sweep tick and the register write after it (timer
-  territory); `channel_4_frequency_alignment`/`equivalent_frequencies` need the NR43 divisor
-  counter free-running too; SameBoy itself fails `channel_4_freq_change` and
-  `channel_1_sweep_restart_2`.
-- **Cost and audio quality re-measured after the work** (both required, both green):
-  APU cost `32.6 µs/frame` vs `31.4 µs` before — inside the noise of the measurement
-  (`cargo run --release --example apu_bench -- <rom> [frames]`, best-of-3 with/without a
-  player). Real-device latency, re-measured after rebasing onto the audio crew's
-  player-pacing fix (which is what moved the absolute numbers, not this work): three
-  consecutive 25 s runs on a single-speed ROM give **28.0–39.4 ms end to end, 0 underruns,
-  59.686 fps**, and `main` measured the same way in the same session gives 28.0–41.2 ms
-  with the identical run-for-run drop/held pattern (down to the same 2373 held and 4809
-  dropped samples). **Unchanged by the APU work** — which is the claim that matters here;
-  the absolute figure now belongs to the player, not to us.
-- **`testharness/audio_baseline.txt` was re-blessed** for this work. Judge it by the
-  properties, not the hash: sample counts identical (so the rate did not move), tone440 RMS
-  identical at 0.2467, and its measured pitch *improved* from 438.0 Hz to 440.0 Hz against a
-  ROM programming 439.84 Hz. dmg_sound still reads `01:ok..12:ok Passed`.
 
 ## Terminal frontend (TUI)
 
@@ -1084,88 +944,6 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
   [`docs/debugging.md`](docs/debugging.md)'s extension surface (the "frame rendered" event).
   Bump `telemetry::SCHEMA_VERSION` if a field is renamed, retyped or removed; additions are free.
 
-## What the TERMINAL costs per frame — and why `fps` used to read 59 forever (`src/screen/termcost.rs`)
-
-- **Full write-up, the measured ladder and the conformance record:
-  [`docs/rendering.md` §11](docs/rendering.md).** Read it before touching the TUI's pacing.
-- **`fps` counted draws WE issued, and nothing we do can make that number fall.** With the
-  kitty shm transport a frame is ~87 bytes and ~0.2 ms of our CPU, and 87 bytes never fills a
-  pty buffer — so the whole of the displayed frame a *user* experiences happens after our
-  timers stop. That is how "reports 59 fps but is clearly rendering slower at fullscreen" went
-  unexplained. **A counter that cannot go down is not a counter.**
-- **THERE IS NO PRESENT COUNT. Do not go looking for one again.** The kitty graphics
-  protocol's response acknowledges the *command* (received + decoded); the spec defines no
-  display acknowledgement. Write back-pressure measures nothing at 87 bytes. A DSR/CPR round
-  trip **is** a fence — the terminal answers only after working through everything written
-  before it, so it includes decode + upload + composite — but it still cannot report a frame
-  the terminal *coalesced* and never painted. So the honest number is a **ceiling** (how long
-  it takes to accept one frame), it is labelled as one everywhere it is shown, and the fix is
-  to stop issuing above it so `fps` becomes *true* rather than merely lower.
-- **The cost is the composited AREA, not the bytes.** Measured on WezTerm/5120×2880, kitty
-  `t=s`, every frame changed: wire flat at 86–88 B while the terminal goes 0.04 ms (0.29 Mpx)
-  → **2.97 ms at fullscreen (7.2 Mpx)** — **≈0.42 ms per megapixel**. The fixed round-trip
-  floor is 3.35 ms at 80×24 and 3.39 ms at fullscreen (flat, so subtracting a constant is the
-  right correction) and is measured once at startup by `probe_terminal`. **On this box the
-  terminal is not the bottleneck at any size that fits the screen** (~337 fps at fullscreen;
-  reaching a 16.74 ms budget would take ~40 Mpx). The captain's report did not reproduce here
-  — the deliverable is the instrument that answers it on *his* box, and paces if the answer is
-  below 59.7.
-- **THE MEASUREMENT TRAP, do not repeat it: read `TIOCGWINSZ` AFTER the terminal has
-  answered, never before.** A window asked for more cells than the screen holds is clamped,
-  and a terminal launched *for* this process reports the size it was asked for until it has
-  done so. Sizing the placement from that early value asks the terminal to composite an image
-  mostly off-screen, and the cost then rises with a rectangle nobody can see. That produced a
-  confident, wrong "30 ms/frame, ceiling 29 fps" first time round; a "640×176" window on this
-  display is really **268×60**. `render_bench --tty` now reads the size after its first CPR.
-- **The fence is SAMPLED, never per frame** (`TerminalCost::observe`): on a layout change and
-  every `RESAMPLE_AFTER` (3 s) thereafter, minimum of 3 fences, samples over 500 ms discarded
-  as an occluded window. A fence blocks, and blocking the loop every frame would starve the
-  audio queue (cushion ~41 ms) *and* add its own 3.4 ms round trip to every displayed frame —
-  fencing per frame is exactly why `render_bench --tty` tops out at 143 fps at fullscreen when
-  the terminal itself can do ~337. Consequence to remember: a sample taken while the screen
-  was static measures the *idle* marginal cost, which is optimistic; the 3 s re-check is what
-  makes it follow the scene.
-- **Use `crossterm::cursor::position()` for the fence, NOT `/dev/tty`.** It reads through
-  crossterm's own event source, which requeues non-matching events (`skipped_events` in
-  `crossterm/src/event/read.rs`), so a keypress arriving during the wait is delivered
-  afterwards. Reading `/dev/tty` directly is right at *startup* — before the loop owns stdin,
-  which is what `probe_terminal` does — and would silently eat keys anywhere after that.
-- Pacing is one line: `next_draw_at(t, our_cost.max(termcost.draw_interval(FRAME_TIME)))`.
-  Display frames are dropped; **emulated frames never are**. `GB_TERM_FENCE=off` opts out.
-- Status panel gains a **`Term`** row (`1.8ms ok` / `30.3ms ≤33fps` / **`n/a no CPR`**);
-  telemetry gains `terminal_ms`, `terminal_ceiling_fps` (**`null`, never `0`** when
-  unmeasured — "we did not ask" and "it is free" are opposite conclusions) and
-  `frames_issued`. Additions only, so no `SCHEMA_VERSION` bump.
-- **`cell_scale` does NOT enlarge anything that reaches the terminal**, despite what the HiDPI
-  note further up reads like. It multiplies the font size fed to the picker and the fit
-  divides by the same font, so the cell rectangle is *identical*; the payload is 160×144 at
-  every window size. All it moves is the pixel figure the status panel reports (and the legacy
-  `ratatui-image` path, where the encoded image really is sized in pixels). Pinned by
-  `cell_scale_does_not_change_what_the_terminal_is_asked_to_composite`.
-- Kitty offers **no cheaper placement for an unchanged-but-rescaled image**: re-transmitting
-  data under an id deletes that id's placements, and a frame that is *not* re-transmitted is
-  already free (zero bytes, zero terminal work). There is nothing between the two cases.
-- Adding the `Term` row is exactly the pressure the trainer crew's note further down warns
-  about: **the Status box must stay sized from its own line list** (`status.len() + 2`), never
-  a hand-counted constant, or the last row — a *plugin's* row — is clipped and a plugin is
-  active and invisible. Two crews reached that fix independently on the same day from
-  different rows; that is a sign it is the right one.
-
-## `Gameboy::frame` is capped at one frame's worth of cycles (`FRAME_TICKS_CAP`)
-
-- `Gpu::do_cycle` returns immediately while the LCD is off, so `gpu.updated` never fires and
-  `frame`'s loop had **no other exit**. For a ROM that leaves the screen off it did not return
-  *at all* — proven by deleting the cap, at which point
-  `a_frame_with_the_lcd_off_still_lasts_exactly_one_frame` times out. For a game that switches
-  the screen back on later it returned after **845,836** cycles instead of 70,224 — twelve
-  frames of emulation *and twelve frames of audio* charged to one 16.743 ms slot, which is why
-  playback discards ran to ~10,000 in the first 20 s of a cold boot (`docs/audio.md` §4c).
-- The cap is `70224 + 64`. The margin means that with the LCD **on** the `updated` break
-  always arrives first and the cap is unreachable, so it is byte-for-byte the old behaviour —
-  which is what makes it safe to apply unconditionally rather than peeking at the LCD. Only
-  the LCD-off case changes. Verified: `testroms`, `audiocapture`, `savestate`, `battery` and
-  `trainer` baselines all unchanged.
-
 ## Config parsing — fail loudly
 
 - `config.toml` invites TOML syntax and TOML has **two** string forms. Single-quoted values
@@ -1226,101 +1004,29 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 - **The TUI cannot stream to stdout** — `ratatui` owns it. It refuses with a pointer to a FIFO
   or to `examples/video_out.rs`. The **desktop** frontend can (`--video-out -`), and that is the
   headline pipe command.
-- **The emulator DRIVES `/dev/videoN` natively now** (`video::v4l2::sink`) — the old "we refuse
-  a V4L2 node and hand you an `ffmpeg` recipe" note is dead. `video_out = "/dev/video10"`, press
-  `v`, pick the camera in Chrome/Meet/Discord/OBS. `tools/virtual-camera.sh` still works and is
-  still the answer on macOS/Windows or a box with no v4l2loopback, but it is not the Linux route.
-  **This box DOES have v4l2loopback** (`/dev/video10`, `card_label="Game Boy"`, `exclusive_caps=1`,
-  made permanent via `/etc/modules-load.d` + `/etc/modprobe.d`); the old "no v4l2loopback here"
-  note was stale. `/dev/video1` and `/dev/video2` are a real UVC webcam.
-- **A write that returns success proves NOTHING on a V4L2 node.** An un-negotiated `write(2)` is
-  accepted and produces nothing a consumer can read — this exact mistake was made and reported
-  as a working camera. The only acceptable proof is *a consumer decoding the device*
-  (`ffplay -f v4l2 -i /dev/video10`, or `ffmpeg -f v4l2 -i … -frames:v N out_%02d.png` and
-  actually looking at the PNGs). Same discipline as the terminal-render screenshots.
-- **The sequence is QUERYCAP → S_FMT → write**, and **what `S_FMT` returns is authoritative**:
-  the driver may change the geometry, and `bytesperline` is the row stride which is *not*
-  necessarily `width * 2` (frames are re-strided if it differs), `sizeimage` is the exact
-  write length.
-- **Raw `ioctl`s through the existing `libc` feature, no new crate — deliberate.** `v` and
-  `v4l2-sys-mit` are permissive but link **libv4l2**, a *system* library: precisely the
-  fresh-clone-fails trap that ALSA/`cpal` already cost this repo. Hand-written UAPI structs are
-  made safe by a **compile-time** check: an `ioctl` number encodes `sizeof` its struct, so
-  `VIDIOC_QUERYCAP`/`VIDIOC_S_FMT` are computed from our definitions and `const`-asserted
-  against the kernel's published `0x80685600`/`0xc0d05605`. Get a field wrong and the build
-  stops. Gated `#[cfg(all(target_os = "linux", feature = "libc"))]`.
-- **`exclusive_caps=1` makes a loopback node report CAPTURE while a producer is attached.** So
-  "this is a capture device" means two different things and must not be one error: on a *real*
-  webcam it is permanent (wrong node); on a loopback node it means **someone else is already
-  streaming to it** and clears on its own. Told apart via sysfs — a loopback node canonicalises
-  under `/sys/devices/virtual/`, a USB/PCI camera never does (`v4l2::is_loopback`). The same
-  sysfs fact fixed `tools/virtual-camera.sh`, whose device search checked `device/driver` — a
-  symlink loopback nodes do not have, so it reported "no loopback device" on a box that had one.
-- **A v4l2loopback device cannot be renamed while it exists, and this is now checked, not
-  assumed**: `/sys/class/video4linux/videoN/name` is `-r--r--r--` root-owned, the only writable
-  sysfs attributes are `dev_debug`/`format`/`max_openers`, `modinfo` lists no other route, and
-  upstream `v4l2loopback-ctl` has `add`/`delete`/`set-fps`/`set-caps`/`set-timeout-image` and no
-  rename. `VIDIOC_S_FMT` negotiates a format, never an identity. **So the camera cannot be named
-  after the game from inside the emulator** — it needs delete+add as root, which drops every
-  consumer, and a per-launch privilege escalation is not something to ship. Pick a static
-  `card_label` at setup; `video_device = /dev/videoN` still *verifies* label vs cartridge title.
+- **The emulator never writes to `/dev/videoN`.** A V4L2 output device needs `VIDIOC_S_FMT`
+  before the first write, and that cannot be tested without the kernel module (root to install)
+  — so `video_out = /dev/video*` is refused with the exact `ffmpeg -f v4l2` recipe.
+  `tools/virtual-camera.sh` is the supported route. This box has **no v4l2loopback** (only a
+  real UVC webcam on video0/1), so the camera end has never been run here; everything up to the
+  device has (YUYV 640×480 bytes decoded by ffmpeg).
+- **A v4l2loopback device cannot be renamed while it exists** (upstream `v4l2loopback-ctl` has
+  `add`/`delete`/`set-fps`/`set-caps`/`set-timeout-image` and no rename) — the label comes from
+  `card_label` at modprobe time or `v4l2loopback-ctl add -n`. So `video_device = /dev/videoN`
+  only *verifies*: sysfs label vs cartridge title, with the delete+add commands if they differ.
 - **Naming:** `clean_title` (human/device label) and `file_safe_title` (filename) live in
   `video.rs` — cartridge titles are 16 padded bytes and can hold anything. A recording is named
   `TITLE-stamp-WxH-fmt.raw` so the consuming `ffmpeg` arguments can be read off the filename;
   `%t`/`%s` expand in any configured path; a directory destination gets the same treatment.
-- **`v` toggles the stream/camera live, `V` records a timestamped file**, `c`/`C` (and `F2`) take screenshots — displayed look and raw
+- **`v` toggles the stream live**, `c`/`C` (and `F2`) take screenshots — displayed look and raw
   framebuffer. Screenshots use the **selected** upscale factor, not `transmit_factor` (with
   `transmit_scale = auto` those differ on purpose), and go through the `image` crate, not
   `termimage::png_rgb_into` — the latter is *stored*-deflate (uncompressed), right for a 60 Hz
   wire and wrong for a file someone keeps.
 - Costs measured over 3000 frames (emulation alone 0.216 ms/frame): rgba 160×144 **+0.007 ms**,
   yuyv 640×480 +0.55 ms, yuyv 640×480 with the LCD upscaler +1.58 ms — all inside 16.74 ms.
-
-### NO MEDIA SINK MAY EVER BLOCK THE EMULATOR (the defect this cost us)
-
-- **`video_out` pointing at a FIFO hung the emulator at startup**, in `open(2)`, *before the
-  terminal UI existed* — one line of output and a process only `kill` could end (`wchan` =
-  `wait_for_partner`). It was configured exactly as our own docs told people to. The old note
-  here said writes are "blocking: a stalled consumer back-pressures the emulator" as if that
-  were a design; it is the same mistake the audio player made (`docs/audio.md` §4c), and it is
-  now forbidden for every sink.
-- **Three rules, all enforced in `src/video.rs`:** (1) the open never blocks — a FIFO is
-  `O_NONBLOCK` and `ENXIO` is the *state* `StreamState::Waiting`, and a camera's
-  open/`S_FMT` are bounded driver calls; (2) it is **retried every `RETRY_EVERY` (250 ms)**
-  while armed, so emulator-first and consumer-first are equally fine, and a consumer that quits
-  (`EPIPE`) drops back to `Waiting` and the next one is picked up; (3) writes are non-blocking
-  and a slow consumer **loses frames** (`VideoStats::stalled`), never frame time.
-- **`SIGPIPE` is set to `SIG_IGN` before the first byte.** Rust's runtime does this for `bin`
-  targets but the FFI build is a `cdylib` where it has not run, and a consumer quitting is a
-  *routine* event here.
-- **`rawvideo` is positional, so a partial write must be finished before the next frame starts**
-  — otherwise a consumer that got 40 % of frame N and then frame N+1 is desynchronised for the
-  rest of the run. `Fifo::tail` holds the remainder; `VideoOut::idle` drains it whatever the
-  pacing mode.
-- **Chosen non-blocking over "defer the open until `v` is pressed"** because deferring only
-  moves the hang: a configured stream auto-arms at startup, and pressing `v` inside the
-  alternate screen would hang with the UI up and no way to cancel. Non-blocking also makes late
-  attach fall out for free.
-- **`Intent` (`Stream` vs `Record`) is derived from what the destination *is*** — a FIFO or a
-  V4L2 node is a stream, a regular file is a recording — and the Status row now says **which**
-  and **where** (`off` · `◌ wait video10` · `● LIVE 12M video10` · `● REC 12M …raw`). The row
-  used to say `LIVE` for a recording, which is how "the camera is broken" turned out to be
-  "frames were going to `~/Videos` in the wrong format all along". **`v` streams, `V` records** —
-  two jobs, two keys.
-- **A FIFO stream publishes a sidecar descriptor `<fifo>.gbvideo`** (`video::descriptor`) with
-  width/height/format/fps/title, because `rawvideo` carries none of it in-band and the numbers
-  were otherwise configured twice in two programs and silently decoded as garbage when they
-  drifted. `tools/virtual-camera.sh` reads it. A V4L2 destination needs none of this: it
-  negotiates, and it **ignores `video_format`/`video_size`** (YUYV, 640×480 default) rather than
-  keeping a default that cannot work.
-- Regression tests to keep: `a_configured_fifo_with_no_consumer_does_not_stop_the_emulator_starting`
-  (tui), `a_fifo_with_no_reader_does_not_block_startup`,
-  `a_consumer_that_arrives_late_is_picked_up`,
-  `a_consumer_that_leaves_drops_back_to_waiting_and_can_be_replaced`,
-  `a_stalled_consumer_costs_frames_never_emulation_time`,
-  `a_partial_write_is_finished_before_the_next_frame_starts`,
-  `a_missing_camera_does_not_stop_the_emulator_and_says_what_to_install`,
-  `the_v4l2_ioctl_numbers_match_the_kernel_headers`.
+  Writes are **blocking**: a stalled consumer back-pressures the emulator, a closed pipe
+  disables the sink permanently rather than erroring every frame.
 - Telemetry gained a `"video"` object (`frames`/`duplicated`/`dropped`/`bytes`/`ms`) — an
   addition, so no `SCHEMA_VERSION` bump. The invariant to assert: `video.frames ≈ elapsed ×
   59.7275` under `realtime` pacing, whatever `fps` does.
@@ -1537,37 +1243,6 @@ another branch; when those land, this belongs beside them.)
 - **`PokemonSource` keeps the *source* of the Pokémon separate from the protocol.** That is the
   load-bearing abstraction: a file, a converter, a remote peer and a live partner all become
   interchangeable, which is what makes cross-generation and remote trading possible later.
-- **`$6F` — the cancel nybble — MUST be echoed from EVERY phase, and it is the only way out of
-  the Cable Club.** The Trade Center has **no warp events at all**
-  (`data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads 0 at run time), so backing out of
-  the trade-selection screen *is* leaving the room. `.cancelMenuItem_APressed`
-  (`engine/link/cable_club.asm`) only reaches `ReturnToCableClubRoom` when the round comes back
-  `$F`, and three things make this a whole-state-machine obligation rather than one branch of
-  the selection round: `wSerialExchangeNybbleSendData` is a **latch** (later syncs keep sending
-  `$6F` until `TradeCenter_SelectMon` resets it to `1`); a round is **11–12 transfers of the same
-  byte** and the game keeps the *last* one; and a wrongly-answered round is **retried from
-  whatever phase the partner has since moved into** — so answering it in one phase only makes the
-  *second* attempt unanswerable. Symptom of getting it wrong: the player presses A on CANCEL for
-  ever (measured: 2,475 presses, `wLinkState` pinned at `$32`), game rendering and clock running.
-  `LinkPartner::feed_cancel` handles it uniformly; **`Exchanging` is the one exclusion** — inside
-  a block `$6F` is party data and must come from our stream. A cancel also must **not** count as
-  a trade (in `Confirm` it used to fall into the accept arm and answer `$62`).
-- **`CloseLinkConnection` never reaches the plugin — do not go looking for it there.** It puts
-  `$02` in `SB` and starts an **externally** clocked transfer (`SC = $80`), and `Serial::wb`
-  only offers a byte to a plugin when `SC & $81 == $81`. That is correct: a real partner that is
-  not clocking transfers nothing, and the game's status stays `CONNECTION_NOT_ESTABLISHED`.
-- **`GB_GEN1_LINK_TRACE=1` records the tail of the wire** (`Gen1LinkPartner::trace()`, last 4096
-  `(sent, replied, phase)` triples). Every interesting link failure is a *reply to one byte*, so
-  reason from the trace, not from the state diagram.
-- **A quick-load is a legitimate mid-session desync, and the cancel is the escape from it.**
-  F5/F8 in the TUI call `PluginHost::reset`, dropping the partner to `Phase::Handshake` while the
-  game is still linked (by design — plugin state is not machine state). That is exactly why the
-  cancel must work from an unexpected phase. Reproduce with
-  `examples/gen1_trade.rs --quick-load`.
-- **A player who is stuck in the Cable Club can safely reset.** `TradeCenter_Trade` calls
-  `predef SavePartyAndDexData` right after "Trade completed!" — pokered's own comment is *"this
-  allows reset into Pokecenter"* — so the received Pokémon is already in SRAM and a reset returns
-  the player to the Pokémon Center with it.
 
 ### Verifying a trade (`examples/gen1_trade.rs`) — hard-won gotchas
 
@@ -1588,85 +1263,6 @@ another branch; when those land, this belongs beside them.)
 - **`wCurMap` is populated by `TryLoadSaveFile` at the top of the main menu**, long before
   CONTINUE is chosen, so it cannot mean "we are in the game". Same trap during Oak's speech.
 - **`CableClubLeftGameboy` requires the player to be facing RIGHT** and to be the clock master.
-
-## Battle control — starting a Gen 1 battle from outside (`src/plugin/battle/`)
-
-**Full technique + guarantees: [`docs/gen1/battle-control.md`](docs/gen1/battle-control.md);
-the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before touching this.
-
-- **The whole trigger is one byte.** `OverworldLoop` (`home/overworld.asm`,
-  `.checkForOpponent`) polls `wCurOpponent` (`$D059`); nonzero → `NewBattle` → `InitBattle`.
-  Below `OPP_ID_OFFSET` (200) it is a species (wild, level from `wCurEnemyLevel` `$D127`), at or
-  above it a trainer class + 200 with the roster in `wTrainerNo` (`$D05D`). **This is what the
-  game's own debug menu does** (`engine/debug/debug_menu.asm`) — not a discovered trick.
-- **It is polled ONLY by the overworld loop.** Writing it inside a menu or a text box queues
-  the battle silently. The first time this bit, a scripted run had mashed START/A through the
-  title screen and the last START left the START menu open. `NewBattle` also refuses on a
-  dungeon warp, during a cutscene, and where a map script set `BIT_NO_BATTLES`.
-- **THE LEGITIMACY TRAP, and the reason "well-formed" is not enough:**
-  `CheckForDisobedience` (`engine/battle/core.asm`) compares `wPartyMon1OTID` with `wPlayerID`
-  and treats a mismatch as a **traded** Pokémon — a badgeless player is obeyed only to level 10.
-  An injected level 50 Charizard with a made-up trainer id answers *"CHARIZARD won't obey!"* and
-  wastes the turn. The injected party must inherit the running game's `wPlayerID` (`$D359`,
-  big-endian) and `wPlayerName` (`$D158`). Generalise it: the game cross-checks between
-  structures, so injecting into one without the other is correct for the state you created and
-  wrong for the state you meant.
-- **Patching state the engine is still writing is a race, and a delay does not fix it.**
-  `LoadEnemyMonData`/`ReadTrainer` fill `wEnemyMon`/`wEnemyMons` inside `InitBattle`, not on a
-  frame boundary. Keep writing until the bytes **read back unchanged at the start of a frame** —
-  an observation, not a guess. Capped at 40 frames so a game that never settles reports it.
-- **Save safety, enforced not promised:** every write goes through one door that refuses
-  anything outside WRAM/HRAM (`wram::is_writable`) and *counts* refusals, so cartridge RAM —
-  which is what a `.sav` is written from — is unreachable; the exact byte ranges written are
-  snapshotted and restored when the battle ends; a preset with no `player =` line never touches the
-  party — nothing to restore. Pinned by pointing the write door at `$A000` and checking the byte does not move.
-- **Addresses are re-derived from the cartridge before the plugin is constructed**
-  (`wram::verify`): `ld [nn],a` is `EA lo hi`, so the address is the operand. **Match whole
-  code shapes, never short byte runs** — `3E 01 EA ?? ?? CD` and `F0 04 47 F0` each occur
-  hundreds of times in a megabyte, and `Random_` contains its own four-byte prefix twice, so
-  requiring global uniqueness of a prefix fails on the real ROM. `InitWildBattle` is searched in
-  a 256-byte window after `InitOpponent` rather than cartridge-wide.
-- **Cinematics are screen-driven, not frame-driven.** `await`/`press-until` compare against
-  `wTileMap` decoded as text. `press-until` presses at the **end** of each period: Gen 1's
-  `HandleMenuInput` delays several frames after accepting a button and does not see one that
-  arrives inside that delay — which looks exactly like dropped input. **A and B are not
-  interchangeable**: B closes menus and can never open one, so B before a move is chosen backs
-  out of the move list.
-- **Reproducibility, stated precisely.** `Random_` mixes `rDIV` in per call, so writing the seed
-  cannot fix an individual roll; but emulation is deterministic, so *same starting state + same
-  script ⇒ bit-identical frames*. **Measured: three runs, 1219 frames, FNV hash
-  `dac74ad86f8e1854`, identical.** Design the clip so no roll can change it — and know that
-  Gen 1's accuracy check gives even a 100 %-accuracy move a **1-in-256 miss**
-  (`MoveHitTest`, and the disassembly says so in its own comment).
-- **Run it:** `cargo run --release --example gen1_battle -- --check` (every preset resolves
-  against the cartridge — worth having in CI), `--preset <name> --shots <dir>`, `--repeat 3`,
-  `--video -`, `--save-state <file> --save-at <frame>`. It starts a **new game** (bedroom, no
-  party — which is why presets supply one), so it needs no save file at all, and it copies the
-  ROM into `target/` first. Verified: it leaves `~/roms` byte-identical.
-- TUI: `plugins = gen1-battle`, then **`B`** fires the selected preset and **`N`** cycles.
-  `battles = <path>` / `GB_BATTLES` for your own file.
-- **`Capability::CONTROL_INPUT` is separate from `WRITE_MEMORY` on purpose** — pressing a button
-  is something the game sanctions (every byte it changes, it changes through its own code); a
-  poke is not. A plugin scripting a sequence should not have to ask for the second.
-
-## The Gen 1 mechanics & hacking area (`docs/gen1/`)
-
-- **[`docs/gen1/README.md`](docs/gen1/README.md) is the index and it owns the standards.** Linked
-  from the README so it is discoverable. Pages: memory map, battle control, reading the screen,
-  driving the link cable, sharp edges, and a stub for agent play.
-- **Standards, because the value is that a reader can trust it:** cite `pret/pokered` by **symbol
-  name** (a symbol survives; a bare hex address is wrong for Yellow and unsearchable); grade every
-  address as *symbol file* / *walked* / *read out of the cartridge* and say which; explain the
-  **mechanism** so a reader can invent the next technique rather than repeat ours; and never put
-  game *data* in the repository (facts and formats yes, assets never — not even as a fixture).
-- **A walk through `ram/wram.asm` is only usable if it ENDS on a second known symbol.** The
-  enemy-party walk starts at `wEventFlags` `$D747` and lands exactly on `wPlayTimeHours` `$DA41`;
-  that landing is the proof, and it must be written down beside the walk.
-- **Two live investigations have homes waiting, named in the index**: the Colosseum link-battle
-  scout → `link-from-outside.md` §"The Colosseum"; the button-pressing agent → `agent-play.md`.
-  The Colosseum section already carries the disassembly's answer — `CableClubLeftGameboy`
-  (`engine/pokemon/bills_pc.asm`) branches on **`wCurMap`** alone (`TRADE_CENTER` → trade, any
-  other map → battle), so the partner is never consulted — flagged as *derived, not yet observed*.
 
 ## Conformance GitHub Action — scoring *foreign* emulators (`tools/conformance/`, `.github/actions/conformance/`)
 
@@ -1729,106 +1325,3 @@ the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before
   per-fix convention at the top of this file and `docs/conformance-notes.md`. A check with no
   `behaviour`, no `explain` or no `hardware` citation **fails the runner's test suite** — the
   explanation is the product, so it is enforced.
-## Wild-encounter shiny verdict (`src/trainer/encounter.rs`)
-
-- **Full write-up: [`docs/trainer.md`](docs/trainer.md#the-wild-encounter-banner).** The claim is
-  strictly *"would be shiny if traded to Gen 2"* — **Gen 1 has no shiny Pokémon at all**, and
-  overclaiming would make the captain skip a real one or waste a Ball. Every banner string at
-  every terminal width carries the qualifier, asserted by
-  `the_banner_never_says_a_gen_1_pokemon_is_shiny` (renders widths 8..200 and greps).
-- **Why the answer is available at the encounter, and survives capture** (the three citations
-  that make the feature honest): wild DVs are two `BattleRandom` bytes written to
-  `wEnemyMonDVs` by `LoadEnemyMonData` (`pokered/engine/battle/core.asm`) before the battle is
-  drawn; `_AddPartyMon`'s `.copyEnemyMonData` branch (`engine/pokemon/add_mon.asm`) copies them
-  **verbatim** into the party entry on capture — nothing is re-rolled; and the Gen 2 rule
-  (`CheckShininess`, pokecrystal `engine/gfx/color.asm`) reads only DVs.
-- **A trainer battle gets no verdict, and that hides nothing**: `LoadEnemyMonData` gives every
-  trainer Pokémon the *fixed* pair `ATKDEFDV_TRAINER`/`SPDSPCDV_TRAINER` = `$98`/`$88`, which is
-  not the shiny pattern. The old man's tutorial (`wBattleType == BATTLE_TYPE_OLD_MAN`) is a real
-  wild battle with real rolled DVs but the Weedle is never added to the party, so it is excluded
-  too. `encounter::applies(is_in_battle, battle_type)` is one pure function, tested over all
-  65,536 flag pairs.
-- **Static/scripted encounters (Snorlax, the birds, Mewtwo, Voltorbs, tower ghosts) are covered
-  for free** — `InitOpponent` falls through to `InitWildBattle`. **Gift/starter/fossil/trade
-  Pokémon are not, and cannot be**: they never enter a battle, and `_AddPartyMon` rolls their
-  DVs (`; Not wild.` branch) at the instant they become yours. The party panel's `★` is the
-  retrospective answer; there is no earlier moment to warn at.
-- `wBattleType` is `$D05A`, derived by *walking* `ram/wram.asm` from `wIsInBattle` `$D057`
-  through `wPartyGainExpFlags` (1 byte) to `wCurOpponent` `$D059` — and `$D059` is
-  independently verified, which is the walk's own proof.
-- **`wIsInBattle == $FF` means the player blacked out** (`home/overworld.asm`,
-  `.allPokemonFainted`), not a trainer battle. `BattleKind::from_flag` now maps it (and every
-  value the game never writes) to `None`. **Symptom before the fix:** a battle panel — opponent,
-  level, HP, stats, moves, all stale garbage from the lost battle — displayed *in the
-  overworld*, with the same confidence as live data. `ram/wram.asm` documents **four** values
-  above the label ("lost battle, this is -1"); the reader had a catch-all `_ => Trainer` arm
-  that swallowed the sentinel. **No test ROM catches it and none can** — the cartridge was
-  entirely correct; the defect was in a *consumer* of emulated state, which is the same blind
-  spot as the render bugs. The test that catches it iterates **every** byte `3..=$FF`, not the
-  named cases. Full record: [`docs/conformance-notes.md`](docs/conformance-notes.md)
-  (2026-08-14). Standing lesson for any adapter: a catch-all arm over a documented enum is a
-  defect until the values it swallows are enumerated.
-- **Cost:** the encounter watch runs with the panel **closed** — that is the point, an encounter
-  is when nobody has a stats panel up — and costs **one `peek` of `wIsInBattle` at ~10 Hz** in
-  the overworld. The verdict is *latched* on the first valid read and held until the battle
-  ends, so it never re-reads and cannot flicker. `looks_populated` guards the window where
-  `InitWildBattle` has set the flag but `LoadEnemyMonData` has not run yet.
-- **Independent of the boot model** (checked on both, not assumed — and note `Model::Auto`
-  resolves Red/Blue to `GbMode::Classic`, so DMG is now the *default* for this cartridge):
-  `wEnemyMon` `$CFE5` is in the *fixed* WRAM bank; `wIsInBattle`/`wBattleType`/the party live in
-  `$D000-$DFFF`, whose `wrambank` is initialised to **1 in both `MemoryManagementUnit::new` and
-  `new_cgb`** and only moves on an `SVBK` write a DMG game never makes; `Game::detect` reads the
-  cartridge header, not the model; and Red/Blue has no CGB code path. Verified by running the
-  wild-encounter harness under **both `GB_MODEL=dmg` and `GB_MODEL=cgb`** — 3/3 verdicts agreed
-  each time. **But `BattleRandom` is seeded from `DIV` and the frame counter, so the particular
-  species and DVs a scripted run produces are NOT reproducible** — not across models, and not
-  across *emulation-timing* changes either: the Mooneye core-timing work (real timer, 5-cycle
-  interrupt dispatch, timed OAM DMA) moved every one of them again. Never pin a DV value in a
-  test; pin the agreement between the verdict and memory.
-- **The verdict costs the Status sidebar no row.** It rides in the trainer plugin's existing
-  `Plugin` row via `Plugin::status()` — a second place it is visible with the panel closed —
-  and is held to the same wording rule there (`the_plugin_status_line_carries_the_verdict`).
-  The Status box itself is now sized from its own line list rather than a hand-counted
-  constant: it was `13 + plugins.len()` against a twelve-line list, so with two plugins
-  attached the second one's row was clipped and a plugin was *active and invisible*, which
-  `docs/plugins.md` §4 promises cannot happen (its own test was failing on `main`). Rows keep
-  being added to that panel — `Audio` most recently — so
-  `every_status_row_survives_an_audio_row_and_a_live_encounter` pins the worst case: two
-  plugins **and** a live encounter, every row still present at three window sizes. **Adding a
-  Status row must never silently cost a plugin its row again.**
-- The banner gets **its own terminal row** (top row in fullscreen, under the header otherwise)
-  and is in `ui_signature`, because a row appearing moves the picture — all the
-  `docs/terminal-render.md` rules apply.
-
-### Driving a real wild encounter headlessly — two traps
-
-Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
-
-1. **You cannot teleport the player by editing `wCurMap` in the save.** `LoadSAV`
-   (`pokered/engine/menus/save.asm`) sets `BIT_NO_PREVIOUS_MAP` (bit 7) on `wCurMapTileset`
-   right after restoring the main data, and `LoadMapHeader` (`home/overworld.asm`) sees that
-   bit, clears it and **returns without loading the header** — the whole `wCurMapHeader` block
-   lives in `sMainData`, so a continue trusts it. Change the map without the header and the game
-   reads the new map's blocks through the old map's `wCurMapDataPtr`: observed as a jump to
-   `rst $38` or an illegal opcode within a second. Clearing the bit in the save does not help —
-   `LoadSAV` sets it *after* the copy. **Walk instead**; every header is then loaded by the game.
-2. **Oak stops a new game at the north exit of Pallet Town.** `PalletTownDefaultScript`
-   (`scripts/PalletTown.asm`) opens `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`, so
-   setting that one bit skips the whole introduction, starter choice and rival battle.
-   `wEventFlags` is **`$D747`**, derived by walking `ram/wram.asm` backwards from the verified
-   `wPlayTimeHours` `$DA41` — the walk lands exactly on `wGrassRate` `$D887` (the union's first
-   member, an independent check) and `wEventFlags` is the 320-byte `flag_array NUM_EVENTS`
-   before it (NUM_EVENTS = 2560, counting `const`/`const_skip`/`const_next`).
-   `EVENT_FOLLOWED_OAK_INTO_LAB` is the first `const` after `const_def`: byte 0, bit 0.
-- Route: bedroom `(1,7)` stairs → 1F `(7,2)` door → step **off** the Pallet Town doorstep
-  (standing on it, pressing Up walks back inside) → east along `y=7` → north at tile `x=10`
-  (block `0B`, the only gap in row 0 of `maps/PalletTown.blk`) → Route 1, arriving at `(34,10)`
-  in grass. Pace **by coordinate**, not by alternating Up/Down: a press that only turns the
-  character costs a step and moves nothing, so blind alternation drifts north out of the grass.
-- After fleeing a battle the "Got away safely!" box is still up and **swallows every direction
-  key** — press through it before walking, or the next hundred steps move nothing. Use **B, not
-  A**: both advance a text box, but B also closes a menu and can never open one, and an A one
-  frame after the box closes opens the START menu, which then eats every direction key for the
-  rest of the run. That failure is invisible unless the check is strict about how many
-  encounters it wanted — **it is** (`seen < want` is a FAIL), and the pacing loop nudges itself
-  free after eight motionless steps and reports how often it had to.

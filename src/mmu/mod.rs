@@ -557,18 +557,7 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF70 => self.wrambank as u8,
             0xFF72..=0xFF73 => self.undocumented_cgb_regs[address as usize - 0xFF72],
             0xFF75 => self.undocumented_cgb_regs[2] | 0b10001111,
-            // CGB PCM12/PCM34: the live 4-bit digital output of each
-            // channel, low nibble first (CH1/CH3 low, CH2/CH4 high). Sample
-            // accurate, so the APU has to be caught up to this very cycle.
-            0xFF76..=0xFF77 => {
-                #[cfg(not(target_arch = "wasm32"))]
-                return self.sound.as_mut().map_or(0x00, |s| {
-                    s.catch_up();
-                    s.rb(address)
-                });
-                #[cfg(target_arch = "wasm32")]
-                0x00
-            }
+            0xFF76..=0xFF77 => 0x00, // CGB PCM registers. Not yet implemented.
             0xFF80..=0xFFFE => self.zram[address as usize & 0x007F],
             0xFFFF => self.inte,
             // Prohibited region FEA0-FEFF and any unmapped I/O read back 0xFF.
@@ -626,21 +615,7 @@ impl<'a> MemoryManagementUnit<'a> {
             }
             0xFF00 => self.keypad.wb(value),
             0xFF01..=0xFF02 => self.serial.wb(address, value),
-            0xFF04..=0xFF07 => {
-                // A DIV reset is also an APU event: the frame sequencer is
-                // clocked by the falling edge of a DIV bit, so zeroing DIV
-                // while that bit is set clocks it (Sound::div_write). The APU
-                // must be caught up to this cycle first, exactly as for a
-                // direct NRxx access.
-                #[cfg(not(target_arch = "wasm32"))]
-                if address == 0xFF04 {
-                    if let Some(ref mut sound) = self.sound {
-                        sound.catch_up();
-                        sound.div_write();
-                    }
-                }
-                self.timer.wb(address, value)
-            }
+            0xFF04..=0xFF07 => self.timer.wb(address, value),
             0xFF10..=0xFF3F => {
                 // Catch-up before the write so the frame-sequencer position
                 // the write interacts with is current (see Sound::catch_up).
@@ -690,13 +665,6 @@ impl<'a> MemoryManagementUnit<'a> {
                 self.gbspeed = GbSpeed::Single;
             } else {
                 self.gbspeed = GbSpeed::Double;
-            }
-            // The APU is wired to the unmodified 4.194304 MHz clock, so it
-            // must halve the CPU T-cycles it is handed at double speed —
-            // otherwise every sound plays an octave high in CGB fast mode.
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(ref mut sound) = self.sound {
-                sound.set_double_speed(self.gbspeed == GbSpeed::Double);
             }
         }
         self.speed_switch_req = false;

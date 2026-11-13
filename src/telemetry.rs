@@ -150,20 +150,6 @@ pub struct FrameSample {
     pub frames_dropped: u64,
     /// Escape-sequence bytes handed to the terminal this frame.
     pub tx_bytes: usize,
-    /// Cumulative display frames actually written to the terminal — `fps`
-    /// counts draws we *issued*, and a deduplicated frame issues nothing.
-    pub frames_issued: u64,
-    /// The other half of a displayed frame: what the **terminal** costs to
-    /// accept one, in milliseconds, measured by a round-trip fence. `None` when
-    /// the terminal cannot be asked (it does not answer `CSI 6 n`, or fencing
-    /// is off) — which is a real answer and must not be silently rendered as 0.
-    ///
-    /// **This is not a present count.** No terminal protocol reports one; see
-    /// `crate::screen::termcost`. It is a ceiling: `terminal_ceiling_fps` is the
-    /// most displayed frames a second this terminal could possibly show at the
-    /// current window size, and `fps` above should never exceed it.
-    pub terminal_ms: Option<f32>,
-    pub terminal_ceiling_fps: Option<f32>,
     // Audio, when a host stream is attached (all zero otherwise).
     pub audio: Option<AudioSample>,
     /// Video-out, when a raw frame stream is attached (`None` otherwise).
@@ -429,25 +415,6 @@ pub fn write_frame_json(out: &mut String, ctx: &Context, s: &FrameSample) {
         ",\"frames_skipped\":{},\"frames_identical\":{},\"frames_dropped\":{},\"tx_bytes\":{}",
         s.frames_skipped, s.frames_identical, s.frames_dropped, s.tx_bytes
     );
-    // The terminal's half of the frame. Emitted as `null` rather than 0 when it
-    // could not be measured: "we did not ask" and "it costs nothing" are
-    // opposite conclusions and a consumer must be able to tell them apart.
-    // Addition only, so no SCHEMA_VERSION bump — see docs/telemetry.md.
-    let _ = write!(out, ",\"frames_issued\":{}", s.frames_issued);
-    match s.terminal_ms {
-        Some(v) => {
-            let _ = write!(out, ",\"terminal_ms\":{:.3}", v);
-        }
-        None => out.push_str(",\"terminal_ms\":null"),
-    }
-    match s.terminal_ceiling_fps {
-        Some(v) if v.is_finite() => {
-            let _ = write!(out, ",\"terminal_ceiling_fps\":{:.2}", v);
-        }
-        // An immeasurably fast terminal is not a ceiling of "infinity" in JSON,
-        // which has no such literal; it is the absence of a ceiling.
-        _ => out.push_str(",\"terminal_ceiling_fps\":null"),
-    }
     match s.audio {
         Some(a) => {
             let _ = write!(
@@ -616,9 +583,6 @@ mod tests {
             frames_identical: 7,
             frames_dropped: 3,
             tx_bytes: 92_160,
-            frames_issued: 40,
-            terminal_ms: Some(30.3),
-            terminal_ceiling_fps: Some(33.0),
             audio: Some(AudioSample {
                 queue_depth: 6100,
                 underruns: 0,
@@ -654,9 +618,6 @@ mod tests {
             "\"frames_identical\":7",
             "\"frames_dropped\":3",
             "\"tx_bytes\":92160",
-            "\"frames_issued\":40",
-            "\"terminal_ms\":30.300",
-            "\"terminal_ceiling_fps\":33.00",
             "\"queue_depth\":6100",
             "\"sample_rate\":48000",
         ] {
@@ -664,35 +625,6 @@ mod tests {
         }
         assert!(line.ends_with('}') && line.starts_with('{'));
         assert!(!line.contains('\n'));
-    }
-
-    /// "We could not measure the terminal" and "the terminal is free" are
-    /// opposite conclusions. Emitting 0 for the first is exactly the class of
-    /// lie this field exists to end, so it must be `null`.
-    #[test]
-    fn an_unmeasured_terminal_cost_is_null_not_zero() {
-        let mut out = String::new();
-        write_frame_json(&mut out, &ctx(), &FrameSample::default());
-        assert!(out.contains("\"terminal_ms\":null"), "{out}");
-        assert!(out.contains("\"terminal_ceiling_fps\":null"), "{out}");
-    }
-
-    /// A terminal fast enough not to be the bottleneck has no finite ceiling,
-    /// and JSON has no infinity literal. `null` is the only valid rendering.
-    #[test]
-    fn an_infinite_ceiling_is_null_not_invalid_json() {
-        let mut out = String::new();
-        write_frame_json(
-            &mut out,
-            &ctx(),
-            &FrameSample {
-                terminal_ms: Some(0.0),
-                terminal_ceiling_fps: Some(f32::INFINITY),
-                ..Default::default()
-            },
-        );
-        assert!(out.contains("\"terminal_ceiling_fps\":null"), "{out}");
-        assert!(!out.contains("inf"), "{out}");
     }
 
     #[test]

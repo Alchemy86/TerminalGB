@@ -86,8 +86,7 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > highlights are save-state slots (**`1`**–**`3`**, **`F5`** save / **`F8`** load), a speed
 > ladder (**`+`**/**`-`**), a stats overlay (**`t`**), palette cycling (**`[`**), pixel-art
 > upscaler cycling (**`]`** algorithm / **`}`** factor), **screenshots** (**`c`** what you see,
-> **`C`** the raw 160×144 frame), the **video stream / webcam** on/off (**`v`**) and a
-> timestamped **recording** (**`V`**). Audio works here too
+> **`C`** the raw 160×144 frame) and the **video stream** on/off (**`v`**). Audio works here too
 > with `--features audio` (see the ALSA note above).
 >
 > *(The terminal frontend is under active development — the render crew is adding faster
@@ -129,16 +128,6 @@ hidden, its Hidden Power, and whether it **would be shiny if traded to Gen 2**; 
 cycles the party. The focused Pokémon's sprite is decompressed straight out of your own
 cartridge, so it works in the overworld and not just in battle.
 
-**And the moment a wild Pokémon appears, a banner across the top of the terminal tells you
-whether it *would be shiny if traded to Gen 2* — before you spend a Ball.** It shows the DVs
-alongside, so a near miss is legible, and it stays up for the whole encounter. You do not need
-the panel open: an encounter is exactly when nobody is looking at a stats panel. Only
-*catchable* encounters get a verdict — a trainer's Pokémon has fixed DVs and cannot be caught,
-so a verdict there would be noise. **Gen 1 has no shiny Pokémon at all**; the claim is strictly
-about what Gold/Silver would do with the same DVs, and every string says so. `shiny_alert` in
-the config turns the bell, or the whole row, off. (Terminal frontend only — the desktop and
-web builds do not attach the plugin.)
-
 It is **strictly read-only** — it declares only the "observe" and "read memory" capabilities,
 and the host refuses a write from a plugin that did not ask for one — and it reads memory ten
 times a second rather than every frame, so it costs the
@@ -169,19 +158,17 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
-| `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
 | `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`. |
-| `video_out` | `-` / a file / a **FIFO** / a **`/dev/videoN` camera** / a directory / `off` | Stream raw frames out (see [video-out.md](docs/video-out.md)). Default `off`. **Safe to set to anything** — a FIFO with no reader, or a camera that does not exist, leaves the *stream* waiting and never blocks the emulator. The TUI refuses `-` — it owns stdout. |
-| `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`. Ignored for a `/dev/videoN` camera, which negotiates YUYV itself. |
-| `video_size` | `WxH` | Letterbox the stream into this size, e.g. `640x480`. Default: the source size, or 640×480 for a camera. |
+| `video_out` | `-` / a file / a FIFO / a directory / `off` | Stream raw frames out (see [video-out.md](docs/video-out.md)). Default `off`. The TUI refuses `-` — it owns stdout. |
+| `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`; `yuyv` for the virtual-webcam route. |
+| `video_size` | `WxH` | Letterbox the stream into this size, e.g. `640x480`. Default: the source size. |
 | `video_source` | `native` / `display` | Stream the raw 160×144 framebuffer, or what you see (palette + upscaler). Default `native`. |
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
 | `video_dir` | a path (`~` expands) | Where **`v`** records when no `video_out` is set. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
 | `video_device` | `/dev/videoN` | A `v4l2loopback` node to *verify*: the emulator warns if its camera label names a different game. |
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
-| `battles` | a path | Battle-preset file for the `gen1-battle` plugin. Unset uses the built-in presets. See [docs/gen1/battle-control.md](docs/gen1/battle-control.md). |
 
 ### 🌐 Web (WebAssembly)
 
@@ -278,72 +265,6 @@ than quietly handing over something else.
 
 📖 **[The full story, the step-by-step journey, and what to do if it hangs →
 docs/link-trade.md](docs/link-trade.md)** · the [plugin contract](docs/plugins.md) it is built on.
-
----
-
-## 🎬 Start any Gen 1 battle — and film it
-
-**Pokémon Red and Blue decide to start a battle by reading one byte.** Write it and the engine
-does the rest: the transition, the sprite, the music, the AI, the animations, the cries, the
-experience. Nothing here simulates a battle — it asks for one.
-
-So a battle becomes something you can *stage*: a named preset, one keypress, with the teams you
-chose on both sides.
-
-```text
-[charizard-flamethrower]
-player   = Charizard
-level    = 50
-moves    = Flamethrower, Slash, Fly, Earthquake
-
-wild     = Pidgey
-level    = 3
-
-do = await-battle              # …and a script that plays it out
-do = press-until b FIGHT
-do = press-until a FLAMETHROWER
-do = press-until a "used FLAMETHROWER"
-do = press-until b fainted
-do = await-overworld
-```
-
-```bash
-GB_PLUGINS=gen1-battle cargo run --release --example terminal -- ~/roms/blue.gb
-#   B  start the selected battle      N  choose the next preset
-```
-
-**A cinematic rendered by the actual game**, not a video file — and reproducible: the same
-script from the same starting state produces byte-identical frames, proved by running it three
-times and comparing a hash of *every* frame. It records through the existing video path with no
-special handling:
-
-```bash
-cargo run --release --example gen1_battle -- --preset charizard-flamethrower --video - \
-  | ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - out.mp4
-```
-
-**Your save is not at risk.** The plugin writes only WRAM and HRAM — never cartridge RAM, which
-is what a `.sav` is made of — puts back every byte it changed when the battle ends, refuses a
-cartridge it does not recognise, and does nothing at all until you name it and arm it.
-
-📖 **[How it works, what "reproducible" precisely means, and the traps →
-docs/gen1/battle-control.md](docs/gen1/battle-control.md)**
-
----
-
-## 🎮 Game mechanics & hacking — Pokémon Gen 1
-
-A documented area for how these games keep their state and how to drive them from outside:
-the [memory map](docs/gen1/memory-map.md) with a `pret/pokered` symbol name and a derivation for
-every address, [starting battles on demand](docs/gen1/battle-control.md),
-[reading dialogue back as text](docs/gen1/reading-the-screen.md) (Gen 1 tile ids *are*
-characters), [driving the link cable](docs/gen1/link-from-outside.md), and the
-[sharp edges](docs/gen1/sharp-edges.md) that cost us hours.
-
-It is written to teach the mechanism rather than the recipe, because each of these techniques
-came from understanding a piece of the engine and asking what else touches it.
-
-📖 **[The index → docs/gen1/](docs/gen1/README.md)**
 
 ---
 
@@ -486,21 +407,8 @@ input.
 
 ## 🎥 Video out & virtual webcam
 
-**The Game Boy as a webcam, with no bridge.** Put one line in `config.toml`, run the game,
-press `v`, and pick the camera in Chrome, Meet, Discord or OBS:
-
-```toml
-video_out = "/dev/video10"
-```
-
-The emulator negotiates the V4L2 device itself (`VIDIOC_QUERYCAP` + `VIDIOC_S_FMT`) and writes
-the frames — no `ffmpeg`, no FIFO, no rule about what to start first. Size and pixel format are
-**detected, not configured**: YUYV at 640×480, with the 160×144 picture scaled by integer
-nearest-neighbour and letterboxed, never stretched. Linux only, and it needs the `v4l2loopback`
-kernel module once (root); the emulator prints the exact install commands if it is missing.
-
-The picture can also leave as a **raw frame stream** any standard tool consumes. **Off by
-default**, and free when off.
+The picture can leave the emulator as a **raw frame stream** that any standard tool consumes —
+`ffmpeg`, OBS, a v4l2 virtual camera. **Off by default**, and free when off.
 
 ```bash
 # record a headless run straight into an MP4
@@ -511,22 +419,21 @@ cargo run --release --example video_out -- --rom game.gb --frames 600 \
 mkfifo /tmp/gb.raw
 ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw gb.mp4 &
 cargo run --release --example terminal -- game.gb --video-out /tmp/gb.raw
-```
 
-**No video destination can stop the emulator from starting.** A FIFO with nothing reading it, a
-camera that is missing or busy — the *stream* waits and attaches by itself the moment the far
-end appears, and a consumer that quits mid-stream drops it back to waiting rather than killing
-or stalling anything. A slow consumer costs dropped frames, never frame time.
+# a virtual webcam OBS/Zoom/a browser can pick up (needs the v4l2loopback module)
+tools/virtual-camera.sh --name "POKEMON BLUE" --size 640x480
+```
 
 The emulator prints the exact consuming command for whatever settings are in force, so it is
 never guesswork. Native 160×144 or the upscaled/palette-mapped picture, `rgba`/`rgb24`/`yuyv`,
-letterboxed into any size, paced to wall clock so fast-forward drops frames instead of producing
-a 4× speed video. **`v`** streams and **`V`** records a timestamped file — two different jobs,
-two different keys — and the Status panel says which and where (`◌ wait`, `● LIVE`, `● REC`).
+letterboxed (never stretched) into any size, paced to wall clock so fast-forward drops frames
+instead of producing a 4× speed video. **`v`** toggles it live and the Status panel says
+`● LIVE`, so you always know whether you are streaming.
 
-macOS and Windows have no v4l2; there, `tools/virtual-camera.sh` and OBS's own virtual camera
-consume the same stream. Full guide, measured costs, platform limits and the captured proof:
-**[`docs/video-out.md`](docs/video-out.md)**.
+The virtual camera is **Linux-only** and needs the `v4l2loopback` kernel module, which needs
+root to install; the emulator detects it and prints the exact install command rather than
+failing obscurely, and `ffmpeg` is what feeds the device. Full guide, measured costs, platform
+limits and the captured proof: **[`docs/video-out.md`](docs/video-out.md)**.
 
 ---
 

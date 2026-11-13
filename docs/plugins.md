@@ -264,17 +264,6 @@ simply hangs) is real, but it is a *protocol* risk here, not a timing one.
 6. **Confirmation** — a nybble round: `1` cancel, `2` confirm.
 7. **Post-trade sync**, then back to 4.
 
-**`$6F` is the way out of the Cable Club, and it must be answered from every phase.** The Trade
-Center has no warp events at all (`data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads 0),
-so backing out of the selection screen is the *only* exit the room has — and
-`.cancelMenuItem_APressed` reaches `ReturnToCableClubRoom` only when the round comes back `$F`.
-`wSerialExchangeNybbleSendData` is a latch, a round is 11–12 copies of the same byte, and a
-wrongly-answered round is retried from whatever phase the partner has moved into, so handling
-`$6F` in step 5 alone leaves the player permanently sealed in the room the moment anything
-desyncs (a quick-load does, by design — see §5). `LinkPartner::feed_cancel` therefore answers it
-uniformly and returns to "connected"; the sole exclusion is **inside a section exchange**, where
-`$6F` is party data. Full record: [`conformance-notes.md`](conformance-notes.md) (2026-08-14).
-
 **The re-sync byte is the easiest thing to get wrong.** `Serial_ExchangeBytes` starts each block
 with `hSerialIgnoringInitialData` set and **re-sends its first byte** until it receives a
 preamble byte, only then storing what follows. A block of `N` bytes therefore costs `N + 1`

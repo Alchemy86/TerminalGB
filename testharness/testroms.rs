@@ -24,13 +24,8 @@
 //! hash is to re-bless it. `interrupt_time` in particular was written off as
 //! "cannot run headless" when the real cause was that **the harness installed
 //! no APU** — the ROM spins on `NR52`. With an APU it runs to completion and
-//! prints a real verdict, which is a result worth having. Every machine this
-//! harness boots now has an APU, exactly like a real one. (It has since gone
-//! FAIL → PASS off the back of two independent fixes — the 5-cycle interrupt
-//! dispatch, and the APU running off the base clock so the ROM can see the
-//! CGB double-speed switch it makes halfway through. Neither crew could have
-//! turned it green alone, which is the argument for recording a verdict rather
-//! than a hash.)
+//! prints `Failed`, which is a result worth having. Every machine this harness
+//! boots now has an APU, exactly like a real one.
 //!
 //! ## Models
 //!
@@ -217,7 +212,8 @@ const ROMS: &[RomSpec] = &[
         id: "blargg/interrupt_time",
         path: "tests/interrupt_time/interrupt_time.gb",
         kind: Kind::Verdict,
-        note: "interrupt dispatch time at both CPU speeds",
+        note: "CGB double-speed switch not taking effect (the dispatch time it \
+               measures, 13 cycles, is now correct)",
     },
     RomSpec {
         id: "blargg/halt_bug",

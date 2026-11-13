@@ -10,7 +10,7 @@
 //!
 //! An in-process virtual partner does not have that problem *if it arranges to
 //! be the slave*, and Gen 1 lets us choose. `pret/pokered`'s
-//! [`CableClubNPC`](https://github.com/pret/pokered/tree/master/engine/link/cable_club_npc.asm)
+//! [`CableClubNPC`](https://github.com/pret/pokered/blob/master/engine/link/cable_club_npc.asm)
 //! alternates two offers in a loop: it arms an externally-clocked transfer with
 //! `$02` in `SB` ("you take the clock"), then immediately an internally-clocked
 //! one sending `$01` ("I'll take the clock"). Its interrupt handler stores
@@ -68,10 +68,6 @@ const NYBBLE_BASE: u8 = 0x60;
 const MENU_BASE: u8 = 0xD0;
 /// The nybble meaning "cancel / back out".
 const NYBBLE_CANCEL: u8 = 0x0F;
-/// The whole wire byte for that nybble, `$6F` — which is what both sides
-/// actually put on the link, and what the game waits to see come back before it
-/// will let the player out of the trade screen. See [`LinkPartner::feed_cancel`].
-const CANCEL_BYTE: u8 = NYBBLE_BASE | NYBBLE_CANCEL;
 /// Confirmation nybbles.
 const NYBBLE_DECLINE: u8 = 0x01;
 const NYBBLE_ACCEPT: u8 = 0x02;
@@ -201,16 +197,7 @@ impl LinkPartner {
 
     /// Drop all protocol state and go back to waiting for a handshake.
     pub fn reset(&mut self) {
-        self.clear_scratch();
         self.phase = Phase::Handshake;
-    }
-
-    /// Drop the per-exchange scratch — the stream cursor, the captured bytes and
-    /// the nybble-round latch — without forgetting what the session achieved
-    /// (`seen_party`, `traded_away`, the counters). Called whenever a session
-    /// ends or is backed out of, so a half-finished exchange or a held nybble
-    /// reply can never leak into the next one.
-    fn clear_scratch(&mut self) {
         self.stream_pos = 0;
         self.received.clear();
         self.in_nybble_round = false;
@@ -221,16 +208,7 @@ impl LinkPartner {
     /// return value.
     pub fn feed(&mut self, sent: u8) -> u8 {
         if self.phase == Phase::Exchanging {
-            // Deliberately *before* the cancel check below: inside a block, $6F
-            // is ordinary party data (a stat, a name character, a patch offset)
-            // and must be answered from our stream, not treated as a cancel.
             return self.feed_exchanging(sent);
-        }
-
-        // "Let me out." Handled here rather than inside one phase's branch,
-        // because the game can send it in any of them — see `feed_cancel`.
-        if sent == CANCEL_BYTE {
-            return self.feed_cancel();
         }
 
         // A block preamble anywhere else means the game has started the section
@@ -275,44 +253,6 @@ impl LinkPartner {
         party::NO_DATA_BYTE
     }
 
-    /// Answer `$6F`, the "back out of the trade" nybble — the byte that lets
-    /// the player leave the Cable Club trade screen.
-    ///
-    /// `pokered`'s `.cancelMenuItem_APressed`
-    /// ([`engine/link/cable_club.asm`](https://github.com/pret/pokered/tree/master/engine/link/cable_club.asm))
-    /// writes `$F` to `wSerialExchangeNybbleSendData`, runs one
-    /// `Serial_SyncAndExchangeNybble` round, and **only** falls through to
-    /// `ReturnToCableClubRoom` when the round comes back `$F`
-    /// (`cp $f / jr nz, .cancelMenuItem_Loop`). Anything else and the player is
-    /// left on the trade screen pressing A for ever — and since the Trade Center
-    /// has no warp events at all (`data/maps/objects/TradeCenter.asm`), that
-    /// screen is the *only* exit the room has.
-    ///
-    /// Three things make this a whole-state-machine concern rather than one
-    /// branch of the selection round:
-    ///
-    /// * `wSerialExchangeNybbleSendData` is a **latch**. Once the player has
-    ///   cancelled, every later `Serial_SyncAndExchangeNybble` keeps sending
-    ///   `$6F` — through `CableClub_DoBattleOrTradeAgain`'s rendezvous sync, for
-    ///   instance — until `TradeCenter_SelectMon` resets it to `1`.
-    /// * A round is 11–12 transfers of the same byte (`.loop1` plus ten
-    ///   `.loop2` iterations), and the game keeps the **last** one it saw, so
-    ///   every byte of the run has to be answered the same way.
-    /// * If a round is ever answered wrongly the game simply asks again, from
-    ///   whatever phase we have since moved into. Answering `$6F` only in
-    ///   [`Phase::SelectMon`] therefore makes the *second* attempt unanswerable,
-    ///   which is a trap with no way out.
-    ///
-    /// Afterwards the link is still up — the game returns to the Cable Club room
-    /// with `LINK_STATE_IN_CABLE_CLUB` and can walk back onto the console for
-    /// another session — so the partner lands in [`Phase::Connected`], with the
-    /// exchange scratch cleared so nothing from the abandoned trade carries over.
-    fn feed_cancel(&mut self) -> u8 {
-        self.clear_scratch();
-        self.phase = Phase::Connected;
-        CANCEL_BYTE
-    }
-
     fn feed_nybble(&mut self, nybble: u8) -> u8 {
         if !self.in_nybble_round {
             self.in_nybble_round = true;
@@ -324,15 +264,17 @@ impl LinkPartner {
     }
 
     /// Choose this round's answer and the phase the *next* round will be in.
-    ///
-    /// [`NYBBLE_CANCEL`] never reaches here — [`Self::feed`] intercepts `$6F`
-    /// for [`Self::feed_cancel`] in *every* phase, which is the point: a cancel
-    /// answered by only one of these arms is a cancel that stops working as
-    /// soon as the phase moves on.
     fn decide_round(&mut self, nybble: u8) -> (u8, Phase) {
-        debug_assert_ne!(nybble, NYBBLE_CANCEL, "$6F is handled by feed_cancel");
         match self.phase {
-            Phase::SelectMon => (NYBBLE_BASE | (self.offer_index & 0x0F), Phase::Confirm),
+            Phase::SelectMon => {
+                if nybble == NYBBLE_CANCEL {
+                    // The player backed out of the selection screen; agree, and
+                    // expect the whole exchange to start again.
+                    (NYBBLE_BASE | NYBBLE_CANCEL, Phase::Connected)
+                } else {
+                    (NYBBLE_BASE | (self.offer_index & 0x0F), Phase::Confirm)
+                }
+            }
             Phase::Confirm => match nybble {
                 NYBBLE_DECLINE => (NYBBLE_BASE | NYBBLE_DECLINE, Phase::SelectMon),
                 _ => {
@@ -637,197 +579,6 @@ mod tests {
         p.feed(0x00);
         assert_eq!(p.phase(), Phase::Connected);
         assert_eq!(p.trades_completed(), 0);
-    }
-
-    // --- leaving the trade room -------------------------------------------
-    //
-    // `$6F` is the byte that lets the player out of the Cable Club, and the
-    // game will send it from more than one phase (see `feed_cancel`). The
-    // original test above only ever exercised it from `SelectMon`, which is why
-    // the other phases were broken and invisible. These drive it from *every*
-    // phase the machine can be in, and assert the phase we land in as well as
-    // the byte — a test that checks only the byte would miss the same class of
-    // bug again, because the failure is "the second attempt is unanswerable".
-
-    /// The other party on the wire, and the stream the game would clock at us.
-    fn their_stream() -> Vec<u8> {
-        let other = Party {
-            trainer_name: "ASH".into(),
-            mons: vec![test_mon(0x99), test_mon(0x54)],
-        };
-        let (b, patch) = other.to_blocks().unwrap();
-        build_stream(&b, &patch)
-    }
-
-    /// Drive a fresh partner into `phase` using only real wire bytes, so the
-    /// state it ends up in is one a running game can actually produce.
-    fn partner_in(phase: Phase) -> LinkPartner {
-        let mut p = partner();
-        if phase == Phase::Handshake {
-            return p;
-        }
-        p.feed(ESTABLISH_INTERNAL);
-        match phase {
-            Phase::Connected => {}
-            Phase::Exchanging => {
-                p.feed(PREAMBLE_BYTE);
-            }
-            Phase::SelectMon => {
-                run_exchange(&mut p, &their_stream());
-            }
-            Phase::Confirm => {
-                run_exchange(&mut p, &their_stream());
-                p.feed(0x60); // the player picked party slot 0
-                p.feed(0x00);
-            }
-            Phase::PostTrade => {
-                run_exchange(&mut p, &their_stream());
-                p.feed(0x60);
-                p.feed(0x00);
-                p.feed(0x62); // ...and confirmed it
-                p.feed(0x00);
-            }
-            Phase::Handshake => unreachable!(),
-        }
-        assert_eq!(p.phase(), phase, "helper did not reach {phase:?}");
-        p
-    }
-
-    /// Every phase the game can send `$6F` from. `Exchanging` is deliberately
-    /// absent: in the middle of a block that byte is party data, not a cancel,
-    /// and it has its own test below.
-    const CANCELLABLE: [Phase; 5] = [
-        Phase::Handshake,
-        Phase::Connected,
-        Phase::SelectMon,
-        Phase::Confirm,
-        Phase::PostTrade,
-    ];
-
-    /// One `Serial_SyncAndExchangeNybble` round as the game runs it: the value
-    /// goes out once in `.loop1` and ten more times in `.loop2`, then ten zero
-    /// bytes in `.loop3`. The game keeps the **last** `$6x` it saw, so every
-    /// byte of the run has to come back the same.
-    fn nybble_round(p: &mut LinkPartner, byte: u8) -> Vec<u8> {
-        let mut out: Vec<u8> = (0..12).map(|_| p.feed(byte)).collect();
-        out.extend((0..10).map(|_| p.feed(0x00)));
-        out
-    }
-
-    #[test]
-    fn the_cancel_byte_is_echoed_from_every_phase() {
-        for phase in CANCELLABLE {
-            let mut p = partner_in(phase);
-            assert_eq!(
-                p.feed(CANCEL_BYTE),
-                CANCEL_BYTE,
-                "$6F sent from {phase:?} was not echoed — the game would sit on \
-                 the trade screen for ever"
-            );
-            assert_eq!(
-                p.phase(),
-                Phase::Connected,
-                "$6F sent from {phase:?} left the partner in the wrong phase"
-            );
-        }
-    }
-
-    #[test]
-    fn a_whole_cancel_round_is_echoed_from_every_phase() {
-        for phase in CANCELLABLE {
-            let mut p = partner_in(phase);
-            let replies = nybble_round(&mut p, CANCEL_BYTE);
-            assert!(
-                replies[..12].iter().all(|&b| b == CANCEL_BYTE),
-                "from {phase:?} the round answered {replies:02X?}"
-            );
-            assert!(replies[12..].iter().all(|&b| b == 0x00));
-            assert_eq!(p.phase(), Phase::Connected);
-        }
-    }
-
-    /// The bug this class of test exists for: the game re-sends the cancel from
-    /// whatever phase the partner has since moved into, so a cancel has to keep
-    /// working when it is repeated.
-    #[test]
-    fn a_repeated_cancel_keeps_being_answered() {
-        let mut p = partner_in(Phase::SelectMon);
-        for attempt in 1..=4 {
-            let replies = nybble_round(&mut p, CANCEL_BYTE);
-            assert!(
-                replies[..12].iter().all(|&b| b == CANCEL_BYTE),
-                "cancel attempt {attempt} answered {replies:02X?}"
-            );
-            assert_eq!(p.phase(), Phase::Connected);
-        }
-        assert_eq!(p.trades_completed(), 0);
-    }
-
-    /// A cancel is not a trade, whatever phase it interrupts. Before the fix a
-    /// `$6F` arriving in `Confirm` fell into the "accept" arm and bumped this
-    /// counter while answering `$62`.
-    #[test]
-    fn a_cancel_never_counts_as_a_trade() {
-        for phase in CANCELLABLE {
-            let mut p = partner_in(phase);
-            let before = p.trades_completed();
-            nybble_round(&mut p, CANCEL_BYTE);
-            assert_eq!(
-                p.trades_completed(),
-                before,
-                "a cancel from {phase:?} was recorded as a trade"
-            );
-        }
-    }
-
-    /// Inside a section exchange `$6F` is a data byte — a stat, a name
-    /// character, a patch-list offset — and must be answered from our stream.
-    #[test]
-    fn the_cancel_byte_is_data_inside_an_exchange() {
-        let mut p = partner_in(Phase::Exchanging);
-        let expected = p.stream[p.stream_pos];
-        assert_eq!(p.feed(CANCEL_BYTE), expected);
-        assert_eq!(p.phase(), Phase::Exchanging);
-        assert_eq!(p.received.last(), Some(&CANCEL_BYTE));
-    }
-
-    /// Leaving has to be repeatable: after backing out, the game walks the
-    /// player back onto the console and `CableClub_DoBattleOrTradeAgain` runs
-    /// the whole three-block exchange again.
-    #[test]
-    fn a_new_session_works_after_a_cancel_from_any_phase() {
-        for phase in CANCELLABLE {
-            let mut p = partner_in(phase);
-            nybble_round(&mut p, CANCEL_BYTE);
-            // `wSerialExchangeNybbleSendData` is still latched at $F, so the
-            // rendezvous sync that opens the next session sends $6F too.
-            nybble_round(&mut p, CANCEL_BYTE);
-            let ours = run_exchange(&mut p, &their_stream());
-            assert_eq!(ours.len(), SECTION_STREAM_LEN, "from {phase:?}");
-            assert_eq!(p.phase(), Phase::SelectMon, "from {phase:?}");
-            let seen = p.seen_party().expect("the new party decoded");
-            assert_eq!(seen.mons.len(), 2, "stale data leaked in from {phase:?}");
-        }
-    }
-
-    /// The captain's report, end to end at the protocol level: trade, then
-    /// leave. The post-trade rounds put the partner in `Connected`, and the
-    /// cancel that follows has to be answered from there.
-    #[test]
-    fn the_player_can_leave_after_a_completed_trade() {
-        let mut p = partner_in(Phase::PostTrade);
-        // `.tradeCompleted`'s sync, then `CableClub_DoBattleOrTradeAgain`'s.
-        nybble_round(&mut p, 0x62);
-        assert_eq!(p.phase(), Phase::Connected);
-        nybble_round(&mut p, 0x60);
-        // The game runs one more full exchange before showing the selection
-        // screen again — but if anything cut that short, the cancel below is
-        // still sent from `Connected`, and that is the case that was broken.
-        assert_eq!(p.trades_completed(), 1);
-        let replies = nybble_round(&mut p, CANCEL_BYTE);
-        assert!(replies[..12].iter().all(|&b| b == CANCEL_BYTE));
-        assert_eq!(p.phase(), Phase::Connected);
-        assert_eq!(p.trades_completed(), 1);
     }
 
     #[test]

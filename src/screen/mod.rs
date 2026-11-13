@@ -13,10 +13,6 @@ pub mod frame;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod romlib;
 
-/// What the terminal itself costs per displayed frame — see [`termcost`].
-#[cfg(not(target_arch = "wasm32"))]
-pub mod termcost;
-
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tui;
 

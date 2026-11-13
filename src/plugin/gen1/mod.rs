@@ -58,18 +58,7 @@ pub struct Gen1LinkPartner {
     /// TUI can toast it.
     events: Vec<String>,
     last_trades: u32,
-    /// Ring buffer of the last [`TRACE_LEN`] `(sent, replied, phase after)`
-    /// triples, enabled by `GB_GEN1_LINK_TRACE=1`.
-    ///
-    /// The link is thousands of bytes long and every interesting failure is a
-    /// *reply to one byte*, so the only way to diagnose one honestly is to look
-    /// at the wire. Keeping the tail is enough: the close sequence, the
-    /// selection round and the post-trade sync all sit at the end of a run.
-    trace: Option<std::collections::VecDeque<(u8, u8, protocol::Phase)>>,
 }
-
-/// How many wire bytes the optional trace retains.
-const TRACE_LEN: usize = 4096;
 
 impl Gen1LinkPartner {
     /// Build the partner from a ROM image and a source of Pokémon.
@@ -91,9 +80,6 @@ impl Gen1LinkPartner {
             origin: source.describe(),
             events: Vec::new(),
             last_trades: 0,
-            trace: std::env::var("GB_GEN1_LINK_TRACE")
-                .is_ok_and(|v| v != "0")
-                .then(|| std::collections::VecDeque::with_capacity(TRACE_LEN)),
         })
     }
 
@@ -136,15 +122,6 @@ impl Gen1LinkPartner {
     /// Human-readable log of protocol milestones.
     pub fn log(&self) -> &[String] {
         &self.events
-    }
-
-    /// The tail of the wire, when `GB_GEN1_LINK_TRACE=1` was set at build time
-    /// of the plugin: `(byte the game sent, byte we replied, phase afterwards)`.
-    pub fn trace(&self) -> Vec<(u8, u8, protocol::Phase)> {
-        self.trace
-            .as_ref()
-            .map(|t| t.iter().copied().collect())
-            .unwrap_or_default()
     }
 
     /// Where the offered Pokémon came from — the [`PokemonSource`] description.
@@ -196,12 +173,6 @@ impl Plugin for Gen1LinkPartner {
         let before = self.partner.phase();
         let reply = self.partner.feed(sent);
         let after = self.partner.phase();
-        if let Some(t) = self.trace.as_mut() {
-            if t.len() == TRACE_LEN {
-                t.pop_front();
-            }
-            t.push_back((sent, reply, after));
-        }
         if before != after {
             self.events
                 .push(format!("{} -> {}", before.label(), after.label()));

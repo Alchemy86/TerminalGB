@@ -13,7 +13,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`50ecb56`](https://github.com/Alchemy86/gameboy/tree/50ecb56d60eaa1153604ae57ca887959688eeb39) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The components
 

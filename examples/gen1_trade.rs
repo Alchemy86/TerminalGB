@@ -14,24 +14,7 @@
 //!
 //! # 2. trade
 //! cargo run --release --example gen1_trade -- --rom <rom>
-//!
-//! # 2b. …and prove the player can still get out after a mid-session desync
-//! cargo run --release --example gen1_trade -- --rom <rom> --quick-load
 //! ```
-//!
-//! # Receiving the Pokémon is only half the claim
-//!
-//! The run makes **three visits** to the Game Boy on the table — trade, then a
-//! visit that cancels without trading, then a second trade — and each one has to
-//! end with the player back out of the trade screen. That matters because the
-//! Trade Center has **no warp events at all**
-//! (`pret/pokered`, `data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads
-//! 0 at run time): backing out of the selection screen is the only exit the room
-//! has, and it depends entirely on the partner echoing the cancel nybble `$6F`.
-//! `--quick-load` presses F5 then F8 at that moment, which resets plugin state
-//! mid-session exactly as the terminal frontend does, so the cancel has to work
-//! from a phase the partner did not expect. `GB_GEN1_LINK_TRACE=1` prints the
-//! tail of the wire when it does not.
 //!
 //! # About the save fixture
 //!
@@ -121,13 +104,6 @@ fn main() {
     let mut frames = 60 * 60 * 6;
     let mut make_save = false;
     let mut verbose = false;
-    // Press F5 then F8 (the terminal frontend's quick-save / quick-load) once
-    // the trade is done and the player wants out. Plugin state is deliberately
-    // *not* in a save state, so the load calls `PluginHost::reset` and the
-    // partner drops back to `Phase::Handshake` while the game is still mid-link.
-    // Backing out of the trade screen is the escape hatch from exactly that, so
-    // it has to work from a phase the partner did not expect.
-    let mut quick_load = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -142,7 +118,6 @@ fn main() {
             }
             "--make-save" => make_save = true,
             "--verbose" => verbose = true,
-            "--quick-load" => quick_load = true,
             other => {
                 eprintln!("unknown argument {other}");
                 std::process::exit(2);
@@ -152,7 +127,7 @@ fn main() {
     let Some(rom_path) = rom_path else {
         eprintln!(
             "usage: gen1_trade --rom <path> [--make-save] [--save <file>] \
-             [--trade <file>] [--state <file>] [--quick-load] [--verbose]"
+             [--trade <file>] [--state <file>] [--verbose]"
         );
         std::process::exit(2);
     };
@@ -181,7 +156,6 @@ fn main() {
         shots,
         state_out,
         frames,
-        quick_load,
         verbose,
     );
 }
@@ -456,7 +430,6 @@ fn run_trade(
     shots: Option<PathBuf>,
     state_out: Option<PathBuf>,
     frames: u32,
-    quick_load: bool,
     verbose: bool,
 ) {
     let work = scratch.join("trade.gb");
@@ -483,40 +456,17 @@ fn run_trade(
     gb.add_plugin(Box::new(partner)).expect("attach plugin");
     println!("status   : {}", gb.plugin_status_line().unwrap_or_default());
 
-    // One visit to the console per entry. The default exercises everything the
-    // link session has to survive: a trade and the walk back out, a visit that
-    // cancels without trading, and a *second* trade afterwards.
-    let mut bot = TradeBot {
-        plan: vec![Visit::Trade, Visit::CancelOnly, Visit::Trade],
-        ..TradeBot::default()
-    };
+    let mut bot = TradeBot::default();
     let mut before: Option<Vec<PartyMon>> = None;
     let mut last = String::new();
     let mut last_shot_stage = "";
     let mut shot_delay: Option<(u32, &'static str)> = None;
     let mut shot_index = 0u32;
     let mut state_written = false;
-    let mut quick_loaded = false;
 
     for frame in 0..frames {
         bot.act(&mut gb, verbose);
         gb.frame();
-
-        // F5 then F8, exactly as the terminal frontend's quick-save / quick-load
-        // keys do it, at the moment the player has finished trading and wants
-        // out. `Gameboy::load_state` calls `PluginHost::reset`, so the partner
-        // is back at `Phase::Handshake` while the game is still in the middle of
-        // a link session — and the *only* way out of the Trade Center is to back
-        // out of the trade screen, so that has to keep working from there.
-        if quick_load && !quick_loaded && bot.stage_label() == "leaving-trade-screen" {
-            quick_loaded = true;
-            let state = gb.save_state();
-            gb.load_state(&state).expect("quick-load");
-            println!(
-                "[{frame}] quick-saved and quick-loaded; partner is now '{}'",
-                partner_phase(&mut gb)
-            );
-        }
 
         // Wait for the save to be fully loaded: `LoadSAV` copies the party in
         // a separate pass from the main data, so wCurMap is right for a few
@@ -591,7 +541,7 @@ fn run_trade(
                 }
             }
         }
-        if bot.left_frames > 120 {
+        if bot.done_frames > 300 {
             break;
         }
     }
@@ -600,34 +550,6 @@ fn run_trade(
         "\nstatus   : {}",
         gb.plugin_status_line().unwrap_or_default()
     );
-    if let Some(p) = gb.plugin::<Gen1LinkPartner>() {
-        let trace = p.trace();
-        if !trace.is_empty() {
-            println!(
-                "\nlast {} bytes on the wire (sent -> replied @ phase):",
-                trace.len().min(96)
-            );
-            for (sent, reply, phase) in trace.iter().rev().take(96).rev() {
-                println!("  {sent:#04x} -> {reply:#04x}   {}", phase.label());
-            }
-        }
-    }
-    println!("\nvisits to the console:");
-    for (i, (what, presses)) in bot.visits.iter().enumerate() {
-        println!(
-            "  {}: {what:?} — left after {presses} CANCEL press(es)",
-            i + 1
-        );
-    }
-    if bot.visits.len() < bot.plan.len() {
-        println!(
-            "  {}: {:?} — NEVER LEFT (stage {}, {} CANCEL presses so far)",
-            bot.visits.len() + 1,
-            bot.plan[bot.visits.len()],
-            bot.stage_label(),
-            bot.cancel_attempts
-        );
-    }
     let after = read_party(&mut gb);
     println!("party after : {}", describe_party(&after));
     if let Some(dir) = &shots {
@@ -657,24 +579,6 @@ fn run_trade(
     for m in &gained {
         println!("  {}", m.describe());
     }
-    // Receiving the Pokémon is only half of the claim: a trade you cannot get
-    // out of is not a completed link session.
-    if bot.stage != TradeStage::Finished {
-        println!(
-            "\nRESULT: FAILED — the player never got back out of the trade screen \
-             (visit {} of {}, stage {}, {} CANCEL presses).",
-            bot.visits.len() + 1,
-            bot.plan.len(),
-            bot.stage_label(),
-            bot.cancel_attempts
-        );
-        std::process::exit(1);
-    }
-    println!(
-        "RESULT: {} visit(s) to the console, {} trade(s), every one left cleanly.",
-        bot.visits.len(),
-        bot.trades_seen
-    );
 }
 
 /// Fail loudly if the hard-coded WRAM addresses are not what this ROM uses.
@@ -712,26 +616,6 @@ struct TradeBot {
     blocked: u32,
     on_trade_option: bool,
     trade_spawn: Option<(u8, u8)>,
-    /// How many times CANCEL has been confirmed on the trade-selection screen
-    /// without the game letting go of the link. Each attempt is one full
-    /// `Serial_SyncAndExchangeNybble` round, so a climbing number *is* the bug.
-    cancel_attempts: u32,
-    left_frames: u32,
-    /// What to do on each visit to the Game Boy on the table, in order.
-    plan: Vec<Visit>,
-    visit: usize,
-    /// Per-visit report: `(what we meant to do, CANCEL rounds it took)`.
-    visits: Vec<(Visit, u32)>,
-    trades_seen: u32,
-}
-
-/// What the bot does on one visit to the console.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Visit {
-    /// Pick a Pokémon, confirm, then leave.
-    Trade,
-    /// Walk straight down to CANCEL and leave without trading.
-    CancelOnly,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -748,17 +632,6 @@ enum TradeStage {
     /// which are driven by the same read-the-screen-and-press-A loop.
     AtMachine,
     Done,
-    /// Back on the trade-selection screen after the trade: walk the cursor down
-    /// to CANCEL and press A. `pokered`'s `.cancelMenuItem_APressed` sends
-    /// nybble `$F` and only falls through to `ReturnToCableClubRoom` when the
-    /// partner answers `$F`, so this is the step that "cannot leave the trade
-    /// room" fails at.
-    LeaveTradeScreen,
-    /// Off the trade screen and standing in the room again. The Trade Center
-    /// has **no warp events at all** (`data/maps/objects/TradeCenter.asm`), so
-    /// there is no door to walk out of: getting back here *is* leaving.
-    BackInRoom,
-    Finished,
 }
 
 impl TradeBot {
@@ -773,9 +646,6 @@ impl TradeBot {
             TradeStage::InTradeRoom => "trade-room",
             TradeStage::AtMachine => "at-machine",
             TradeStage::Done => "done",
-            TradeStage::LeaveTradeScreen => "leaving-trade-screen",
-            TradeStage::BackInRoom => "back-in-room",
-            TradeStage::Finished => "finished",
         }
     }
 }
@@ -961,16 +831,7 @@ impl TradeBot {
             }
             TradeStage::AtMachine => {
                 if text.contains("Trade completed") {
-                    self.trades_seen += 1;
                     set(self, TradeStage::Done);
-                    return;
-                }
-                // A cancel-only visit walks straight out of the selection
-                // screen as soon as it is drawn.
-                if self.plan.get(self.visit) == Some(&Visit::CancelOnly)
-                    && text.contains("CANCEL")
-                {
-                    set(self, TradeStage::LeaveTradeScreen);
                     return;
                 }
                 // The per-Pokémon menu is horizontal: "STATS     TRADE", with
@@ -988,70 +849,9 @@ impl TradeBot {
             }
             TradeStage::Done => {
                 self.done_frames += 1;
-                // After "Trade completed!" the game jumps straight back to
-                // `CableClub_DoBattleOrTradeAgain`: another full three-block
-                // exchange, then the selection screen again. Wait for that
-                // screen before trying to leave.
-                if self.done_frames > 240 && text.contains("CANCEL") {
-                    self.done_frames = 0;
-                    set(self, TradeStage::LeaveTradeScreen);
-                }
-            }
-            TradeStage::LeaveTradeScreen => {
-                // Off the trade screen: `ReturnToCableClubRoom` ran and
-                // `CableClub_Run` set LINK_STATE_IN_CABLE_CLUB.
-                if link == 0x01 {
-                    let what = self.plan.get(self.visit).copied().unwrap_or(Visit::Trade);
-                    let n = self.cancel_attempts;
-                    self.visits.push((what, n));
-                    self.cancel_attempts = 0;
-                    self.visit += 1;
-                    set(self, TradeStage::BackInRoom);
-                    return;
-                }
-                // The cursor starts on the first party slot; Down walks it to
-                // CANCEL (menu item `wPartyCount`) and one more Down selects
-                // it, after which A confirms.
-                self.stuck += 1;
-                if self.stuck <= 8 {
-                    self.press(gb, KeypadKey::Down, 4);
-                } else {
-                    if self.stuck % 2 == 1 {
-                        self.cancel_attempts += 1;
-                        if verbose {
-                            println!(
-                                "  CANCEL press #{} (link={link:#04x}, partner {})",
-                                self.cancel_attempts,
-                                partner_phase(gb),
-                            );
-                        }
-                    }
-                    self.press(gb, KeypadKey::A, 4);
-                }
-            }
-            TradeStage::BackInRoom => {
-                // The Trade Center is a sealed room — no warps — so being back
-                // here, walkable and out of the link screens, *is* leaving.
-                if self.visit >= self.plan.len() {
-                    set(self, TradeStage::Finished);
-                    return;
-                }
-                // Another visit: back to the console for the next round trip.
-                self.on_trade_option = false;
-                set(self, TradeStage::InTradeRoom);
-            }
-            TradeStage::Finished => {
-                self.left_frames += 1;
             }
         }
     }
-}
-
-/// The link partner's own view of where the protocol is, for the log.
-fn partner_phase(gb: &mut Gameboy) -> String {
-    gb.plugin::<Gen1LinkPartner>()
-        .map(|p| p.phase().label().to_string())
-        .unwrap_or_else(|| "?".into())
 }
 
 // --- reading the machine ---------------------------------------------------

@@ -286,23 +286,6 @@ impl RomTables {
         Err(RomError::UnknownSpecies(s.to_string()))
     }
 
-    /// The four moves a species' base-stat record lists — its level 1 learnset
-    /// (`db TACKLE, GROWL, NO_MOVE, NO_MOVE` in
-    /// [`data/pokemon/base_stats/`](https://github.com/pret/pokered/tree/master/data/pokemon/base_stats),
-    /// bytes 15..19 of the 28-byte record, right after the two picture
-    /// pointers).
-    ///
-    /// This is what a Pokémon built with no moves stated should know: it is the
-    /// game's own answer, read from the same cartridge, rather than an
-    /// arbitrary fallback.
-    pub fn base_moves(&self, index: u8) -> [u8; 4] {
-        let dex = self.dex_of_index(index);
-        match self.base_stats_record(dex) {
-            Some(rec) => [rec[15], rec[16], rec[17], rec[18]],
-            None => [0; 4],
-        }
-    }
-
     /// Base PP of a move id (`0` for "no move").
     pub fn move_pp(&self, id: u8) -> u8 {
         if id == 0 {

@@ -61,26 +61,11 @@ pub mod addr {
     /// `wPlayTimeSeconds`.
     pub const PLAY_TIME_SECONDS: u16 = 0xDA44;
 
-    /// `wIsInBattle` — `-1` lost, 0 none, 1 wild, 2 trainer. The four values
-    /// and their meanings are the comment block above the label in
-    /// `pokered/ram/wram.asm`; the only writers are `InitWildBattle` (1) and
-    /// `InitBattleCommon` (2) in `engine/battle/core.asm`, `.allPokemonFainted`
-    /// (`$FF`) in `home/overworld.asm`, and the two places that clear it.
+    /// `wIsInBattle` — 0 none, 1 wild, 2 trainer.
     pub const IS_IN_BATTLE: u16 = 0xD057;
     /// `wCurOpponent` — in a wild battle the species; in a trainer battle the
     /// trainer class plus `OPP_ID_OFFSET`.
     pub const CUR_OPPONENT: u16 = 0xD059;
-    /// `wBattleType` — 0 normal, 1 the old man's catching tutorial, 2 Safari
-    /// Zone (`BATTLE_TYPE_*`, `constants/battle_constants.asm`).
-    ///
-    /// This one is not in `pokeblue.sym` under a name this project had already
-    /// resolved, so it is derived by *walking* `ram/wram.asm` between two
-    /// symbols that are — which is also the walk's own proof:
-    /// `wIsInBattle` `$D057` (verified), then `wPartyGainExpFlags`
-    /// (`flag_array PARTY_LENGTH` = 1 byte) `$D058`, then `wCurOpponent`
-    /// `$D059` — and `$D059` is exactly [`CUR_OPPONENT`], verified
-    /// independently. One more byte lands `wBattleType` at `$D05A`.
-    pub const BATTLE_TYPE: u16 = 0xD05A;
     /// `wTrainerClass`.
     pub const TRAINER_CLASS: u16 = 0xD031;
     /// `wTrainerName` — 11 bytes, `$50`-terminated.
@@ -328,62 +313,13 @@ pub enum BattleKind {
 }
 
 impl BattleKind {
-    /// From `wIsInBattle`. The label's own comment in `pokered/ram/wram.asm`
-    /// lists **four** values, not three: `-1` lost, `0` none, `1` wild, `2`
-    /// trainer. `$FF` is written by `.allPokemonFainted` in
-    /// `home/overworld.asm` — the player blacked out, which is the *end* of a
-    /// battle, not one in progress — so it maps to [`BattleKind::None`], as does
-    /// any value the game never writes.
+    /// From `wIsInBattle`: 0 none, 1 wild, anything else a trainer battle
+    /// (`$FF` is used transiently while a battle is being set up).
     pub fn from_flag(v: u8) -> BattleKind {
         match v {
+            0 => BattleKind::None,
             1 => BattleKind::Wild,
-            2 => BattleKind::Trainer,
-            _ => BattleKind::None,
-        }
-    }
-}
-
-/// `wBattleType` — which *kind* of wild battle this is.
-///
-/// `constants/battle_constants.asm`: `BATTLE_TYPE_NORMAL` 0,
-/// `BATTLE_TYPE_OLD_MAN` 1, `BATTLE_TYPE_SAFARI` 2. It only means anything
-/// while [`BattleKind::Wild`] is set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BattleType {
-    #[default]
-    Normal,
-    /// The old man's catching demonstration in Viridian City. The player never
-    /// keeps this Pokémon — `_AddPartyMon` is never reached for it — so a
-    /// "worth a Ball?" verdict there is noise.
-    OldMan,
-    Safari,
-    /// A value the game does not define. Treated as not catchable, because
-    /// guessing is the failure mode this whole plugin refuses.
-    Unknown(u8),
-}
-
-impl BattleType {
-    pub fn from_flag(v: u8) -> BattleType {
-        match v {
-            0 => BattleType::Normal,
-            1 => BattleType::OldMan,
-            2 => BattleType::Safari,
-            other => BattleType::Unknown(other),
-        }
-    }
-
-    /// Whether a Pokémon met under this battle type can actually become the
-    /// player's. See [`super::encounter`] for the full argument and citations.
-    pub fn is_catchable(self) -> bool {
-        matches!(self, BattleType::Normal | BattleType::Safari)
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            BattleType::Normal => "WILD",
-            BattleType::OldMan => "DEMO",
-            BattleType::Safari => "SAFARI",
-            BattleType::Unknown(_) => "?",
+            _ => BattleKind::Trainer,
         }
     }
 }
@@ -455,38 +391,5 @@ mod tests {
         assert_eq!(BattleKind::from_flag(0), BattleKind::None);
         assert_eq!(BattleKind::from_flag(1), BattleKind::Wild);
         assert_eq!(BattleKind::from_flag(2), BattleKind::Trainer);
-        // `-1` is "the player blacked out", not a battle in progress
-        // (`home/overworld.asm`, `.allPokemonFainted`). Reading it as a trainer
-        // battle would put a battle panel on screen in the overworld.
-        assert_eq!(BattleKind::from_flag(0xFF), BattleKind::None);
-        // Nothing else is ever written, and a stray value must not invent a
-        // battle either.
-        for v in 3u8..0xFF {
-            assert_eq!(BattleKind::from_flag(v), BattleKind::None, "flag {v}");
-        }
-    }
-
-    #[test]
-    fn battle_type_maps_the_flag_and_knows_what_is_catchable() {
-        assert_eq!(BattleType::from_flag(0), BattleType::Normal);
-        assert_eq!(BattleType::from_flag(1), BattleType::OldMan);
-        assert_eq!(BattleType::from_flag(2), BattleType::Safari);
-        assert_eq!(BattleType::from_flag(9), BattleType::Unknown(9));
-        assert!(BattleType::Normal.is_catchable());
-        assert!(BattleType::Safari.is_catchable(), "Safari Balls are Balls");
-        assert!(
-            !BattleType::OldMan.is_catchable(),
-            "the tutorial Pokémon is never the player's"
-        );
-        assert!(!BattleType::Unknown(7).is_catchable());
-    }
-
-    #[test]
-    fn the_battle_type_address_is_where_the_wram_walk_puts_it() {
-        // wIsInBattle $D057 + wPartyGainExpFlags (1 byte) == wCurOpponent, and
-        // wCurOpponent is independently verified — so the walk is checked, not
-        // assumed, before it is used for the byte after.
-        assert_eq!(addr::IS_IN_BATTLE + 2, addr::CUR_OPPONENT);
-        assert_eq!(addr::CUR_OPPONENT + 1, addr::BATTLE_TYPE);
     }
 }

@@ -31,10 +31,9 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
-use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath, ShinyAlert};
+use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
-use crate::screen::termcost;
 use crate::screen::trainer_view as tv;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
@@ -260,19 +259,6 @@ fn safe_title(title: &str) -> String {
     video::file_safe_title(title)
 }
 
-/// The last component of a path, for a status row that is ~18 columns wide.
-///
-/// A truncated *head* (`/home/aaron/Videos/game…`) tells the reader nothing;
-/// the leaf is the part that distinguishes `gb.raw` from
-/// `POKEMON_BLUE-…-160x144-rgba.raw`, which is exactly the distinction that was
-/// missed. The full path is always in the `?` overlay's notices.
-fn tail_of(dest: &str) -> String {
-    Path::new(dest)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| dest.to_string())
-}
-
 /// `YYYYMMDD-HHMMSS` for right now, UTC — see [`utc_stamp`].
 fn now_stamp() -> String {
     utc_stamp(
@@ -374,12 +360,11 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     }));
 
     enable_raw_mode()?;
-    // Ask the terminal, once, whether it can read frames out of shared memory,
-    // whether it answers a cursor report at all, and how long a bare round trip
-    // costs. Must happen here: raw mode is on (so replies are not swallowed by
-    // the line discipline) but the event loop has not started, so nothing else
-    // is competing for stdin.
-    probe_terminal();
+    // Ask the terminal, once, whether it can read frames out of shared memory.
+    // Must happen here: raw mode is on (so the reply is not swallowed by the
+    // line discipline) but the event loop has not started, so nothing else is
+    // competing for stdin.
+    probe_shm_support();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     // We required kitty keyboard support above; enable event-type reporting so
@@ -415,13 +400,9 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
 /// notice worth showing the user.
 ///
 /// Called from [`run`] **before** the terminal is put into the alternate
-/// screen, so the `ffmpeg` command that consumes the stream — the single most
-/// useful thing to leave in the scrollback — is not swallowed by it.
-///
-/// It is safe to call before the UI exists: a FIFO destination is opened
-/// non-blocking and parks in [`video::StreamState::Waiting`] rather than
-/// stopping the emulator from starting (see [`crate::video`]). It used to hang
-/// here, before any UI, with nothing to do but kill the process.
+/// screen, because two things here are visible-side-effect-shaped: opening a
+/// FIFO blocks until a reader attaches, and the `ffmpeg` command that consumes
+/// the stream is the single most useful thing to leave in the scrollback.
 ///
 /// Stdout is refused for the same reason telemetry refuses it, only harder:
 /// `ratatui` writes the whole UI to stdout, so a raw frame stream there would
@@ -462,6 +443,16 @@ fn open_video(
                 let (w, h) = up.output_size(160, 144);
                 s.size = Some((w as u32, h as u32));
             }
+            if let video::Destination::Path(p) = &s.dest {
+                if is_fifo(p) {
+                    eprintln!(
+                        "gameboy: video: waiting for a reader on {} — start the \
+                         consumer first, e.g.\n  {}",
+                        p.display(),
+                        s.ffmpeg_hint(None)
+                    );
+                }
+            }
             let (v, err) = VideoOut::open(s);
             if let Some(e) = err {
                 warnings.push(e);
@@ -487,6 +478,21 @@ fn needs_title(dest: &video::Destination) -> bool {
     }
 }
 
+/// Is this path a named pipe? Opening one for writing blocks until a reader
+/// attaches, which deserves a word of warning rather than a silent hang.
+#[cfg(unix)]
+fn is_fifo(p: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::metadata(p)
+        .map(|m| m.file_type().is_fifo())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_fifo(_p: &Path) -> bool {
+    false
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -495,10 +501,6 @@ enum Screen {
     Picker,
     Playing,
 }
-
-/// Everything about the UI that can paint over a terminal image, as one
-/// comparable value. See [`App::ui_signature`].
-type UiSignature = (u8, bool, bool, bool, bool, bool, u8);
 
 #[derive(PartialEq, Eq)]
 enum Overlay {
@@ -577,10 +579,6 @@ struct Session {
     frames_dropped: u64,
     /// Emulated frames since the last displayed one.
     skipped_since_display: u64,
-    /// Display frames written to the terminal (as opposed to deduplicated away),
-    /// cumulative. This is the "issued" half of the pair the status panel shows;
-    /// see [`crate::screen::termcost`] for why there is no "presented" half.
-    frames_issued: u64,
     /// Per-stage timings of the most recent displayed frame, milliseconds.
     t_emulate: f32,
     t_palette: f32,
@@ -673,15 +671,6 @@ struct App {
     trainer_detail: bool,
     /// Selected party slot, cycled with Tab.
     trainer_sel: usize,
-    /// How loudly a wild encounter's shiny-if-traded verdict is announced.
-    shiny_alert: ShinyAlert,
-    /// The last `TrainerPlugin::encounter_seq` this app reacted to, so the
-    /// toast and the bell fire exactly once per Pokémon rather than every
-    /// frame the banner is up.
-    last_encounter_seq: u64,
-    /// A terminal bell owed to a shiny-if-traded verdict, written on the next
-    /// flush rather than from inside the emulation step.
-    pending_bell: bool,
     /// Active save-state slot (`1..=NUM_SLOTS`).
     slot: u32,
     /// Transient in-game notice (save/load/speed feedback) with its raise time.
@@ -711,15 +700,9 @@ struct App {
     /// Signature of everything about the UI that can paint over the picture.
     /// When it changes, the image is retransmitted even if the frame did not,
     /// because the terminal's copy of it may have been partly overwritten.
-    ui_sig: Option<UiSignature>,
+    ui_sig: Option<(u8, bool, bool, bool, bool, bool)>,
     /// Machine-readable run telemetry; disabled (and free) unless configured.
     telemetry: Telemetry,
-    /// What the *terminal* costs per displayed frame, measured by a round-trip
-    /// fence when the window changes size. This is what stops `fps` from being
-    /// a number that can only read 59: drawing is paced to it, so the frames we
-    /// issue are frames the terminal can actually take. See
-    /// [`crate::screen::termcost`].
-    termcost: termcost::TerminalCost,
     /// Raw video-out; disabled (and free) unless configured. Driven from
     /// [`App::step_frame`] — **emulated** frames, not displayed ones, because
     /// display frames are deliberately dropped on a large window and a video
@@ -814,7 +797,6 @@ impl App {
             protocol_name(picker.protocol_type())
         ));
         let palette = config.palette;
-        let shiny_alert = config.shiny_alert;
         let upscaler = Upscaler::new(config.upscale, config.upscale_factor);
         let config_factor = upscaler.factor();
         let config_algo = config.upscale;
@@ -865,9 +847,6 @@ impl App {
             trainer: false,
             trainer_detail: false,
             trainer_sel: 0,
-            shiny_alert,
-            last_encounter_seq: 0,
-            pending_bell: false,
             slot: 1,
             toast: None,
             entries: Vec::new(),
@@ -883,7 +862,6 @@ impl App {
             sprite_rect: None,
             ui_sig: None,
             telemetry,
-            termcost: terminal_cost_model(),
             video,
             video_prep: FramePrep::new(),
             video_upscaler: Upscaler::new(config_algo, config_factor),
@@ -974,7 +952,6 @@ impl App {
                     frames_identical: 0,
                     frames_dropped: 0,
                     skipped_since_display: 0,
-                    frames_issued: 0,
                     t_emulate: 0.0,
                     t_palette: 0.0,
                     t_upscale: 0.0,
@@ -1125,33 +1102,13 @@ impl App {
                 // The picture goes out *after* the text frame has been
                 // flushed, so it is never clipped, re-diffed or overwritten by
                 // `ratatui`. Nothing is written when the frame was unchanged.
-                let issued = self.flush_image()?;
-                let our_cost = t.elapsed();
-                // Measure the terminal's own share of the frame — decode,
-                // upload and composite — which none of the timers above can
-                // see, and which grows with the composited *area* while our own
-                // cost and the bytes on the wire stay flat (measured 0.04 ms →
-                // 2.97 ms over a 25× area range on WezTerm; the ladder is in
-                // `crate::screen::termcost`). Blocking, so it runs only when
-                // the window has changed size or the figure has gone stale,
-                // never in the steady state.
-                if issued {
-                    let layout = self
-                        .session
-                        .as_ref()
-                        .map(|s| s.disp_cells)
-                        .unwrap_or((0, 0));
-                    self.termcost.observe(Instant::now(), layout, fence);
-                }
-                // Never faster than the panel refresh, never slower than either
-                // the draw or **the terminal** can sustain. Issuing pictures a
-                // terminal cannot take does not make them appear — it coalesces
-                // them, which costs us the work and costs the user nothing but
-                // latency, while our counter cheerfully reads 59.
-                let interval = self.termcost.draw_interval(FRAME_TIME);
-                next_draw = next_draw_at(t, our_cost.max(interval));
+                self.flush_image()?;
+                let last_draw_cost = t.elapsed();
+                // Never faster than the panel refresh, never slower than the
+                // draw itself can sustain.
+                next_draw = next_draw_at(t, last_draw_cost);
                 dirty = false;
-                self.emit_telemetry(our_cost);
+                self.emit_telemetry(last_draw_cost);
             }
 
             // 4. Poll input until the next thing is due, so the loop sleeps
@@ -1229,147 +1186,33 @@ impl App {
         // one: display frames are deliberately dropped on a large window
         // (see `crate::termimage`) and a video stream may not be.
         self.video_tick(true);
-        self.announce_new_encounter();
-    }
-
-    /// Raise the one-shot half of the shiny alert.
-    ///
-    /// The banner is *state* — it is redrawn from the latched encounter for as
-    /// long as the Pokémon is on screen. This is the *edge*: the toast and the
-    /// terminal bell that fire once, at the instant it appears, because that is
-    /// the moment the captain is looking at the game and not at a panel.
-    ///
-    /// The whole cost when nothing is happening is comparing two `u64`s.
-    fn announce_new_encounter(&mut self) {
-        let last = self.last_encounter_seq;
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let Some(plugin) = session.gb.plugin::<TrainerPlugin>() else {
-            return;
-        };
-        let seq = plugin.encounter_seq();
-        if seq == last {
-            return;
-        }
-        self.last_encounter_seq = seq;
-        let Some(enc) = plugin.encounter() else {
-            return;
-        };
-        if !enc.would_be_shiny() || self.shiny_alert == ShinyAlert::Off {
-            return;
-        }
-        let msg = format!(
-            "\u{2605} {} L{} WOULD BE SHINY IF TRADED TO GEN 2 \u{2605} DV {}",
-            enc.name,
-            enc.level,
-            enc.dv_string()
-        );
-        if self.shiny_alert.rings() {
-            // BEL. The one moment in this program worth interrupting someone
-            // for: the verdict is only useful before a Ball is spent.
-            self.pending_bell = true;
-        }
-        self.set_toast(msg);
-    }
-
-    /// The wild encounter to draw a banner for this frame, if any. `None` in the
-    /// overworld, in a trainer battle, and when the alert is configured off.
-    fn banner_encounter(&self) -> Option<&crate::trainer::encounter::WildEncounter> {
-        if !self.shiny_alert.shows_banner() {
-            return None;
-        }
-        self.session
-            .as_ref()?
-            .gb
-            .plugin::<TrainerPlugin>()?
-            .encounter()
-    }
-
-    /// `0` no banner, `1` an ordinary encounter, `2` a shiny-if-traded one.
-    /// Part of [`App::ui_signature`] because the row changes the layout, and a
-    /// layout change means every terminal image may have been painted over.
-    fn banner_state(&self) -> u8 {
-        match self.banner_encounter() {
-            None => 0,
-            Some(e) if e.would_be_shiny() => 2,
-            Some(_) => 1,
-        }
-    }
-
-    /// Draw the encounter banner into a row of its own. Never over the picture,
-    /// for the reason given on [`App::render_stats`].
-    fn render_encounter_banner(&self, f: &mut Frame<'_>, area: Rect) {
-        let Some(enc) = self.banner_encounter() else {
-            return;
-        };
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let row = Rect::new(area.x, area.y, area.width, 1);
-        f.render_widget(Clear, row);
-        f.render_widget(
-            Paragraph::new(tv::encounter_banner(enc, area.width as usize)),
-            row,
-        );
     }
 
     /// Start or stop the raw video stream while the game runs (`v`).
     ///
     /// The captain's rule: *never be unsure whether you are live*. So the
     /// Status panel carries a `Video` row, the toggle raises a toast, and the
-    /// full `ffmpeg` command lands in the `?` overlay's notices — and all three
-    /// name the **intent** (`LIVE` for a consumer, `REC` for a file) and the
-    /// destination, because "recording to ~/Videos" and "feeding the camera"
-    /// looked identical before and one of them was silently the wrong one.
+    /// full `ffmpeg` command lands in the `?` overlay's notices.
     ///
     /// With a `video_out` destination configured this simply arms and disarms
     /// it. With none, it records to a file named after the game in
-    /// [`video_dir`] — which is what `V` does explicitly, whatever is
-    /// configured.
+    /// [`video_dir`] — that is what "start streaming when I decide to" means
+    /// when no consumer is waiting on a FIFO.
     fn toggle_video(&mut self) {
-        if self.stop_video() {
+        if self.video.is_enabled() {
+            let s = self.video.stats();
+            self.video.flush();
+            self.video = VideoOut::disabled();
+            self.video_autostart = false;
+            self.set_toast(format!(
+                "Video stream stopped — {} frames, {:.1} MB",
+                s.frames,
+                s.bytes as f64 / 1_048_576.0
+            ));
             return;
         }
         self.start_video();
         self.video_autostart = self.video.is_enabled();
-    }
-
-    /// Record to a timestamped file in [`video_dir`], regardless of any
-    /// `video_out` destination (`V`).
-    ///
-    /// Deliberately its own key. Recording something to keep and feeding a live
-    /// consumer are different jobs with different destinations and different
-    /// formats, and sharing one key meant a configured camera bridge made
-    /// "record a clip" unreachable — and, before that, made "feed the camera"
-    /// silently write a 160×144 file nobody was reading.
-    fn toggle_recording(&mut self) {
-        if self.stop_video() {
-            return;
-        }
-        let template = self.video_template.take();
-        self.start_video();
-        self.video_template = template;
-        self.video_autostart = false;
-    }
-
-    /// Stop whatever is running. `true` if there was something to stop.
-    fn stop_video(&mut self) -> bool {
-        if !self.video.is_enabled() {
-            return false;
-        }
-        let s = self.video.stats();
-        let what = self.video.intent().word();
-        let dest = self.video.destination();
-        self.video.flush();
-        self.video = VideoOut::disabled();
-        self.video_autostart = false;
-        self.set_toast(format!(
-            "{what} stopped: {} frames, {:.1} MB → {dest}",
-            s.frames,
-            s.bytes as f64 / 1_048_576.0
-        ));
-        true
     }
 
     fn start_video(&mut self) {
@@ -1406,39 +1249,29 @@ impl App {
                 return;
             }
         };
-        // The game's name travels with the stream: it is what names the
-        // sidecar's `title=`, and through that the virtual camera's label.
-        spec.title = Some(title.clone());
         let short = match &spec.dest {
             video::Destination::Stdout => "stdout".to_string(),
             video::Destination::Path(p) => p.display().to_string(),
         };
-        let (v, note) = VideoOut::open(spec);
-        // A note is not necessarily a failure any more: an armed FIFO with no
-        // consumer yet returns one *and* a working stream.
-        if !v.is_enabled() {
-            let e = note.unwrap_or_else(|| "video: could not start".to_string());
-            // The V4L2 refusal is several lines of instructions; the toast gets
-            // the headline and the `?` overlay gets all of it.
-            self.set_toast(format!(
-                "Video failed: {}",
-                e.lines().next().unwrap_or("see ? for details")
-            ));
-            self.config_warnings.push(e);
-            return;
-        }
-        self.set_toast(match v.state() {
-            video::StreamState::Waiting => {
-                format!("◌ waiting for a consumer on {short}")
+        let (v, err) = VideoOut::open(spec);
+        match err {
+            Some(e) => {
+                // The V4L2 refusal is several lines of instructions; the toast
+                // gets the headline and the `?` overlay gets all of it.
+                self.set_toast(format!(
+                    "Video failed: {}",
+                    e.lines().next().unwrap_or("see ? for details")
+                ));
+                self.config_warnings.push(e);
+                return;
             }
-            _ => format!("● {} → {short}", v.intent().word()),
-        });
-        if let Some(n) = note {
-            self.config_warnings.push(n);
+            None => {
+                self.set_toast(format!("● LIVE → {short}"));
+                self.config_warnings.push(v.describe());
+                self.video = v;
+                self.video_named = named;
+            }
         }
-        self.config_warnings.push(v.describe());
-        self.video = v;
-        self.video_named = named;
         // The camera the user says they are feeding must name the game — see
         // `video::v4l2::check_label` for why this can only be checked, not
         // fixed.
@@ -1494,30 +1327,12 @@ impl App {
         crate::sound::host_status::snapshot().label()
     }
 
-    /// The Status panel's `Video` row: **off**, **waiting for a consumer**, or
-    /// **live** — and which of the two jobs it is doing.
-    ///
-    /// The three states are not decoration. A FIFO with nothing reading it is
-    /// armed but delivering nothing, and calling that `LIVE` is precisely what
-    /// let a camera bridge look like it was working while the frames went into
-    /// a file somewhere else entirely. The destination is in the row for the
-    /// same reason: `REC` and `LIVE` answer *what*, the path answers *where*.
     fn video_status(&self) -> String {
-        match self.video.state() {
-            video::StreamState::Off => "off".to_string(),
-            video::StreamState::Waiting => {
-                format!("◌ wait {}", tail_of(&self.video.destination()))
-            }
-            video::StreamState::Live => {
-                let s = self.video.stats();
-                format!(
-                    "● {} {:.0}M {}",
-                    self.video.intent().word(),
-                    s.bytes as f64 / 1_048_576.0,
-                    tail_of(&self.video.destination()),
-                )
-            }
+        if !self.video.is_enabled() {
+            return "off".to_string();
         }
+        let s = self.video.stats();
+        format!("● LIVE {:.0}M", s.bytes as f64 / 1_048_576.0)
     }
 
     /// Write the current frame to a PNG and say where it went.
@@ -1634,32 +1449,19 @@ impl App {
     /// Writing it here rather than through a cell symbol is what makes an
     /// unchanged frame cost literally nothing, and what stops an overlay from
     /// freezing the picture. See [`crate::termimage`] for both failure modes.
-    /// Returns whether a **picture** actually went out. A deduplicated frame
-    /// writes nothing and therefore costs the terminal nothing — it must not be
-    /// counted as an issued frame, and it is useless to fence behind. The bell
-    /// below does not count either: it is one byte and no image work.
-    fn flush_image(&mut self) -> io::Result<bool> {
-        // The shiny bell rides out with the same flush: it is raised on an
-        // emulated frame but must not be written mid-`ratatui` draw.
-        if std::mem::take(&mut self.pending_bell) {
-            use std::io::Write as _;
-            let mut out = io::stdout().lock();
-            out.write_all(b"\x07")?;
-            out.flush()?;
-        }
+    fn flush_image(&mut self) -> io::Result<()> {
         let Some(s) = self.session.as_mut() else {
-            return Ok(false);
+            return Ok(());
         };
         if s.pending_wire.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
         use std::io::Write as _;
         let mut out = io::stdout().lock();
         out.write_all(s.pending_wire.as_bytes())?;
         out.flush()?;
         s.pending_wire.clear();
-        s.frames_issued += 1;
-        Ok(true)
+        Ok(())
     }
 
     /// Publish one telemetry record for the frame just drawn. Costs a single
@@ -1705,9 +1507,6 @@ impl App {
             frames_identical: s.frames_identical,
             frames_dropped: s.frames_dropped,
             tx_bytes: s.tx_bytes,
-            frames_issued: s.frames_issued,
-            terminal_ms: self.termcost.per_frame().map(|d| d.as_secs_f32() * 1000.0),
-            terminal_ceiling_fps: self.termcost.ceiling_fps(),
             audio: s.audio_sample(),
             video: self.video.is_enabled().then(|| {
                 let v = self.video.stats();
@@ -1918,15 +1717,9 @@ impl App {
                     return;
                 }
                 // Video stream on/off. `v` for video — free, and the one key
-                // nobody has to look up. `V` records a file instead, so the two
-                // intents are separately reachable however `video_out` is set
-                // (see `App::toggle_recording`).
+                // nobody has to look up.
                 KeyCode::Char('v') => {
                     self.toggle_video();
-                    return;
-                }
-                KeyCode::Char('V') => {
-                    self.toggle_recording();
                     return;
                 }
                 // Screenshot: `c` captures what you see (palette + upscaler),
@@ -1951,19 +1744,6 @@ impl App {
                 // key could collide with somebody's A/B binding.
                 KeyCode::Char('T') => {
                     self.toggle_trainer();
-                    return;
-                }
-                // Battle control (Pokémon Red/Blue, `plugins = gen1-battle`).
-                // `B` fires the selected preset, `N` chooses the next one.
-                // Both are shifted for the same reason `T` is: the game
-                // buttons are configurable lowercase letters, so an unshifted
-                // key could be somebody's A/B binding.
-                KeyCode::Char('B') => {
-                    self.fire_battle();
-                    return;
-                }
-                KeyCode::Char('N') => {
-                    self.next_battle_preset();
                     return;
                 }
                 // Detail view and party selection only bind while the panel is
@@ -2025,51 +1805,6 @@ impl App {
                 self.release_button(button);
             }
         }
-    }
-
-    /// Start the selected battle preset. One keypress, as asked for.
-    ///
-    /// Nothing happens unless the user configured `plugins = gen1-battle`, and
-    /// the plugin then still waits for the game to be somewhere a battle can
-    /// start — so this is "arm it", not "force it". Both outcomes are toasted,
-    /// because a control that silently does nothing is worse than no control.
-    fn fire_battle(&mut self) {
-        let Some(s) = self.session.as_mut() else {
-            return;
-        };
-        let Some(p) = s.gb.plugin_mut::<crate::plugin::battle::BattlePlugin>() else {
-            self.set_toast(
-                "no battle plugin — add `plugins = gen1-battle` to config.toml",
-            );
-            return;
-        };
-        let name = p.selected().map(|x| x.name.clone());
-        let msg = match p.arm_selected() {
-            Ok(()) => match name {
-                Some(n) => format!("Battle: {n}"),
-                None => "Battle armed".to_string(),
-            },
-            Err(e) => format!("Battle: {e}"),
-        };
-        self.set_toast(msg);
-    }
-
-    /// Cycle which preset `B` will fire.
-    fn next_battle_preset(&mut self) {
-        let Some(s) = self.session.as_mut() else {
-            return;
-        };
-        let Some(p) = s.gb.plugin_mut::<crate::plugin::battle::BattlePlugin>() else {
-            self.set_toast(
-                "no battle plugin — add `plugins = gen1-battle` to config.toml",
-            );
-            return;
-        };
-        let msg = match p.select_next() {
-            Some(x) => format!("Battle: {} — {}", x.name, x.summary()),
-            None => "no battle presets".to_string(),
-        };
-        self.set_toast(msg);
     }
 
     fn map_button(&self, code: &KeyCode) -> Option<KeypadKey> {
@@ -2349,13 +2084,6 @@ impl App {
                 rest.height -= 1;
                 self.render_toast(f, Rect::new(area.x, area.bottom() - 1, area.width, 1));
             }
-            // The encounter verdict takes the top row, above everything. It is
-            // the one thing here that is time-critical: a Ball is about to be
-            // spent or not spent.
-            if self.banner_state() != 0 && rest.height > 1 {
-                self.render_encounter_banner(f, Rect::new(rest.x, rest.y, rest.width, 1));
-                rest = Rect::new(rest.x, rest.y + 1, rest.width, rest.height - 1);
-            }
             let mut trainer_panel = None;
             if self.trainer && rest.width > tv::PANEL_W + 8 {
                 trainer_panel = Some(Rect::new(
@@ -2386,22 +2114,14 @@ impl App {
             return;
         }
 
-        // The encounter banner is a row of its own, directly under the title —
-        // never over the picture (a terminal image owns whole cells) and never
-        // folded into the footer, which the toast already owns.
-        let banner_h = u16::from(self.banner_state() != 0);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),        // header
-                Constraint::Length(banner_h), // wild-encounter verdict
-                Constraint::Min(0),           // body
-                Constraint::Length(1),        // footer
+                Constraint::Length(1), // header
+                Constraint::Min(0),    // body
+                Constraint::Length(1), // footer
             ])
             .split(area);
-        if banner_h > 0 {
-            self.render_encounter_banner(f, rows[1]);
-        }
 
         let title = self
             .session
@@ -2427,7 +2147,7 @@ impl App {
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(side_w)])
-            .split(rows[2]);
+            .split(rows[1]);
 
         // The stats panel lives in the sidebar, above Status — never over the
         // picture.
@@ -2465,13 +2185,13 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
         };
-        f.render_widget(Paragraph::new(footer), rows[3]);
+        f.render_widget(Paragraph::new(footer), rows[2]);
     }
 
     /// Everything about the UI that can paint over a terminal image. When it
     /// changes, every image must be retransmitted even if its pixels did not,
     /// because the terminal's copy may have been partly overwritten.
-    fn ui_signature(&self) -> UiSignature {
+    fn ui_signature(&self) -> (u8, bool, bool, bool, bool, bool) {
         (
             match self.overlay {
                 Overlay::None => 0u8,
@@ -2483,9 +2203,6 @@ impl App {
             self.toast_text().is_some(),
             self.trainer,
             self.trainer_detail,
-            // The encounter banner takes a row, which moves everything below it
-            // — including the picture.
-            self.banner_state(),
         )
     }
 
@@ -2669,10 +2386,6 @@ impl App {
         let speed_pct = s.emu_fps as f64 / DMG_HZ as f64 * 100.0;
         let mut lines = vec![
             Line::from(format!("fps  {:.0} / {:.0} emu", s.fps, s.emu_fps)),
-            // What the *terminal* can take, measured. `fps` above is what we
-            // issued; without this line the two cannot be told apart, which is
-            // exactly how a counter that could only read 59 went unnoticed.
-            Line::from(format!("term {}", self.termcost_label())),
             Line::from(format!("spd  {speed_pct:.0}% of real")),
             Line::from(format!("emu  {:.2}ms", s.t_emulate)),
             Line::from(format!("pal  {:.2}ms", s.t_palette)),
@@ -2776,31 +2489,6 @@ impl App {
     /// [`crate::screen::config::TransmitScale`]) — usually smaller than the
     /// factor shown in the status
     /// panel, because the terminal does the rest of the enlargement for free.
-    /// The terminal's measured per-frame cost and the ceiling it implies, or an
-    /// honest "we cannot tell".
-    ///
-    /// **This is a ceiling, not a present count**, and it is labelled so. No
-    /// terminal protocol reports "I painted your image" — the Kitty graphics
-    /// response acknowledges the command, and a fence cannot report a frame the
-    /// terminal coalesced and never painted. What it *can* report is how long
-    /// the terminal takes to accept one, which bounds what it can present.
-    fn termcost_label(&self) -> String {
-        match (self.termcost.per_frame(), self.termcost.ceiling_fps()) {
-            (Some(d), Some(fps)) => {
-                let ms = d.as_secs_f32() * 1000.0;
-                if fps >= DMG_HZ {
-                    // Not the bottleneck: say so rather than printing a
-                    // four-digit fps that invites the wrong conclusion.
-                    format!("{ms:.1}ms ok")
-                } else {
-                    format!("{ms:.1}ms ≤{fps:.0}fps")
-                }
-            }
-            _ if !self.termcost.enabled() => "n/a no CPR".to_string(),
-            _ => "measuring".to_string(),
-        }
-    }
-
     fn transmit_factor(&self) -> u8 {
         self.config
             .transmit_scale
@@ -3007,7 +2695,7 @@ impl App {
         //
         //   1. The box was a fixed `Length(13)`, which fits exactly eleven
         //      content rows, and the plugin row is pushed *last* — so it was
-        //      clipped away entirely.
+        //      clipped away entirely. The box is now sized to its contents.
         //   2. `plugin_status_line()` joins every plugin with " | " and the row
         //      truncates to 18 columns, so with the always-attached trainer
         //      view first, a *second* plugin — the link partner, the one that
@@ -3017,6 +2705,11 @@ impl App {
             .as_ref()
             .map(|s| s.gb.plugin_statuses())
             .unwrap_or_default();
+        let status_h = 13 + plugins.len() as u16;
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(status_h), Constraint::Min(0)])
+            .split(area);
 
         // Status. `Sent` is the size actually transmitted to the terminal each
         // frame, which the terminal then stretches to `Scale`; keeping those
@@ -3077,13 +2770,6 @@ impl App {
                     format!("{fps:.0} · emu {emu_fps:.0}")
                 },
             ),
-            // The two halves of a displayed frame. `FPS` above is **ours**:
-            // pictures we issued. `Term` is the terminal's — how long it takes
-            // to accept one, and therefore the most it could possibly present.
-            // They used to be indistinguishable, which is how "reports 59, is
-            // clearly rendering slower" went unexplained. See
-            // `crate::screen::termcost` for why there is no true present count.
-            kv("Term", &self.termcost_label()),
         ];
         // The `!` / `!!` marks travel with the name, so "this one may write my
         // game" survives truncation of the detail text.
@@ -3095,20 +2781,6 @@ impl App {
             };
             status.push(kv("Plugin", &truncate(&detail, 18)));
         }
-        // Sized from `status` itself, plus the two border rows. A hand-counted
-        // constant here is the bug this box has had twice: it was `13 + plugins`
-        // against a twelve-line list, so with two plugins attached the second
-        // one was clipped away and `an_attached_plugin_is_visible_in_the_
-        // rendered_status_panel` failed — a plugin *was* active and invisible,
-        // which is exactly what docs/plugins.md §4 promises cannot happen.
-        // Adding a status row must not silently cost a plugin its row again.
-        let split = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(status.len() as u16 + 2),
-                Constraint::Min(0),
-            ])
-            .split(area);
         f.render_widget(
             Paragraph::new(status)
                 .block(Block::default().borders(Borders::ALL).title(" Status ")),
@@ -3132,7 +2804,7 @@ impl App {
             Line::from("[ palette   ? help"),
             Line::from("] upscale   } factor"),
             Line::from("c shot      C raw shot"),
-            Line::from("v stream    V record"),
+            Line::from("v video out"),
         ];
         f.render_widget(
             Paragraph::new(controls)
@@ -3165,13 +2837,7 @@ impl App {
             Line::from("  f         fullscreen  [       palette"),
             Line::from("  ]         upscaler    }       upscale factor"),
             Line::from("  c         screenshot  C       screenshot (raw 160x144)"),
-            Line::from(
-                "  v         stream to `video_out` on/off — a FIFO waits for its \
-                 consumer, it never blocks",
-            ),
-            Line::from(
-                "  V         record a timestamped file instead (see docs/video-out.md)",
-            ),
+            Line::from("  v         video stream on/off (see docs/video-out.md)"),
             Line::from("  ?         this help   q       quit"),
             Line::from(""),
             Line::from("Trainer view (Pokémon Red/Blue)"),
@@ -3179,31 +2845,6 @@ impl App {
             Line::from("  tab       next party member   shift-tab  previous"),
             Line::from(Span::styled(
                 "  read-only: it never writes to the game",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(""),
-            Line::from("Battle control (Pokémon Red/Blue, plugins = gen1-battle)"),
-            Line::from("  B         start the selected battle   N   next preset"),
-            Line::from(Span::styled(
-                "  writes the party into RAM for the fight and puts it back \
-                 afterwards; it never writes cartridge RAM, so your .sav is \
-                 untouched unless you save in-game (docs/gen1/battle-control.md)",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(""),
-            Line::from("Wild-encounter shiny check"),
-            Line::from(Span::styled(
-                format!(
-                    "  a banner names every catchable wild Pokémon's DVs and \
-                     whether it would be shiny if traded to Gen 2 — no key \
-                     needed, the trainer panel may stay shut (shiny_alert = {})",
-                    self.shiny_alert.name()
-                ),
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "  Gen 1 has no shiny Pokémon at all; the claim is only what \
-                 Gold/Silver would do with the same DVs",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
@@ -3421,87 +3062,8 @@ fn shm_supported() -> bool {
     SHM_OK.load(Ordering::Relaxed)
 }
 
-/// Whether this terminal answers `CSI 6 n`, and how long a bare round trip
-/// takes — the two things [`crate::screen::termcost`] needs to be able to
-/// measure the terminal's own per-frame cost. Also resolved by
-/// [`probe_shm_support`], which already has `/dev/tty` open and has already
-/// established that the terminal is talking.
-static CPR_OK: AtomicBool = AtomicBool::new(false);
-static CPR_FLOOR_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The measured cost model for this terminal, or an unmeasurable one.
-///
-/// `GB_TERM_FENCE=off` opts out: the frontend then paces at the display rate as
-/// it always did, and says `n/a` rather than showing a ceiling it did not
-/// measure.
-fn terminal_cost_model() -> termcost::TerminalCost {
-    if env::var("GB_TERM_FENCE").as_deref() == Ok("off") {
-        return termcost::TerminalCost::unmeasurable();
-    }
-    termcost::TerminalCost::new(
-        CPR_OK.load(Ordering::Relaxed),
-        Duration::from_micros(CPR_FLOOR_US.load(Ordering::Relaxed)),
-    )
-}
-
-/// Time one round trip to the terminal, with whatever we last wrote queued
-/// ahead of it.
-///
-/// A cursor-position report is a **fence**: the terminal answers it only after
-/// working through everything written before it, so with a picture just written
-/// this measures that picture's cost *to the terminal* — the half of the frame
-/// our own timers cannot see.
-///
-/// `crossterm::cursor::position()` is the only safe way to do this once the
-/// event loop is running. It reads through crossterm's own event source, so a
-/// keypress arriving during the wait is queued and delivered afterwards; reading
-/// `/dev/tty` directly here (which is right at *startup*, before the loop owns
-/// stdin — see [`probe_terminal`]) would race crossterm for the same input and
-/// silently eat keys.
-fn fence() -> Option<Duration> {
-    let t = Instant::now();
-    match ratatui::crossterm::cursor::position() {
-        Ok(_) => Some(t.elapsed()),
-        Err(_) => None,
-    }
-}
-
-/// Time a bare cursor-position round trip a few times and keep the fastest.
-///
-/// This is the *fixed* part of a fence — pty latency plus the terminal's input
-/// loop — with nothing queued for it to work through. It is subtracted from
-/// every later sample so that what is reported is the terminal's frame work and
-/// not our round-trip overhead. Measured on WezTerm it is 3.35 ms at 80×24 and
-/// 3.39 ms at 640×176: flat across a 65× change in composited area, which is
-/// what a fixed latency looks like and why subtracting a constant is right.
-fn measure_cpr_floor(tty: &mut std::fs::File) {
-    use std::io::Write as _;
-    let mut best: Option<Duration> = None;
-    for _ in 0..termcost::SAMPLES {
-        let t = Instant::now();
-        if tty.write_all(b"\x1b[6n").and_then(|_| tty.flush()).is_err() {
-            return;
-        }
-        if !read_reply(tty, HANDSHAKE_KNOCK_WAIT).contains('R') {
-            return;
-        }
-        let d = t.elapsed();
-        best = Some(best.map_or(d, |b: Duration| b.min(d)));
-    }
-    if let Some(b) = best {
-        CPR_OK.store(true, Ordering::Relaxed);
-        CPR_FLOOR_US.store(b.as_micros() as u64, Ordering::Relaxed);
-        debug_layout(&format!("[fence] floor {:.3} ms", b.as_secs_f64() * 1000.0));
-    }
-}
-
-/// Ask the terminal what it can do, once, before the event loop owns stdin.
-///
-/// Two answers come out of this: whether it implements Kitty's `t=s`
-/// transmission medium, and whether it answers `CSI 6 n` (plus how fast) — the
-/// latter being what lets [`crate::screen::termcost`] measure the terminal's own
-/// per-frame cost instead of the frontend reporting a number that can only ever
-/// read 59.
+/// Ask the terminal whether it implements Kitty's `t=s` transmission medium,
+/// and remember the answer.
 ///
 /// **Ask; do not infer.** WezTerm implements the Kitty graphics protocol but
 /// not its Unicode placeholders, so any rule of the form "if `$TERM` looks like
@@ -3513,10 +3075,14 @@ fn measure_cpr_floor(tty: &mut std::fs::File) {
 /// Failure in any direction — no reply, an error reply, no `/dev/shm`, a
 /// platform without shared memory — leaves the flag false and the frontend on
 /// the compressed-PNG transport, which works everywhere.
-fn probe_terminal() {
-    if !cfg!(unix) {
+fn probe_shm_support() {
+    if !cfg!(unix) || std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
         return;
     }
+    let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
+        debug_layout("[shm] no shared memory available to offer the terminal");
+        return;
+    };
     // Talk to `/dev/tty`, not to stdout/stdin.
     //
     // Writing the query to `io::stdout()` and reading the answer from fd 0
@@ -3528,6 +3094,7 @@ fn probe_terminal() {
     // opening it directly costs nothing and shares nothing.
     let Some(mut tty) = open_tty() else {
         debug_layout("[shm] no /dev/tty — assuming no shared memory");
+        query.finish();
         return;
     };
     use std::io::Write as _;
@@ -3543,20 +3110,9 @@ fn probe_terminal() {
     // it has.
     if !terminal_is_answering(&mut tty) {
         debug_layout("[shm] terminal never answered a cursor report — assuming no");
+        query.finish();
         return;
     }
-    // It answers: time a bare round trip while we still own the terminal. This
-    // is the floor under every later fence, and the loop cannot measure it
-    // itself because by then there is always a picture queued behind it.
-    measure_cpr_floor(&mut tty);
-
-    if std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
-        return;
-    }
-    let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
-        debug_layout("[shm] no shared memory available to offer the terminal");
-        return;
-    };
     let asked = tty
         .write_all(query.seq.as_bytes())
         .and_then(|_| tty.write_all(b"\x1b[6n"))
@@ -3987,28 +3543,6 @@ fn attach_plugins(
                     Err(e) => notes.push(format!("plugin gen1-link: {e}")),
                 }
             }
-            crate::plugin::battle::NAME => {
-                let file = std::env::var("GB_BATTLES")
-                    .ok()
-                    .or_else(|| cfg.battles.clone());
-                let path = file.as_deref().map(std::path::Path::new);
-                match crate::plugin::battle::BattlePlugin::from_preset_file(
-                    rom.to_vec(),
-                    path,
-                ) {
-                    Ok(p) => {
-                        let n = p.preset_names().len();
-                        match gb.add_plugin(Box::new(p)) {
-                            Ok(()) => notes.push(format!(
-                                "plugin gen1-battle attached, {n} presets \
-                                 (press B to start one, N to choose)"
-                            )),
-                            Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
-                        }
-                    }
-                    Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
-                }
-            }
             other => notes.push(format!("unknown plugin '{other}'")),
         }
     }
@@ -4292,74 +3826,6 @@ mod tests {
         assert!(
             (18.0..=21.0).contains(&draw_rate),
             "expected ~20 displayed fps with a 50 ms draw, got {draw_rate:.1}"
-        );
-    }
-
-    /// The same invariant for the half we could not previously see.
-    ///
-    /// A *slow draw* was always handled — `next_draw_at` spaced draws by their
-    /// measured cost. But with the shared-memory transport the draw costs 0.2 ms
-    /// however big the window is, and all the expense moved to the terminal,
-    /// where nothing measured it. So the loop happily issued 59.7 pictures a
-    /// second to a terminal that could take 20, the surplus was coalesced away
-    /// inside it, and `fps` read 59 throughout. Feeding the measured terminal
-    /// cost into the same pacing arithmetic is what makes that number true.
-    #[test]
-    fn a_slow_terminal_drops_pictures_not_emulated_frames() {
-        let start = Instant::now();
-        // A terminal that needs 50 ms per frame — three times the budget — with
-        // a draw of our own that costs almost nothing, which is the real shape.
-        let mut termcost = termcost::TerminalCost::new(true, Duration::ZERO);
-        let our_cost = Duration::from_micros(200);
-        let terminal = Duration::from_millis(50);
-        let horizon = Duration::from_secs(30);
-        let mut now = start;
-        let mut next_frame = start;
-        let mut next_draw = start;
-        let (mut emulated, mut drawn) = (0u32, 0u32);
-        let mut fences = 0u32;
-        while now < start + horizon {
-            let (due, deadline) = frames_due(now, next_frame, FRAME_TIME);
-            emulated += due;
-            next_frame = deadline;
-            if now >= next_draw {
-                drawn += 1;
-                let started = now;
-                now += our_cost;
-                let sampled = now;
-                termcost.observe(sampled, (133, 60), || {
-                    fences += 1;
-                    now += terminal; // the fence blocks for the round trip
-                    Some(terminal)
-                });
-                let interval = termcost.draw_interval(FRAME_TIME);
-                next_draw = next_draw_at(started, our_cost.max(interval));
-            } else {
-                now = next_frame
-                    .min(next_draw)
-                    .max(now + Duration::from_micros(100));
-            }
-        }
-        let secs = now.duration_since(start).as_secs_f32();
-        let emu_rate = emulated as f32 / secs;
-        let draw_rate = drawn as f32 / secs;
-        assert!(
-            (emu_rate - DMG_HZ).abs() < 0.15,
-            "emulation ran at {emu_rate:.1} fps, not {DMG_HZ} — the game would lag"
-        );
-        assert!(
-            (18.0..=21.0).contains(&draw_rate),
-            "expected ~20 issued fps against a 50 ms terminal, got {draw_rate:.1}"
-        );
-        // And the measurement itself must stay cheap: three fences per
-        // RESAMPLE_AFTER, not one per frame.
-        let expected_fences = (horizon.as_secs_f32()
-            / termcost::RESAMPLE_AFTER.as_secs_f32())
-        .ceil() as u32
-            * termcost::SAMPLES as u32;
-        assert!(
-            fences <= expected_fences + termcost::SAMPLES as u32,
-            "fenced {fences} times in 30 s — sampling, not per-frame, is the point"
         );
     }
 
@@ -4654,48 +4120,6 @@ mod tests {
         assert_eq!(app.video.stats().frames, 0);
     }
 
-    /// **The regression test for the whole task.** `video_out` pointing at a
-    /// FIFO with no consumer used to park the process in `open(2)` inside
-    /// [`open_video`] — before the terminal was even touched, so there was no
-    /// UI, no message after the first line, and nothing to do but `kill`.
-    /// A media sink must never be able to stop the emulator from starting.
-    #[test]
-    #[cfg(all(unix, feature = "libc"))]
-    fn a_configured_fifo_with_no_consumer_does_not_stop_the_emulator_starting() {
-        use std::ffi::CString;
-        let dir = std::env::temp_dir()
-            .join(format!("gameboy-vid-test/{}-startup", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let fifo = dir.join("gb.raw");
-        let _ = std::fs::remove_file(&fifo);
-        let c = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
-        if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
-            return; // cannot make a FIFO here; nothing to prove
-        }
-
-        let mut config = Config::default();
-        config.video.out = Some(fifo.to_string_lossy().into_owned());
-        config.video.format = Some("yuyv".to_string());
-        config.video.size = Some("640x480".to_string());
-
-        let t = Instant::now();
-        let (video, _template, warnings) = open_video(&config, Vec::new());
-        let took = t.elapsed();
-        assert!(
-            took < Duration::from_secs(2),
-            "startup waited {took:?} on an unread FIFO"
-        );
-        assert_eq!(video.state(), video::StreamState::Waiting);
-        assert!(video.is_enabled(), "armed, ready for the bridge to start");
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("waiting for a consumer")),
-            "the user must be told what it is waiting for: {warnings:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// The stream is driven by **emulated** frames, not displayed ones. This
     /// is the whole reason it is fed from `step_frame`: the terminal drops
     /// display frames on a large window (deliberately — see `crate::termimage`)
@@ -4726,9 +4150,7 @@ mod tests {
     }
 
     /// The `v` key must arm and disarm the stream mid-game, name the file
-    /// after the cartridge, and leave no doubt about **which of the two jobs**
-    /// it is doing: with nothing configured it is a *recording*, and it must
-    /// not present itself as a live feed.
+    /// after the cartridge, and leave no doubt about whether it is live.
     #[test]
     fn the_v_key_toggles_the_stream_and_names_it_after_the_game() {
         let dir = std::env::temp_dir()
@@ -4744,23 +4166,8 @@ mod tests {
         app.toggle_video();
         assert!(app.video.is_enabled(), "toast: {:?}", app.toast);
         let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
-        assert!(toast.starts_with("● REC → "), "{toast}");
-        assert!(
-            app.video_status().starts_with("● REC"),
-            "{}",
-            app.video_status()
-        );
-        assert!(
-            !app.video_status().contains("LIVE"),
-            "a file on disk is not a live feed: {}",
-            app.video_status()
-        );
-        // …and the row says *where*, which is the other half of the confusion.
-        assert!(
-            app.video_status().contains("DMG_ACID2"),
-            "{}",
-            app.video_status()
-        );
+        assert!(toast.starts_with("● LIVE → "), "{toast}");
+        assert!(app.video_status().starts_with("● LIVE"));
 
         for _ in 0..5 {
             app.step_frame();
@@ -4876,83 +4283,6 @@ mod tests {
         }
     }
 
-    /// The status panel must name **both** halves of a displayed frame: the
-    /// pictures we issued, and what the terminal costs to take one.
-    ///
-    /// One number alone is how "reports 59 fps but is clearly rendering slower"
-    /// stayed unexplained — `fps` is entirely ours and cannot go down for
-    /// anything the terminal does. And when the terminal cannot be asked, the
-    /// panel must say so rather than print a plausible zero.
-    #[test]
-    fn the_status_panel_reports_the_terminal_alongside_our_own_frame_rate() {
-        use ratatui::backend::TestBackend;
-        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
-            return;
-        };
-        // No probe ran in a test binary, so the terminal is unmeasurable — and
-        // that is exactly the case that must not be dressed up as a number.
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        terminal.draw(|f| app.render(f)).unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(text.contains("FPS"), "our own rate is missing");
-        assert!(text.contains("Term"), "the terminal's rate is missing");
-        assert!(
-            text.contains("n/a"),
-            "an unmeasurable terminal must say so, not print a number: {text}"
-        );
-    }
-
-    /// The transmitted image is the source resolution whatever the window does.
-    ///
-    /// This is the rule `docs/terminal-render.md` was written to establish, and
-    /// it is worth a standing test because the failure mode is invisible from
-    /// our side: the payload stays small in *our* timings while the terminal
-    /// quietly composites something enormous.
-    #[test]
-    fn the_transmitted_image_is_the_source_resolution_at_every_window_size() {
-        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
-            return;
-        };
-        for (w, h) in [(60u16, 20u16), (120, 40), (213, 55), (268, 60), (400, 120)] {
-            let _ = drawn_bytes(&mut app, w, h);
-            let s = app.session.as_ref().expect("session");
-            assert_eq!(
-                s.tx_px,
-                (160, 144),
-                "transmitted {:?} at {w}x{h} — the terminal must do the scaling",
-                s.tx_px
-            );
-        }
-    }
-
-    /// `cell_scale` cancels out of the cell rectangle, so it cannot make the
-    /// picture we ask the terminal to composite any larger.
-    ///
-    /// Worth pinning because the HiDPI note in `AGENTS.md` reads as though
-    /// `cell_scale = auto` doubles something that reaches the wire. It does not:
-    /// it scales the *font*, and the fit divides by the same font, so the cell
-    /// rectangle is identical and the payload is 160×144 either way. All it
-    /// changes is the pixel figure the status panel reports.
-    #[test]
-    fn cell_scale_does_not_change_what_the_terminal_is_asked_to_composite() {
-        let area = Rect::new(0, 0, 238, 58);
-        let (plain, s1) = fit_metrics(area, 160, 144, 19, 45);
-        let (doubled, s2) = fit_metrics(area, 160, 144, 38, 90);
-        assert_eq!(
-            plain, doubled,
-            "cell_scale changed the composited rectangle: {plain:?} vs {doubled:?}"
-        );
-        // The reported scale doubles — that is the *only* thing it moves, and
-        // it is a number on a panel, not bytes or pixels.
-        assert!((s2 - s1 * 2.0).abs() < 0.01, "{s1} {s2}");
-    }
-
     /// The other half of the same bug: the stats panel must not occupy a cell
     /// the picture occupies, **at any window size**. A terminal image owns whole
     /// cells, so an overlap is not "text on top of an image" — it is text
@@ -5053,228 +4383,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// The shiny banner is a terminal image's worst enemy if it lands on the
-    /// picture: a cell an image covers cannot also hold text. It gets its own
-    /// row, at every size, in both layouts, for both verdicts.
-    #[test]
-    fn the_encounter_banner_never_touches_the_picture_at_any_size() {
-        use ratatui::backend::TestBackend;
-        let sizes = [
-            (40u16, 12u16),
-            (60, 20),
-            (80, 24),
-            (120, 40),
-            (200, 60),
-            (320, 90),
-        ];
-        for shiny in [false, true] {
-            for fullscreen in [false, true] {
-                for trainer in [false, true] {
-                    for (cols, rows) in sizes {
-                        let mut app =
-                            test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
-                        app.fullscreen = fullscreen;
-                        app.trainer = trainer;
-                        plant_encounter(&mut app, shiny);
-                        assert_ne!(app.banner_state(), 0, "the banner must be up");
-                        let mut terminal =
-                            Terminal::new(TestBackend::new(cols, rows)).unwrap();
-                        terminal.draw(|f| app.render(f)).unwrap();
-                        let s = app.session.as_ref().unwrap();
-                        let picture = Rect::new(
-                            s.disp_origin.0,
-                            s.disp_origin.1,
-                            s.disp_cells.0,
-                            s.disp_cells.1,
-                        );
-                        assert!(picture.area() > 0, "{cols}x{rows}: no picture");
-                        // The banner owns row 0 in fullscreen, row 1 otherwise.
-                        let banner_y = if fullscreen { 0 } else { 1 };
-                        let banner = Rect::new(0, banner_y, cols, 1);
-                        assert_eq!(
-                            picture.intersection(banner).area(),
-                            0,
-                            "{cols}x{rows} full={fullscreen} trainer={trainer}: \
-                             banner {banner:?} overlaps picture {picture:?}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// The verdict has to reach someone who never opens the trainer panel —
-    /// which is everyone, during an encounter.
-    #[test]
-    fn the_banner_and_the_alert_do_not_need_the_trainer_panel_open() {
-        use ratatui::backend::TestBackend;
-        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
-        assert!(!app.trainer, "the panel starts closed");
-        plant_encounter(&mut app, true);
-        assert_eq!(app.banner_state(), 2, "a shiny verdict, panel or no panel");
-
-        // The one-shot half: a toast and a bell, exactly once.
-        app.announce_new_encounter();
-        let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
-        assert!(
-            toast.contains("WOULD BE SHINY IF TRADED TO GEN 2"),
-            "{toast}"
-        );
-        assert!(toast.contains("DV "), "{toast}");
-        assert!(app.pending_bell, "a shiny rings the bell");
-        app.pending_bell = false;
-        app.toast = None;
-        app.announce_new_encounter();
-        assert!(app.toast.is_none(), "the same Pokémon must not re-toast");
-        assert!(!app.pending_bell, "nor re-ring");
-
-        // And the row really is drawn.
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        terminal.draw(|f| app.render(f)).unwrap();
-        let row: String = (0..120)
-            .filter_map(|x| terminal.backend().buffer().cell((x, 1)))
-            .map(|c| c.symbol().to_string())
-            .collect();
-        assert!(row.contains("SHINY IF TRADED TO GEN 2"), "{row:?}");
-    }
-
-    /// The Status panel is a fixed column of rows, and rows keep being added to
-    /// it (`Audio` most recently). Any of them silently clipping is the bug
-    /// `an_attached_plugin_is_visible_in_the_rendered_status_panel` exists to
-    /// catch, so this pins the *worst* case this crew can create: two plugins
-    /// attached **and** a live wild encounter, which makes the trainer plugin's
-    /// row its longest.
-    #[test]
-    fn every_status_row_survives_an_audio_row_and_a_live_encounter() {
-        use ratatui::backend::TestBackend;
-        struct Marker;
-        impl crate::plugin::Plugin for Marker {
-            fn name(&self) -> &str {
-                "zzmarker"
-            }
-            fn capabilities(&self) -> crate::plugin::Capability {
-                crate::plugin::Capability::OBSERVE
-            }
-            fn on_event(
-                &mut self,
-                _e: &crate::plugin::Event,
-                _m: &mut crate::plugin::Machine,
-            ) {
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-
-        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
-            return;
-        };
-        app.session
-            .as_mut()
-            .expect("session")
-            .gb
-            .add_plugin(Box::new(Marker))
-            .expect("attach");
-        plant_encounter(&mut app, true);
-
-        for (w, h) in [(120u16, 40u16), (100, 30), (160, 50)] {
-            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-            terminal.draw(|f| app.render(f)).unwrap();
-            let text: String = terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .map(|c| c.symbol())
-                .collect();
-            // Every row of the Status block, first to last, plus both plugins.
-            for needle in [
-                "ROM", "MBC", "Scale", "Sent", "Proto", "Palette", "Upscale", "Speed",
-                "Slot", "Video", "Audio", "FPS", "trainer", "zzmarker",
-            ] {
-                assert!(
-                    text.contains(needle),
-                    "{needle:?} was pushed out of the Status panel at {w}x{h} — \
-                     the box must be sized from its own row list"
-                );
-            }
-            // And the banner is still there, in its own row.
-            assert!(text.contains("SHINY IF TRADED TO GEN 2"), "at {w}x{h}");
-        }
-    }
-
-    /// The verdict does not cost the Status panel a row: it rides in the
-    /// trainer plugin's existing `Plugin` row, which is a second place it is
-    /// visible when the panel is closed.
-    #[test]
-    fn a_live_encounter_rides_in_the_plugin_row_rather_than_adding_one() {
-        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
-            return;
-        };
-        let rows = |app: &App| {
-            app.session
-                .as_ref()
-                .map(|s| s.gb.plugin_statuses().len())
-                .unwrap_or(0)
-        };
-        let before = rows(&app);
-        plant_encounter(&mut app, true);
-        assert_eq!(rows(&app), before, "no extra Status row");
-        // The *wording* of that row is pinned next to the code that builds it,
-        // in `trainer::tests::the_plugin_status_line_carries_the_verdict`: the
-        // synthetic ROM here is not Red/Blue, so this plugin correctly reports
-        // "unsupported cartridge" whatever is planted on it.
-    }
-
-    /// `shiny_alert = off` removes the row entirely — and with it the extra
-    /// layout row, so the picture goes back to its old size.
-    #[test]
-    fn the_alert_can_be_switched_off() {
-        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
-        plant_encounter(&mut app, true);
-        assert_eq!(app.banner_state(), 2);
-        app.shiny_alert = ShinyAlert::Off;
-        assert_eq!(app.banner_state(), 0);
-        app.announce_new_encounter();
-        assert!(!app.pending_bell);
-        // `quiet` keeps the row and the toast but not the bell.
-        app.shiny_alert = ShinyAlert::Quiet;
-        plant_encounter(&mut app, true);
-        app.announce_new_encounter();
-        assert_eq!(app.banner_state(), 2);
-        assert!(!app.pending_bell, "quiet means quiet");
-        assert!(app.toast.is_some(), "but it still says so");
-    }
-
-    /// Plant a wild encounter on the attached plugin, so the frontend can be
-    /// tested without a Pokémon cartridge.
-    fn plant_encounter(app: &mut App, shiny: bool) {
-        use crate::trainer::encounter::WildEncounter;
-        use crate::trainer::gen1::{BattleType, Dvs};
-        let dvs = if shiny {
-            Dvs::from_bytes(0xEA, 0xAA) // ATKDEFDV_SHINY / SPDSPCDV_SHINY
-        } else {
-            Dvs::from_bytes(0x9A, 0x88)
-        };
-        app.session
-            .as_mut()
-            .unwrap()
-            .gb
-            .plugin_mut::<TrainerPlugin>()
-            .unwrap()
-            .set_encounter_for_test(Some(WildEncounter {
-                species: 0x24,
-                dex: 16,
-                name: "PIDGEY".into(),
-                level: 3,
-                dvs,
-                kind: BattleType::Normal,
-            }));
     }
 
     /// Switching the panel on must not cost the emulator anything when the

@@ -38,8 +38,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::trainer::encounter::WildEncounter;
-use crate::trainer::gen1::{BattleKind, BattleType};
+use crate::trainer::gen1::BattleKind;
 use crate::trainer::gen1::{Mon, BADGE_LEADERS, BADGE_NAMES};
 use crate::trainer::TrainerState;
 
@@ -317,118 +316,6 @@ pub fn detail_lines<'a>(m: &Mon) -> Vec<Line<'a>> {
     lines
 }
 
-/// The wild-encounter banner: one full-width row, drawn the moment a catchable
-/// wild Pokémon appears and held for the whole encounter.
-///
-/// This is the loudest thing the frontend draws, and deliberately so — the
-/// point of the feature is that the answer arrives *before* a Ball is spent,
-/// which is no use at all if it is a dim line in a panel that is usually shut.
-/// The verdict therefore gets its own row whether or not the trainer panel is
-/// open (see [`crate::screen::tui`]).
-///
-/// # The wording is the feature
-///
-/// **Gen 1 has no shiny Pokémon.** Every string here says "would be shiny if
-/// traded to Gen 2", never "is shiny", because the second one is false and
-/// would send someone hunting for a colour change that Red/Blue cannot draw.
-/// The long form spells the whole thing out; the short forms shrink the
-/// *decoration*, never the qualifier.
-pub fn encounter_banner(enc: &WildEncounter, width: usize) -> Line<'static> {
-    let kind = if enc.kind == BattleType::Safari {
-        "SAFARI"
-    } else {
-        "WILD"
-    };
-    let who = format!("{} L{}", truncate(&enc.name, 11), enc.level);
-    let dv = enc.dv_string();
-
-    if enc.would_be_shiny() {
-        let text = pick(
-            width,
-            &[
-                format!(
-                    " ★ {kind} {who} WOULD BE SHINY IF TRADED TO GEN 2 ★ \
-                     DV {dv} (hp/atk/def/spd/spc) · nothing is shiny in Gen 1; \
-                     this one turns shiny in Gold/Silver "
-                ),
-                format!(
-                    " ★ {kind} {who} WOULD BE SHINY IF TRADED TO GEN 2 ★ \
-                     DV {dv} · nothing is shiny in Gen 1 "
-                ),
-                format!(
-                    " ★ {kind} {who} WOULD BE SHINY IF TRADED TO GEN 2 ★ \
-                     DV {dv} "
-                ),
-                format!(" ★ {who} SHINY IF TRADED TO GEN 2 ★ DV {dv} "),
-                format!(" ★ SHINY IF TRADED TO GEN 2 · DV {dv} "),
-                " ★ SHINY IF TRADED TO GEN 2 ".to_string(),
-                " ★ SHINY→GEN2 ".to_string(),
-                "★→G2".to_string(),
-                "★".to_string(),
-            ],
-        );
-        // Pad to the full row: a highlighted strip right across the terminal is
-        // the difference between "noticeable" and "impossible to miss", which
-        // is the whole point of the feature.
-        let pad = width.saturating_sub(text.chars().count());
-        let text = format!("{text}{}", " ".repeat(pad));
-        return Line::from(Span::styled(text, shiny_banner_style()));
-    }
-
-    // Not shiny. Still shown, and still with the numbers: a near miss is
-    // interesting, and a banner that only ever appears for a shiny gives no way
-    // to tell "working, and this one is ordinary" from "not working".
-    let near = format!(
-        "{}/3 tens, atk bit {}",
-        enc.shiny_matches(),
-        if enc.attack_bit_ok() { "yes" } else { "no" }
-    );
-    let text = pick(
-        width,
-        &[
-            format!(
-                " {kind} {who} · DV {dv} (hp/atk/def/spd/spc) · would NOT be \
-                 shiny if traded to Gen 2 — needs def/spd/spc all 10 and bit 1 \
-                 of the attack DV set ({near}) "
-            ),
-            format!(
-                " {kind} {who} · DV {dv} · would NOT be shiny if traded to \
-                 Gen 2 ({near}) "
-            ),
-            format!(" {kind} {who} · DV {dv} · not shiny if traded "),
-            format!(" {who} · DV {dv} · not shiny "),
-            format!(" DV {dv} · not shiny "),
-        ],
-    );
-    Line::from(Span::styled(text, plain_banner_style()))
-}
-
-/// Black on bright yellow, bold: the one place in this UI that shouts.
-pub fn shiny_banner_style() -> Style {
-    Style::default()
-        .fg(Color::Black)
-        .bg(Color::LightYellow)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// The ordinary-encounter row, which must be readable without competing with
-/// the game.
-pub fn plain_banner_style() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-
-/// The first candidate that fits `width`, or the last one truncated to it.
-/// Candidates run longest to shortest.
-fn pick(width: usize, candidates: &[String]) -> String {
-    for c in candidates {
-        if c.chars().count() <= width {
-            return c.clone();
-        }
-    }
-    let last = candidates.last().cloned().unwrap_or_default();
-    last.chars().take(width).collect()
-}
-
 /// The battle panel: the opponent, which is the thing being watched.
 pub fn battle_lines<'a>(state: &TrainerState) -> Vec<Line<'a>> {
     let dim = Style::default().fg(Color::DarkGray);
@@ -436,14 +323,7 @@ pub fn battle_lines<'a>(state: &TrainerState) -> Vec<Line<'a>> {
         return Vec::new();
     };
     let kind = match state.battle {
-        // A Safari encounter and the old man's demonstration are both
-        // `wIsInBattle == 1`; naming which is which is what stops the panel
-        // implying a Ball can be spent when it cannot.
-        BattleKind::Wild => match state.battle_type {
-            BattleType::Safari => "SAFARI".to_string(),
-            BattleType::OldMan => "WILD (demo — not catchable)".to_string(),
-            _ => "WILD".to_string(),
-        },
+        BattleKind::Wild => "WILD".to_string(),
         BattleKind::Trainer => {
             if state.trainer_name.is_empty() {
                 "TRAINER".to_string()
@@ -495,27 +375,6 @@ pub fn battle_lines<'a>(state: &TrainerState) -> Vec<Line<'a>> {
         for chunk in moves.chunks(2) {
             lines.push(Line::from(Span::styled(chunk.join("  ·  "), dim)));
         }
-    }
-    // The DVs of whatever is on the other side, always — they are the numbers
-    // behind the banner's verdict, and a trainer's Pokémon showing the fixed
-    // `$98/$88` pair every single time is itself worth being able to see.
-    lines.push(Line::from(vec![
-        Span::styled("DV ".to_string(), dim),
-        Span::raw(format!(
-            "{}/{}/{}/{}/{}",
-            o.dvs.hp(),
-            o.dvs.attack,
-            o.dvs.defense,
-            o.dvs.speed,
-            o.dvs.special
-        )),
-        Span::styled("  hp/atk/def/spd/spc".to_string(), dim),
-    ]));
-    if state.battle == BattleKind::Wild && o.would_be_shiny() {
-        lines.push(Line::from(Span::styled(
-            "★ would be SHINY if traded to Gen 2",
-            shiny_banner_style(),
-        )));
     }
     lines
 }
@@ -704,123 +563,6 @@ mod tests {
         assert!(text.contains(UNKNOWN), "unknown stat exp is marked");
         assert!(text.contains("Hidden Power"));
         assert!(text.contains("DV"));
-    }
-
-    fn encounter(hi: u8, lo: u8) -> WildEncounter {
-        WildEncounter {
-            species: 0x24,
-            dex: 16,
-            name: "PIDGEY".into(),
-            level: 3,
-            dvs: Dvs::from_bytes(hi, lo),
-            kind: BattleType::Normal,
-        }
-    }
-
-    fn banner_text(enc: &WildEncounter, width: usize) -> String {
-        encounter_banner(enc, width)
-            .spans
-            .iter()
-            .map(|s| s.content.to_string())
-            .collect()
-    }
-
-    #[test]
-    fn the_banner_never_says_a_gen_1_pokemon_is_shiny() {
-        // The entire risk of this feature: Gen 1 has no shiny Pokémon, so any
-        // wording that could be read as "this one is shiny" sends someone
-        // hunting for a colour the cartridge cannot draw. Every width of every
-        // verdict must carry the qualifier or say nothing at all.
-        for (hi, lo) in [(0xEAu8, 0xAAu8), (0xFF, 0xFF), (0x00, 0x00)] {
-            let enc = encounter(hi, lo);
-            for w in 8..=200usize {
-                let t = banner_text(&enc, w);
-                assert!(t.chars().count() <= w, "banner overflows {w} cells: {t:?}");
-                if !t.to_uppercase().contains("SHINY") {
-                    continue;
-                }
-                let upper = t.to_uppercase();
-                assert!(
-                    upper.contains("IF TRADED")
-                        || upper.contains("SHINY→GEN2")
-                        || upper.contains("NOT BE SHINY")
-                        || upper.contains("NOT SHINY"),
-                    "at width {w} the banner claims shininess without the \
-                     \"if traded\" qualifier: {t:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_shiny_verdict_is_unmistakable_and_carries_the_numbers() {
-        let enc = encounter(0xEA, 0xAA); // ATKDEFDV_SHINY / SPDSPCDV_SHINY
-        let t = banner_text(&enc, 200);
-        assert!(t.contains('★'), "{t}");
-        assert!(t.contains("WOULD BE SHINY IF TRADED TO GEN 2"), "{t}");
-        assert!(t.contains("PIDGEY L3"), "{t}");
-        assert!(t.contains("DV 0/14/10/10/10"), "{t}");
-        assert!(t.contains("Gold/Silver"), "{t}");
-        // And it is styled to shout, not to blend in.
-        let style = encounter_banner(&enc, 200).spans[0].style;
-        assert_eq!(style.bg, Some(Color::LightYellow));
-        // A shiny row is filled edge to edge, so it reads as a bar rather than
-        // a sentence someone can skim past.
-        assert_eq!(banner_text(&enc, 200).chars().count(), 200);
-    }
-
-    #[test]
-    fn an_ordinary_encounter_still_shows_its_dvs_and_says_no() {
-        // Perfect DVs: the case a "high DVs" heuristic gets wrong, and the one
-        // that would cost a Ball.
-        let t = banner_text(&encounter(0xFF, 0xFF), 160);
-        assert!(t.contains("DV 15/15/15/15/15"), "{t}");
-        assert!(t.contains("would NOT be shiny if traded to Gen 2"), "{t}");
-        assert!(t.contains("0/3 tens"), "{t}");
-        // Quiet, so it does not compete with the game.
-        let style = encounter_banner(&encounter(0xFF, 0xFF), 160).spans[0].style;
-        assert_eq!(style.bg, None);
-    }
-
-    #[test]
-    fn a_safari_encounter_is_labelled_as_one() {
-        let mut enc = encounter(0xEA, 0xAA);
-        enc.kind = BattleType::Safari;
-        assert!(banner_text(&enc, 160).contains("SAFARI"));
-    }
-
-    #[test]
-    fn the_battle_panel_shows_the_opponents_dvs_and_names_a_demo_battle() {
-        let mut o = mon(20, 41);
-        o.dvs = Dvs::from_bytes(0xEA, 0xAA);
-        let st = TrainerState {
-            battle: BattleKind::Wild,
-            battle_type: BattleType::Normal,
-            opponent: Some(o.clone()),
-            ..Default::default()
-        };
-        let text: String = battle_lines(&st)
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect();
-        assert!(text.contains("DV "), "{text}");
-        assert!(text.contains("0/14/10/10/10"), "{text}");
-        assert!(text.contains("would be SHINY if traded to Gen 2"), "{text}");
-
-        // The old man's catching demonstration is a wild battle whose Pokémon
-        // can never be the player's, and the panel must say so rather than
-        // imply a Ball is worth spending.
-        let st = TrainerState {
-            battle: BattleKind::Wild,
-            battle_type: BattleType::OldMan,
-            opponent: Some(o),
-            ..Default::default()
-        };
-        let text: String = battle_lines(&st)
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect();
-        assert!(text.contains("not catchable"), "{text}");
     }
 
     #[test]
