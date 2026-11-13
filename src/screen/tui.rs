@@ -53,6 +53,7 @@ use std::io;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use ratatui::{
@@ -1048,7 +1049,19 @@ impl App {
             picker = scaled;
         }
         picker.set_background_color([0, 0, 0, 0]);
+        let mut warnings = warnings;
+        // The `protocol` config key is the escape hatch for detection being
+        // wrong, and it wins — but forcing a protocol the terminal never
+        // advertised is how a session ends up on a path nobody chose and nobody
+        // can see. Say so once, in the same place every other config complaint
+        // lands (scrollback, picker footer, `?` overlay).
         if let Some(pref) = config.protocol.as_deref().and_then(protocol_from_str) {
+            let chosen = picker.protocol_type();
+            if pref != chosen {
+                if let Some(w) = forced_protocol_warning(pref, chosen) {
+                    warnings.push(w);
+                }
+            }
             picker.set_protocol_type(pref);
         }
         let (fw, fh) = picker.font_size();
@@ -1066,7 +1079,6 @@ impl App {
         // Telemetry: `$GB_TELEMETRY` wins over the config key. Writing to
         // stdout from inside the alternate screen would corrupt the display, so
         // the terminal frontend refuses that destination and says why.
-        let mut warnings = warnings;
         let dest = telemetry::Destination::from_env().or_else(|| {
             config
                 .telemetry
@@ -4849,36 +4861,65 @@ fn probe_terminal() {
     // itself because by then there is always a picture queued behind it.
     measure_cpr_floor(&mut tty);
 
-    if std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
-        return;
-    }
-    let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
+    // One round trip for every capability that decides how a frame is drawn.
+    // They go out together and are read back together, terminated by the same
+    // cursor-report fence, so the whole negotiation costs one terminal latency
+    // rather than one per question.
+    //
+    //   `_Ga=q,t=d`  Kitty graphics — "can you draw an image at all?"
+    //   `_Ga=q,t=s`  Kitty graphics — "…out of shared memory?" (the 81-byte path)
+    //   `CSI c`      primary device attributes — parameter 4 means Sixel
+    //   `CSI 16 t`   cell size in pixels; and 14/18 t as the VTE-shaped fallback
+    let want_kitty = std::env::var("GB_TERM_KITTY").as_deref() != Ok("noshm");
+    let shm = want_kitty
+        .then(|| crate::termimage::shm_query(SHM_QUERY_ID))
+        .flatten();
+    if shm.is_none() {
         debug_layout("[shm] no shared memory available to offer the terminal");
-        return;
-    };
+    }
+    let mut ask = String::new();
+    ask.push_str(&crate::termimage::kitty_ping(KITTY_QUERY_ID));
+    if let Some(q) = &shm {
+        ask.push_str(&q.seq);
+    }
+    ask.push_str("\x1b[c\x1b[16t\x1b[14t\x1b[18t\x1b[6n");
     let asked = tty
-        .write_all(query.seq.as_bytes())
-        .and_then(|_| tty.write_all(b"\x1b[6n"))
+        .write_all(ask.as_bytes())
         .and_then(|_| tty.flush())
         .is_ok();
     if asked {
         let reply = read_reply(&tty, SHM_PROBE_TIMEOUT);
-        let ok = crate::termimage::shm_reply_ok(&reply, SHM_QUERY_ID);
+        let ok = shm.is_some() && crate::termimage::shm_reply_ok(&reply, SHM_QUERY_ID);
         SHM_OK.store(ok, Ordering::Relaxed);
+        let gfx = Graphics {
+            // Either query answering proves the protocol; the shared-memory one
+            // may legitimately come back as an error on a terminal that draws
+            // Kitty images perfectly well.
+            kitty: kitty_reply_seen(&reply, KITTY_QUERY_ID)
+                || kitty_reply_seen(&reply, SHM_QUERY_ID),
+            sixel: da1_has_sixel(&reply),
+            cell: cell_size_from_reply(&reply),
+        };
+        if let Ok(mut slot) = GRAPHICS.lock() {
+            *slot = Some(gfx);
+        }
         // The transport is negotiated once and invisibly; when it comes out
         // "no" the only way to tell a terminal that refused from a reply we
         // mis-read is to see the bytes. Gated, so it costs nothing normally.
         debug_layout(&format!(
-            "[shm] asked id={SHM_QUERY_ID} ok={ok} reply={:?}",
-            reply
+            "[gfx] kitty={} sixel={} cell={:?} shm={ok} reply={:?}",
+            gfx.kitty, gfx.sixel, gfx.cell, reply
         ));
     } else {
-        debug_layout("[shm] could not write the query to /dev/tty");
+        debug_layout("[gfx] could not write the query to /dev/tty");
     }
-    query.finish();
+    if let Some(q) = shm {
+        q.finish();
+    }
 }
 
 const SHM_QUERY_ID: u32 = 0x0067_6209;
+const KITTY_QUERY_ID: u32 = 0x0067_620A;
 
 /// Knock until the terminal answers a cursor-position request, or give up.
 ///
@@ -4983,37 +5024,190 @@ fn read_reply(_tty: &std::fs::File, _timeout: Duration) -> String {
 }
 
 /// Build a [`Picker`], preferring the sharpest graphics protocol the terminal
-/// actually advertises (kept from the dead-code/audio crew).
+/// actually advertises.
 ///
-/// `Picker::from_query_stdio()` lets an env-var guess (e.g. `TERM_PROGRAM=WezTerm`)
-/// force the fuzzy iTerm2 protocol even when the terminal advertises the crisper
-/// Kitty graphics protocol. We first query with those env guesses suppressed so
-/// the *advertised* protocol wins; only if the terminal advertises no real
-/// graphics protocol do we fall back to the env-based guess. Never panics on a
-/// query timeout — falls back to a sane default font size instead.
+/// Quality order, best first: **Kitty graphics → Sixel → iTerm2 → half-blocks**.
+/// Half-blocks is what you get when nothing better exists — two pixels per
+/// character cell, drawn out of text — never a default for anything that merely
+/// lacks Kitty.
+///
+/// The capabilities come from [`probe_terminal`], which asked `/dev/tty`
+/// directly at startup. `Picker::from_query_stdio()` is used only as the
+/// fallback for a platform or build where that probe cannot run, because it has
+/// three failure modes we cannot afford:
+///
+/// 1. It reads **stdin**, which `crossterm` owns — the reply can simply never
+///    arrive (the same trap documented on [`probe_terminal`]).
+/// 2. It returns `Err(NoFontSize)` — **discarding the capability result** — when
+///    the terminal answers neither `CSI 16 t` nor a pixel `TIOCGWINSZ`. VTE does
+///    exactly that, so a VTE built *with* Sixel would still have landed on
+///    half-blocks. That was the bug.
+/// 3. An env-var guess (`TERM_PROGRAM=WezTerm`) outranks the terminal's own
+///    answer, forcing the fuzzy iTerm2 protocol over a crisper advertised one.
 fn build_picker() -> Picker {
-    let saved_term_program = env::var_os("TERM_PROGRAM");
-    let saved_lc_terminal = env::var_os("LC_TERMINAL");
-    env::remove_var("TERM_PROGRAM");
-    env::remove_var("LC_TERMINAL");
-    let advertised = Picker::from_query_stdio();
-    if let Some(v) = saved_term_program {
-        env::set_var("TERM_PROGRAM", v);
+    match probed_graphics() {
+        Some(gfx) => {
+            // `from_fontsize` resolves the env-only guesses for us — the tmux
+            // passthrough flag, and iTerm2 for the terminals that can only be
+            // recognised by name — and leaves half-blocks when there are none.
+            // Anything the terminal *told* us then outranks that guess.
+            let mut picker = Picker::from_fontsize(gfx.cell_size());
+            if let Some(better) = gfx.advertised() {
+                picker.set_protocol_type(better);
+            }
+            picker
+        }
+        // No probe (not unix, no `/dev/tty`, or the terminal never answered a
+        // cursor report): fall back to the library query, and if even that fails
+        // use a sane default rather than panicking.
+        None => Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20))),
     }
-    if let Some(v) = saved_lc_terminal {
-        env::set_var("LC_TERMINAL", v);
-    }
+}
 
-    match advertised {
-        // The terminal advertised a real graphics protocol — use it.
-        Ok(p) if p.protocol_type() != ProtocolType::Halfblocks => p,
-        // Otherwise fall back to the env-guess query (e.g. a genuine iTerm2), and
-        // if even that fails (timeout / no capabilities) use a default rather
-        // than panicking.
-        _ => {
-            Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20)))
+// ---------------------------------------------------------------------------
+// Graphics-capability probe
+// ---------------------------------------------------------------------------
+
+/// What the terminal said it can draw, as resolved once by [`probe_terminal`].
+///
+/// Nothing here is inferred from `$TERM`: every field is either something the
+/// terminal answered or a stated absence. See [`Graphics::advertised`] for the
+/// order these are preferred in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Graphics {
+    /// The terminal answered the Kitty graphics protocol's `a=q` handshake.
+    kitty: bool,
+    /// The terminal listed Sixel (parameter `4`) in its primary device
+    /// attributes.
+    sixel: bool,
+    /// Cell size in device pixels, if the terminal was willing to say.
+    cell: Option<(u16, u16)>,
+}
+
+/// The cell size to assume when a terminal will not report one. Arbitrary, and
+/// only ever used for half-blocks, where it is not rendering pixels anyway.
+const DEFAULT_CELL: (u16, u16) = (10, 20);
+
+impl Graphics {
+    /// The best protocol the terminal *advertised*, or `None` if it advertised
+    /// none and the choice falls to the env-var guess.
+    fn advertised(self) -> Option<ProtocolType> {
+        if self.kitty {
+            Some(ProtocolType::Kitty)
+        } else if self.sixel {
+            Some(ProtocolType::Sixel)
+        } else {
+            None
         }
     }
+
+    fn cell_size(self) -> (u16, u16) {
+        self.cell.or_else(winsize_cell).unwrap_or(DEFAULT_CELL)
+    }
+}
+
+/// Resolved by [`probe_terminal`]; `None` until then, and left `None` when the
+/// probe could not run at all.
+static GRAPHICS: Mutex<Option<Graphics>> = Mutex::new(None);
+
+fn probed_graphics() -> Option<Graphics> {
+    *GRAPHICS.lock().ok()?
+}
+
+/// Does a primary-device-attributes reply list Sixel?
+///
+/// The reply is `CSI ? <p> ; <p> ; … c`, and parameter **4** means "Sixel
+/// graphics" (DEC STD 070; the same list xterm, foot, WezTerm and contour
+/// answer). Matching is exact per parameter: `14` or `40` are different
+/// capabilities entirely, and a substring search would read them as Sixel.
+fn da1_has_sixel(reply: &str) -> bool {
+    let mut rest = reply;
+    while let Some(at) = rest.find("\x1b[?") {
+        let body = &rest[at + 3..];
+        let Some(end) = body.find('c') else {
+            return false;
+        };
+        // A `?`-introduced sequence terminated by `c` is a DA reply; anything
+        // with a non-parameter byte in it is some other sequence we skipped into.
+        let params = &body[..end];
+        if params.split(';').any(|p| p == "4") {
+            return true;
+        }
+        rest = &body[end..];
+    }
+    false
+}
+
+/// Did the terminal answer our Kitty graphics `a=q` handshake for image `id`?
+///
+/// **Any** answer counts, `OK` or an error code: the protocol says a terminal
+/// that understands the query must answer it, so an error means "I speak this
+/// protocol but not that transmission medium" — which is still Kitty graphics.
+/// (Contrast [`crate::termimage::shm_reply_ok`], which needs an explicit `OK`
+/// because a shared-memory transfer either works or shows a blank rectangle.)
+fn kitty_reply_seen(reply: &str, id: u32) -> bool {
+    reply.contains(&format!("_Gi={id};"))
+}
+
+/// Cell size in device pixels from whatever the terminal was willing to answer.
+///
+/// Two routes, in order:
+///
+/// 1. `CSI 16 t` → `CSI 6 ; height ; width t`, the direct question.
+/// 2. `CSI 14 t` → `CSI 4 ; height ; width t` (window size in pixels) divided by
+///    `CSI 18 t` → `CSI 8 ; rows ; cols t` (text area in cells).
+///
+/// The second route exists because **VTE answers 14 and 18 but not 16**, and
+/// reports `ws_xpixel = ws_ypixel = 0` through `TIOCGWINSZ` — so without it
+/// every VTE-family terminal (GNOME Terminal, Ptyxis, Tilix, Terminator) falls
+/// back to a guessed 10×20 cell and renders at the wrong aspect ratio.
+fn cell_size_from_reply(reply: &str) -> Option<(u16, u16)> {
+    if let Some((h, w)) = csi_t_params(reply, '6') {
+        if w > 0 && h > 0 {
+            return Some((w, h));
+        }
+    }
+    let (px_h, px_w) = csi_t_params(reply, '4')?;
+    let (rows, cols) = csi_t_params(reply, '8')?;
+    if rows == 0 || cols == 0 {
+        return None;
+    }
+    let (w, h) = (px_w / cols, px_h / rows);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Pull the two numbers out of a `CSI <kind> ; a ; b t` report.
+fn csi_t_params(reply: &str, kind: char) -> Option<(u16, u16)> {
+    let head = format!("\x1b[{kind};");
+    let at = reply.find(&head)?;
+    let body = &reply[at + head.len()..];
+    let end = body.find('t')?;
+    let mut it = body[..end].split(';');
+    let a = it.next()?.trim().parse().ok()?;
+    let b = it.next()?.trim().parse().ok()?;
+    Some((a, b))
+}
+
+/// Cell size from the kernel's window size, when the terminal fills the pixel
+/// fields in. Many do not (VTE reports zeroes), hence the escape-sequence routes
+/// above.
+#[cfg(all(unix, feature = "libc"))]
+fn winsize_cell() -> Option<(u16, u16)> {
+    use std::os::unix::io::AsRawFd;
+    let tty = open_tty()?;
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    if unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) } != 0 {
+        return None;
+    }
+    if ws.ws_col == 0 || ws.ws_row == 0 || ws.ws_xpixel == 0 || ws.ws_ypixel == 0 {
+        return None;
+    }
+    Some((ws.ws_xpixel / ws.ws_col, ws.ws_ypixel / ws.ws_row))
+}
+
+#[cfg(not(all(unix, feature = "libc")))]
+fn winsize_cell() -> Option<(u16, u16)> {
+    None
 }
 
 /// Resolve a [`CellScale`] to a concrete device-pixels-per-cell multiplier.
@@ -5107,6 +5301,30 @@ fn protocol_from_str(s: &str) -> Option<ProtocolType> {
         "halfblocks" | "blocks" | "ascii" => Some(ProtocolType::Halfblocks),
         _ => None,
     }
+}
+
+/// The complaint for `protocol = <x>` when the terminal chose something else.
+///
+/// Only worth saying when the forced protocol is one the terminal did not
+/// advertise: a user pinning `kitty` on a terminal that answered the Kitty
+/// handshake is simply restating the answer, and does not need telling. Forcing
+/// one it never claimed is the case that ends in a blank rectangle or a slow
+/// path, and it is invisible without this line.
+fn forced_protocol_warning(pref: ProtocolType, chosen: ProtocolType) -> Option<String> {
+    let advertised = probed_graphics()?.advertised();
+    if advertised == Some(pref) {
+        return None;
+    }
+    let said = match advertised {
+        Some(p) => format!("advertised {}", protocol_name(p)),
+        None => "advertised no graphics protocol".to_string(),
+    };
+    Some(format!(
+        "protocol = {}: forced, but this terminal {said} — without the key it \
+         would use {}. Remove it if the picture is blank or slow.",
+        protocol_name(pref),
+        protocol_name(chosen)
+    ))
 }
 
 fn protocol_name(p: ProtocolType) -> &'static str {
@@ -5516,6 +5734,80 @@ mod tests {
         assert_eq!(protocol_from_str("ITERM"), Some(ProtocolType::Iterm2));
         assert_eq!(protocol_from_str("nonsense"), None);
         assert_eq!(protocol_name(ProtocolType::Sixel), "sixel");
+    }
+
+    /// The real replies from the three terminals this was measured against.
+    ///
+    /// VTE's is the one that matters: it lists no Sixel, answers `CSI 14 t` and
+    /// `CSI 18 t` but **not** `CSI 16 t`, and reports `ws_xpixel = 0` — the
+    /// exact shape that used to make the whole capability answer be thrown away.
+    const VTE_0_84_REPLY: &str = "\x1b[?61;1;21;22;28c\x1b[4;722;1016t\x1b[8;38;127t\x1b[5;1R";
+    const SIXEL_REPLY: &str = "\x1b[?62;1;4;6;9;22c\x1b[6;20;10t\x1b[1;1R";
+
+    #[test]
+    fn sixel_is_read_from_the_device_attributes_by_exact_parameter() {
+        assert!(da1_has_sixel(SIXEL_REPLY));
+        assert!(da1_has_sixel("\x1b[?63;4c"));
+        // The captain's terminal: VTE 0.84.1 with SIXEL compiled out.
+        assert!(!da1_has_sixel(VTE_0_84_REPLY));
+        // `4` must be a whole parameter. Every one of these contains the digit.
+        assert!(!da1_has_sixel("\x1b[?62;1;14;22;40c"));
+        assert!(!da1_has_sixel("\x1b[?44c\x1b[1;1R"));
+        assert!(!da1_has_sixel(""));
+    }
+
+    #[test]
+    fn a_cell_size_is_derived_when_the_terminal_will_not_state_one() {
+        // Stated directly.
+        assert_eq!(cell_size_from_reply(SIXEL_REPLY), Some((10, 20)));
+        // VTE: window pixels / text cells = 1016/127 x 722/38.
+        assert_eq!(cell_size_from_reply(VTE_0_84_REPLY), Some((8, 19)));
+        // Nothing to go on is `None`, not a bogus zero-sized cell.
+        assert_eq!(cell_size_from_reply("\x1b[1;1R"), None);
+        assert_eq!(cell_size_from_reply("\x1b[4;0;0t\x1b[8;38;127t"), None);
+    }
+
+    #[test]
+    fn the_kitty_handshake_counts_an_error_as_a_yes() {
+        // A terminal that speaks the protocol but cannot do *this* medium still
+        // draws Kitty images — answering at all is the signal.
+        assert!(kitty_reply_seen("\x1b_Gi=99;OK\x1b\\", 99));
+        assert!(kitty_reply_seen("\x1b_Gi=99;ENOTSUPP:shared memory\x1b\\", 99));
+        // Someone else's reply is not ours.
+        assert!(!kitty_reply_seen("\x1b_Gi=98;OK\x1b\\", 99));
+        assert!(!kitty_reply_seen(VTE_0_84_REPLY, 99));
+    }
+
+    /// Half-blocks is the *last* resort, not the answer to "no kitty".
+    #[test]
+    fn protocols_are_preferred_in_quality_order() {
+        let g = |kitty, sixel| Graphics {
+            kitty,
+            sixel,
+            cell: None,
+        };
+        assert_eq!(g(true, true).advertised(), Some(ProtocolType::Kitty));
+        assert_eq!(g(true, false).advertised(), Some(ProtocolType::Kitty));
+        assert_eq!(g(false, true).advertised(), Some(ProtocolType::Sixel));
+        // Nothing advertised leaves the choice to the env guess (iTerm2 or, at
+        // the very bottom, half-blocks) rather than naming a protocol.
+        assert_eq!(g(false, false).advertised(), None);
+    }
+
+    /// The bug this fixes: a terminal that advertises Sixel but reports no cell
+    /// size must still get Sixel. `Picker::from_query_stdio` returned
+    /// `Err(NoFontSize)` here and the protocol went with it.
+    #[test]
+    fn a_missing_cell_size_never_costs_the_protocol() {
+        let gfx = Graphics {
+            kitty: false,
+            sixel: true,
+            cell: None,
+        };
+        assert_eq!(gfx.advertised(), Some(ProtocolType::Sixel));
+        // And the fallback cell size is usable rather than zero.
+        let (w, h) = gfx.cell_size();
+        assert!(w > 0 && h > 0, "cell size {w}x{h}");
     }
 
     #[test]

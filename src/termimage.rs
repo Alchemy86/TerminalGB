@@ -556,6 +556,21 @@ pub fn shm_query(id: u32) -> Option<ShmQuery> {
     Some(ShmQuery { seq, frame })
 }
 
+/// Build a Kitty `a=q` query asking only "do you draw images at all?".
+///
+/// The companion to [`shm_query`]: same handshake, but a one-pixel *direct*
+/// transmission, which is the transmission medium every Kitty-graphics terminal
+/// implements. It answers the prior question — a terminal that cannot do `t=s`
+/// may still draw Kitty images perfectly well, and choosing a protocol from the
+/// shared-memory answer alone would downgrade it to half-blocks. Needs no
+/// `/dev/shm`, so it also works where [`shm_query`] returns `None`.
+pub fn kitty_ping(id: u32) -> String {
+    // One black RGB pixel, base64'd — the smallest legal payload.
+    let mut b64 = String::new();
+    base64_into(&[0u8, 0, 0], &mut b64);
+    format!("\x1b_Ga=q,i={id},f=24,t=d,s=1,v=1;{b64}\x1b\\")
+}
+
 /// Does `reply` say the terminal can read shared memory?
 ///
 /// Accepts the reply for image id `id` only, so a stray response to some other
