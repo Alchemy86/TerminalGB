@@ -1,0 +1,544 @@
+# The emulator is the product; plugins are optional extras that live in their
+# own crates under `plugins/`. See docs/plugins.md for the whole arrangement,
+# and `plugins/README.md` for the one-paragraph version.
+[workspace]
+members = ["crates/*", "plugins/*"]
+
+[package]
+name = "terminalgb"
+version = "0.2.0"
+description = "Game Boy / Game Boy Color emulator in Rust — desktop, terminal, and WebAssembly"
+# This is a fork of raphamorim/gameboy (itself modelled on mvdnes/rboy). Under
+# MPL-2.0 the upstream authorship stays credited; see README "Credits & lineage".
+authors = [
+    "Raphael Amorim <rapha850@gmail.com>",
+    "TerminalGB contributors",
+]
+repository = "https://github.com/Alchemy86/TerminalGB"
+homepage = "https://github.com/Alchemy86/TerminalGB"
+documentation = "https://docs.rs/terminalgb"
+readme = "README.md"
+keywords = ["gameboy", "emulator", "terminal", "tui", "game-boy"]
+categories = ["emulators", "command-line-utilities", "games"]
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+# The published crate is SOURCE ONLY — a whitelist, not an exclude list,
+# because what must never ship is unambiguous: no test ROM (the `tests/`
+# submodule is other people's unlicensed ROMs), no game footage or third-party
+# scans (`resources/`, parts of `docs/`), no internal notes (`AGENTS.md`).
+# Every ROM a user plays comes from their own disk at run time and stays
+# there. `testharness/**` and `examples/**` stay in because every declared
+# `[[test]]`/`[[example]]` path must exist in the package; root files carry a
+# leading `/` so `README.md` does not also match `docs/**/README.md`.
+include = [
+    "src/**",
+    "examples/**",
+    "testharness/**",
+    "/Cargo.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/terminalgb.h",
+]
+
+[lib]
+name = "terminalgb"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[features]
+# `--no-default-features` is the EMBEDDING BUILD: the emulator core and
+# nothing else — no window system, no terminal, no image codecs, no host
+# audio. See README "Embedding the core". Zero third-party crates besides
+# `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
+# belongs behind `desktop`/`tui`/`audio`, not in the core.
+default = [
+    "desktop",
+    "tui",
+    "standard-plugins",
+    "chiptune",
+    "music",
+    "bgblink",
+    "portal",
+]
+
+# Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
+# Needs a display server at run time.
+desktop = ["libc", "glutin", "gl", "image"]
+# Terminal frontend (`terminalgb::run_terminal`, `screen::tui`). Needs a terminal
+# with the kitty keyboard protocol at run time.
+tui = ["libc", "ratatui", "ratatui-image", "icy_sixel", "image"]
+# Real host-audio output via cpal. OFF by default because cpal pulls in ALSA
+# (libasound2-dev / alsa-lib-devel) on Linux, which would make a fresh clone
+# fail to build. Enable with `--features audio` once ALSA dev headers are
+# installed. The APU is always emulated; only speaker playback is gated.
+audio = ["cpal"]
+# MCP server (`terminalgb-mcp` binary, `terminalgb::mcp`) — drive the emulator from
+# Claude Desktop, Claude Code or any other Model Context Protocol client. OFF by
+# default so that embedding the core does not drag in a protocol nobody asked
+# for; it adds **no third-party crate** (the JSON codec is the agent plugin's,
+# PNG and base64 are `termimage`).
+#
+# It depends on `plugin-agent` because that crate is where structured perception
+# and the bounded action executor already live — the MCP surface is a wrapper
+# over them, not a second implementation. See docs/mcp.md §7.
+#
+# It also pulls in `chiptune`, so an agent can render a musical phrase through
+# the emulated sound chip and be told what it produced. That costs no
+# third-party crate either.
+mcp = ["plugin-agent", "chiptune"]
+# Chiptune renderer (`terminalgb-chiptune` binary, `terminalgb::chiptune`, and the
+# MCP server's `render_audio` tool). Compiles notes, a `.vgm` log or a register
+# script into APU register writes and renders them through the emulated sound
+# chip. In `default` so `cargo build` produces the CLI, and out of
+# `--no-default-features` so the embedding build inherits no music renderer —
+# someone putting the core in hardware should not get one. It adds **no
+# third-party crate**: `terminalgb-chiptune` is first-party and dependency-free.
+chiptune = ["terminalgb-chiptune"]
+# MUSIC MODE (`terminalgb::music`, and the shelf screen in the terminal
+# frontend). A library view where cartridges appear like albums: cover art
+# harvested from the game's own title screen, its header title, its own music
+# playing, and a key that writes what you are hearing to a WAV. See
+# docs/music-mode.md.
+#
+# A **feature, not core emulation** — an embedder taking the machine must not
+# inherit a music player. The shelf UI needs `tui`; the WAV encoder is
+# `terminalgb-chiptune`'s, deliberately shared with the chiptune renderer so
+# there is exactly one of them.
+music = ["tui", "terminalgb-chiptune"]
+# BGB's link-cable protocol over TCP (`terminalgb::bgblink`) — link this
+# emulator to BGB, to another copy of itself, or to any of the bridge tools
+# that speak it, including `PokemonGB_Online_Trades`, which puts a **real Game
+# Boy** on the far end. See docs/bgb-link.md.
+#
+# In `default` so a normal build can reach it from `config.toml`, and out of
+# `--no-default-features` so an embedder gets no networking it did not ask for
+# — the same line `chiptune` draws. It adds **no third-party crate**: the whole
+# implementation is `std::net`.
+bgblink = []
+# The trade portal client (`terminalgb::portal`): a network `PokemonSource`
+# that arms the gen1-link partner with a trade accepted on the web portal, and
+# the device-code sign-in behind `terminal login` / the TUI's `@` key. It adds
+# **no third-party crate**: HTTPS is delegated to the system's `curl` binary
+# (the same "no new dependency" bar as the hand-rolled PNG/deflate/base64), and
+# the JSON codec is the agent plugin's — the same reuse the `mcp` feature makes.
+# In `default` because it costs no dependency; out of `--no-default-features`
+# so the embedding build and wasm inherit no network code. See docs/portal.md.
+portal = ["plugin-gen1-link", "plugin-agent"]
+ffi = []
+ffi-base64 = ["image", "base64"]
+# Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
+# default so an embedding build carries none of it; plugin crates switch it on
+# in their `[dev-dependencies]`.
+testing = []
+
+# --- Plugins ---------------------------------------------------------------
+# Each of ours is a crate under `plugins/`, and each is an OPTIONAL dependency:
+# this is the whole install path. Adding a third-party plugin is the same two
+# lines — a dependency, and a name in `plugins = …`. See docs/plugins.md.
+#
+# The emulator builds and runs with every one of these off; that is enforced by
+# `make no-plugins` and by CI, not merely intended.
+plugin-trainer = ["terminalgb-plugin-trainer"]
+plugin-gen1-link = ["terminalgb-plugin-gen1-link", "plugin-trainer"]
+plugin-battle-control = [
+    "terminalgb-plugin-battle-control",
+    "plugin-gen1-link",
+    "plugin-trainer",
+]
+plugin-agent = ["terminalgb-plugin-agent", "plugin-trainer", "plugin-gen1-link"]
+# Gen 1 shiny hunting: N headless emulators rolling encounters in parallel and
+# stopping on a DV spread. Depends on `plugin-trainer` because the ONE
+# implementation of the Gen 2 shiny rule lives there and is shared, not copied.
+plugin-gen1-shinyhunt = ["terminalgb-plugin-gen1-shinyhunt", "plugin-trainer"]
+# The documentation example, kept out of `standard-plugins` on purpose: it is
+# the thing a stranger copies, and it is also the end-to-end proof that the
+# documented install path works for a plugin nothing in the emulator special-
+# cases. `--features plugin-example-tracer`, then `plugins = example-tracer`.
+plugin-example-tracer = ["terminalgb-plugin-example-tracer"]
+# The bundle the emulator ships with by default — "a bundle of standard plugins
+# people can reference or install". Drop it from `default` and you have the
+# emulator alone.
+standard-plugins = [
+    "plugin-trainer",
+    "plugin-gen1-link",
+    "plugin-battle-control",
+    "plugin-agent",
+    "plugin-gen1-shinyhunt",
+]
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
+debug = 0
+panic = 'abort'
+codegen-units = 1
+incremental = false
+
+[profile.dev]
+split-debuginfo = "unpacked"
+lto = false
+incremental = true
+opt-level = 0
+
+# The plugin contract. Dependency-free and tiny, and it is what makes the
+# emulator extensible without knowing anything about its extensions: plugin
+# crates depend on *this*, never on `terminalgb`, which is what keeps the
+# dependency graph acyclic while the frontend still draws panels for the
+# plugins it ships with. See docs/plugins.md §"Why an API crate".
+[dependencies]
+terminalgb-plugin-api = { path = "crates/terminalgb-plugin-api", version = "0.1.0" }
+
+# The chiptune renderer's music half: score/`.vgm`/register-script parsing, the
+# `Apu` trait and the WAV encoder. Dependency-free, and it deliberately does
+# **not** depend on `terminalgb` — the emulated sound chip reaches it through the
+# trait, which is what keeps this edge acyclic. Same arrangement, same reason,
+# as `terminalgb-plugin-api`.
+#
+# Music mode uses exactly one thing from it: `wav`, the RIFF/PCM encoder. That
+# encoder must not exist twice — it is also what `testharness/audiocapture.rs`
+# hashes into `audio_baseline.txt`.
+terminalgb-chiptune = { path = "crates/terminalgb-chiptune", version = "0.1.0", optional = true }
+
+# Our own plugins. Optional, and the frontend's panels for them are `cfg`-gated
+# on the matching feature, so `--no-default-features` (or deleting `plugins/`
+# entirely) still builds a working emulator.
+terminalgb-plugin-trainer = { path = "plugins/trainer", version = "0.1.0", optional = true }
+terminalgb-plugin-gen1-link = { path = "plugins/gen1-link", version = "0.1.0", optional = true }
+terminalgb-plugin-battle-control = { path = "plugins/battle-control", version = "0.1.0", optional = true }
+terminalgb-plugin-agent = { path = "plugins/agent", version = "0.1.0", optional = true }
+terminalgb-plugin-gen1-shinyhunt = { path = "plugins/gen1-shinyhunt", version = "0.1.0", optional = true }
+terminalgb-plugin-example-tracer = { path = "plugins/example-tracer", version = "0.1.0", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libc = { version = "0.2.126", optional = true }
+glutin = { version = "0.28.0", optional = true }
+gl = { version = "0.14.0", optional = true }
+ratatui = { version = "^0.29.0", features = ["crossterm"], optional = true }
+icy_sixel = { version = "^0.1.1", optional = true }
+image = { version = "^0.25.1", default-features = false, features = ["jpeg", "png"], optional = true }
+ratatui-image = { version = "4.2.0", optional = true }
+base64 = { version = "0.21.7", optional = true }
+blip_buf = "0.1.4"
+cpal = { version = "0.16.0", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.59"
+wasm-bindgen = "0.2.82"
+wasm-bindgen-futures = "0.4.32"
+console_error_panic_hook = "0.1.7"
+web-sys = {version = "0.3.4", features = [
+  'Document',
+  'Element',
+  'HtmlCanvasElement',
+  'CanvasRenderingContext2d',
+  'ImageData',
+  'Window',
+  'KeyboardEvent',
+]}
+
+#'WebGlBuffer',
+#'WebGlRenderingContext',
+#'ImageBitmap',
+#'WebGlProgram',
+#'WebGlShader',
+
+# THE emulator: the terminal frontend, under the product's own name. This is
+# what `cargo install terminalgb` puts on a stranger's PATH — before it existed
+# the one-liner installed only the chiptune CLI and no Game Boy at all. The
+# same source still builds as `--example terminal` (the example `include!`s
+# this file), so scripts built on `target/release/examples/terminal` keep
+# working.
+[[bin]]
+name = "terminalgb"
+path = "src/bin/terminalgb.rs"
+required-features = ["tui"]
+
+# The MCP server. A `[[bin]]` rather than an example so that `cargo install`
+# and a Claude Desktop `command:` line have a real, stable executable name.
+[[bin]]
+name = "terminalgb-mcp"
+path = "src/bin/terminalgb-mcp.rs"
+required-features = ["mcp"]
+
+# The chiptune renderer. A `[[bin]]` rather than an example because it is a
+# tool a composer runs, not a demonstration of the library.
+[[bin]]
+name = "terminalgb-chiptune"
+path = "src/bin/terminalgb-chiptune.rs"
+required-features = ["chiptune"]
+
+[[example]]
+name = "desktop"
+path = "examples/desktop/bin.rs"
+required-features = ["desktop"]
+
+[[example]]
+name = "terminal"
+path = "examples/terminal/bin.rs"
+required-features = ["tui"]
+
+# The proof that the core stands alone: runs a ROM headless on
+# `--no-default-features` (no window, no terminal, no audio, no image crates)
+# and prints a frame hash. See README "Embedding the core".
+[[example]]
+name = "headless"
+path = "examples/headless.rs"
+
+# Examples that reach for a frontend crate declare it, so they are skipped
+# rather than broken on a minimal build.
+[[example]]
+name = "render_bench"
+path = "examples/render_bench.rs"
+required-features = ["tui"]
+
+[[example]]
+name = "cpp_suite"
+path = "examples/cpp_suite.rs"
+required-features = ["image"]
+
+# Lists what a loaded save can offer to the trade portal, through the exact
+# code path the TUI's `O` key uses (boots into the save with the shared Cable
+# Club bot, hence gen1-link + image).
+[[example]]
+name = "offer_list"
+path = "examples/offer_list.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
+[[example]]
+name = "gen2_timecapsule"
+path = "examples/gen2_timecapsule.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
+[[example]]
+name = "link_two"
+path = "examples/link_two.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
+[[example]]
+name = "bgb_link"
+path = "examples/bgb_link.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer", "bgblink"]
+
+[[example]]
+name = "gen1_trade"
+path = "examples/gen1_trade.rs"
+required-features = ["image", "plugin-gen1-link"]
+
+# The portal client walked by hand against a stub or the live portal: fetch
+# the pending trade, resolve it against a real cartridge, arm the partner.
+[[example]]
+name = "portal_trade"
+path = "examples/portal_trade.rs"
+# `--play` drives the shared Cable Club bot (screenshots via `image`, party
+# verdicts via the trainer plugin's shiny rule).
+required-features = ["portal", "image", "plugin-trainer"]
+
+[[example]]
+name = "upscale_gallery"
+path = "examples/upscale_gallery.rs"
+required-features = ["image"]
+
+[[example]]
+name = "claude_plays"
+path = "examples/claude_plays.rs"
+required-features = ["image", "plugin-agent"]
+
+# Evidence tool for the agent's screen-text channel: drives a real cartridge
+# to several kinds of screen and prints what the observation layer decodes.
+[[example]]
+name = "screen_text"
+path = "examples/screen_text.rs"
+required-features = ["plugin-agent"]
+
+[[example]]
+name = "gen1_battle"
+path = "examples/gen1_battle.rs"
+required-features = ["image", "plugin-battle-control"]
+
+# Music mode, headless: what the shelf would show, as text. The evidence tool
+# for a feature whose output is a picture and a sound.
+[[example]]
+name = "music_probe"
+path = "examples/music_probe.rs"
+required-features = ["music", "image"]
+
+[[example]]
+name = "idle_card"
+path = "examples/idle_card.rs"
+required-features = ["image"]
+
+[[example]]
+name = "mealybug"
+path = "examples/mealybug.rs"
+required-features = ["image"]
+
+# Scores this emulator the way the GB Emulator Shootout does, against its own
+# ROMs and reference screenshots (fetched at run time, never vendored). See
+# docs/shootout.md.
+[[example]]
+name = "shootout_scout"
+path = "examples/shootout_scout.rs"
+required-features = ["image"]
+
+[[example]]
+name = "trainer_layout"
+path = "examples/trainer_layout.rs"
+required-features = ["tui", "plugin-trainer"]
+
+# The shiny hunter's driver and CLI: N headless emulators, an encounter loop
+# each, stop on a DV spread. Headless — no window, no terminal UI, no audio —
+# so it needs only the plugin. See docs/shiny-hunt.md.
+[[example]]
+name = "shiny_hunt"
+path = "examples/shiny_hunt.rs"
+required-features = ["plugin-gen1-shinyhunt"]
+
+# The other audio examples deliberately carry a no-`audio` `main()` that
+# prints how to enable the feature, so they stay buildable and are NOT given
+# `required-features`. `audio_frame_cost` is the exception: it times the frame
+# with `libc::clock_gettime`, so it needs that dependency too.
+[[example]]
+name = "audio_frame_cost"
+path = "examples/audio_frame_cost.rs"
+required-features = ["libc"]
+
+# Headless test-ROM correctness harness. `harness = false` gives it its own
+# main() so it can print a pass count and control the process exit code (red on
+# regression). See testharness/testroms.rs and docs/testing.md.
+[[test]]
+name = "testroms"
+path = "testharness/testroms.rs"
+harness = false
+
+# The portal client against a local stub server (no real portal, no network
+# beyond 127.0.0.1). Needs the system `curl` binary; skips with a message if
+# it is absent.
+[[test]]
+name = "portal"
+path = "testharness/portal.rs"
+harness = false
+required-features = ["portal"]
+
+# The two rendering engines held against each other, against dmg-acid2's
+# reference image and against the clock — the accurate engine is not the
+# default, so nothing else in CI runs it. See testharness/ppuengines.rs.
+[[test]]
+name = "ppuengines"
+path = "testharness/ppuengines.rs"
+harness = false
+
+# MCP server harness: spawns the real `terminalgb-mcp` binary and speaks JSON-RPC
+# to it, so the transport, the argument parsing and the tool replies are all
+# exercised as a client sees them. Needs only the vendored dmg-acid2 ROM.
+# See testharness/mcp.rs and docs/mcp.md.
+[[test]]
+name = "mcp"
+path = "testharness/mcp.rs"
+harness = false
+required-features = ["mcp"]
+
+# Save-state round-trip proof. `harness = false` so it can print progress and
+# control the exit code. See testharness/savestate.rs.
+# The optional user-supplied boot ROM. Runs a 256-byte image written by hand in
+# the harness itself — nothing is bundled, nothing is fetched — to prove the
+# overlay, the `$FF50` unmap, the handoff, and the whole fail-soft contract.
+[[test]]
+name = "bootrom"
+path = "testharness/bootrom.rs"
+harness = false
+
+[[test]]
+name = "savestate"
+path = "testharness/savestate.rs"
+harness = false
+
+# Battery-backed save durability harness: proves an in-game save reaches disk
+# while the emulator runs (not only on a clean exit), stays readable bank by
+# bank, and interoperates with `.sav` files. See testharness/battery.rs.
+[[test]]
+name = "battery"
+path = "testharness/battery.rs"
+harness = false
+
+# Headless audio-capture harness: records the APU's produced samples with no
+# audio device, writes WAVs, analyses them (rate/level/silence/discontinuity/
+# pitch) and pins an FNV hash baseline. See testharness/audiocapture.rs and
+# docs/audio.md.
+[[test]]
+name = "audiocapture"
+path = "testharness/audiocapture.rs"
+harness = false
+# For `terminalgb_chiptune::wav`, which is where this harness's WAV encoder now
+# lives so there is exactly one of it in the workspace. `chiptune` is in
+# `default`, so an ordinary `cargo test` still runs this.
+required-features = ["chiptune"]
+
+# Chiptune renderer harness: proves properties of the *rendered audio* that
+# only a real APU model gets right — the envelope's 64 Hz counter, the sweep's
+# overflow disable, the 7-bit LFSR's 127-bit period, the duty spectra — plus
+# determinism and the VGM round trip. No ROM, no audio device, ~2 s.
+# See testharness/chiptune.rs and docs/chiptune.md.
+[[test]]
+name = "chiptune"
+path = "testharness/chiptune.rs"
+harness = false
+required-features = ["chiptune"]
+
+# Emulation speed with a host audio player attached. `harness = false` so it
+# can print the measured numbers and control the exit code. Needs the `audio`
+# feature but NOT a sound card — see testharness/audioperf.rs.
+[[test]]
+name = "audioperf"
+path = "testharness/audioperf.rs"
+harness = false
+required-features = ["audio"]
+
+# Trainer-view harness: proves the Gen 1 RAM reader and the sprite
+# decompressor against a real Pokémon Red/Blue cartridge, and prints the live
+# party so it can be compared with the game. Skips (exit 0) with no cartridge.
+# See testharness/trainer.rs.
+[[test]]
+name = "trainer"
+path = "testharness/trainer.rs"
+harness = false
+# Compares the panel against ratatui's rendered output, so it needs the TUI.
+required-features = ["tui", "plugin-trainer"]
+
+# Cable Club Colosseum harness: drives a real Pokémon Red/Blue cartridge into a
+# **link battle** against the virtual partner and asserts the game never leaves
+# its own code and the save file is never touched. This is the regression for
+# the crash that scribbled 4,378 bytes over a battery save. Skips (exit 0)
+# without a cartridge and a cable-club save. See testharness/colosseum.rs.
+[[test]]
+name = "colosseum"
+path = "testharness/colosseum.rs"
+required-features = ["plugin-gen1-link"]
+harness = false
+
+# Graceful-degradation harness: allocates a pty, *is* the terminal on the other
+# end of it, and answers the frontend's capability queries the way a chosen
+# terminal would — answering the kitty keyboard query in one run and ignoring it
+# in the other. Proves the frontend runs, draws, takes input and quits in a
+# terminal that has no kitty keyboard protocol. No window, no synthetic desktop
+# input, CI-safe. See testharness/basicterm.rs.
+[[test]]
+name = "basicterm"
+path = "testharness/basicterm.rs"
+harness = false
+# Launches the terminal frontend itself (and drives the tty through libc), so
+# it is a TUI test, not a core one.
+required-features = ["tui"]
+
+# Agent-substrate harness: proves observation, the action executor, the budget
+# cap, the circuit breaker and stuck detection end to end against a
+# hand-assembled Gen-1-shaped cartridge — deterministically, and with no
+# commercial ROM, so it runs in CI. See testharness/agent.rs.
+[[test]]
+name = "agent"
+path = "testharness/agent.rs"
+required-features = ["plugin-agent"]
+harness = false

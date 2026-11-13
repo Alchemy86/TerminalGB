@@ -661,6 +661,23 @@ impl Executor {
                         changed: screen.hash != *first_hash,
                     });
                 }
+                // A YES/NO box is a question, and A here is an ANSWER — the
+                // default one, chosen before the model ever saw the question.
+                // The last run happened to get away with it; the stop belongs
+                // here for the same reason the naming guard does.
+                if screen.yes_no_prompt() {
+                    let p = *pressed;
+                    let sel = screen.selected().unwrap_or_default();
+                    return Some(Outcome {
+                        action: label,
+                        result: format!(
+                            "stopped after {p} press(es): a YES/NO box is up \
+                             (cursor on {sel}). A here ANSWERS the question — \
+                             read the text, pick YES or NO deliberately."
+                        ),
+                        changed: screen.hash != *first_hash,
+                    });
+                }
                 if screen.hash != *last_hash {
                     *last_hash = screen.hash;
                     *quiet = 0;

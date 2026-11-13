@@ -347,6 +347,13 @@ name = "claude_plays"
 path = "examples/claude_plays.rs"
 required-features = ["image", "plugin-agent"]
 
+# Evidence tool for the agent's screen-text channel: drives a real cartridge
+# to several kinds of screen and prints what the observation layer decodes.
+[[example]]
+name = "screen_text"
+path = "examples/screen_text.rs"
+required-features = ["plugin-agent"]
+
 [[example]]
 name = "gen1_battle"
 path = "examples/gen1_battle.rs"

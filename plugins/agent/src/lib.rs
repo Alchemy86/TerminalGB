@@ -168,7 +168,27 @@ pub struct AgentPlugin {
     /// Set once the very first snapshot has been sent, so the action reference
     /// is only paid for once.
     sent_help: bool,
+    /// Screen hash seen on the previous settling frame, and how many
+    /// consecutive frames it has held. A real run spent a model call reasoning
+    /// about `KU:N:` — half of two different screens — because the settle was
+    /// a blind frame count; now the snapshot also waits for the tilemap to
+    /// stop changing (bounded — see [`SETTLE_EXTRA_CAP`]).
+    settle_hash: u64,
+    settle_stable: u16,
+    /// False when the stability wait hit its cap: the screen was *still*
+    /// changing when the snapshot was taken, and the driver is told so.
+    screen_settled: bool,
 }
+
+/// Consecutive identical-tilemap frames required before a snapshot. Short,
+/// because the things being waited out (a scroll, a fade, letter-by-letter
+/// printing) touch the tilemap every frame or two; the blinking ▼ arrow
+/// toggles far more slowly than this window, so it cannot starve it.
+const SCREEN_STABLE_FRAMES: u16 = 4;
+/// Extra settling frames allowed for stability before giving up and
+/// snapshotting anyway — a hard bound, so a screen that animates for ever (or
+/// one we misjudge) costs two emulated seconds, not the run.
+const SETTLE_EXTRA_CAP: u16 = 120;
 
 impl AgentPlugin {
     pub fn new(driver: Box<dyn Driver>, config: Config) -> AgentPlugin {
@@ -197,6 +217,9 @@ impl AgentPlugin {
             enabled: true,
             complaints: Vec::new(),
             sent_help: false,
+            settle_hash: 0,
+            settle_stable: 0,
+            screen_settled: true,
         }
     }
 
@@ -288,7 +311,23 @@ impl AgentPlugin {
             Phase::Executing => self.tick_plan(machine),
             Phase::Thinking => self.tick_thinking(machine),
             Phase::Settling(n) => {
-                if n + 1 >= self.config.settle_frames {
+                // Track whether the tilemap is still changing — a scroll, a
+                // fade, a text box printing. The minimum settle is unchanged;
+                // on top of it the snapshot waits (bounded) for the screen to
+                // hold still, so the driver is not handed half of two screens.
+                let h = Screen::read(machine).hash;
+                if h == self.settle_hash {
+                    self.settle_stable = self.settle_stable.saturating_add(1);
+                } else {
+                    self.settle_stable = 0;
+                    self.settle_hash = h;
+                }
+                let min_done = n + 1 >= self.config.settle_frames;
+                let stable = self.settle_stable >= SCREEN_STABLE_FRAMES;
+                let capped =
+                    n + 1 >= self.config.settle_frames.saturating_add(SETTLE_EXTRA_CAP);
+                if min_done && (stable || capped) {
+                    self.screen_settled = stable;
                     self.phase = Phase::Thinking;
                     self.start_call(machine);
                 } else {
@@ -669,11 +708,40 @@ impl AgentPlugin {
         w.end_obj();
 
         w.obj_field("screen");
-        w.str_field("text", &screen.compact_text());
+        // Honesty before content: a decode of a half-drawn screen or of
+        // graphics that happen to sit in the font range is nonsense, and
+        // nonsense delivered in the same field as good data gets the same
+        // trust. When the read cannot be trusted the text is *withheld* and
+        // `trust` says why, so "screen not readable right now" is a fact the
+        // driver can act on rather than a wall of letter salad.
+        let trust = match screen.trust() {
+            observe::Trust::Ok if !self.screen_settled => observe::Trust::Settling,
+            t => t,
+        };
+        w.str_field("trust", trust.label());
+        if trust == observe::Trust::Ok {
+            w.str_field("text", &screen.compact_text());
+            // What the ▶ cursor points at — "is NEW GAME or OPTION selected?"
+            // as a fact, not an inference over raw rows. Not on the naming
+            // keyboard, where the "item" under the cursor is a single letter
+            // in a grid and the two-blank column rule reads the whole row.
+            if !screen.naming_keyboard() {
+                if let Some(sel) = screen.selected() {
+                    w.str_field("selected", &sel);
+                }
+            }
+        } else {
+            w.str_field("text", "");
+        }
         w.bool_field("waiting_for_input", screen.waiting);
         match screen.cursor_row {
             Some(r) => w.num_field("menu_cursor_row", r as f64),
             None => w.null_field("menu_cursor_row"),
+        }
+        // On a grid (the naming keyboard) the row alone cannot say which
+        // letter the cursor is on; the column completes it.
+        if let Some(c) = screen.cursor_col {
+            w.num_field("menu_cursor_col", c as f64);
         }
         w.end_obj();
 
@@ -742,6 +810,31 @@ impl AgentPlugin {
                 "You are on the NAMING KEYBOARD. A types another letter and \
                  advance_text will refuse to run here. The name typed so far \
                  is fine — press START to finish it and move on.",
+            );
+        }
+        // The same promotion for the screen's own trustworthiness: when the
+        // text was withheld, say why in words rather than leaving an empty
+        // field to be guessed about.
+        match trust {
+            observe::Trust::Graphics => w.str_item(
+                "The screen is showing GRAPHICS, not text (a logo or artwork \
+                 whose tiles overlap the font). screen.text was withheld \
+                 because it would be letter salad. Judge by mode and position, \
+                 not the screen.",
+            ),
+            observe::Trust::Settling => w.str_item(
+                "The screen was still redrawing when it was read (a scroll, a \
+                 fade or printing text), so screen.text was withheld rather \
+                 than sent half-drawn. Wait a few frames and look again.",
+            ),
+            _ => {}
+        }
+        if screen.yes_no_prompt() {
+            w.str_item(
+                "A YES/NO box is up. This is a QUESTION, not flowing text — \
+                 advance_text refuses to run here so the default answer is \
+                 not chosen blindly. Read the dialogue above it, move the \
+                 cursor if needed, and answer with A deliberately.",
             );
         }
         match escalation {
