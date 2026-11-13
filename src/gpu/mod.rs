@@ -290,6 +290,15 @@ pub struct Gpu {
     /// Which rendering engine is running — see [`RenderMode`]. Read once per
     /// `do_cycle`, never per pixel.
     render_mode: RenderMode,
+    /// Whether the whole-scanline renderer generates pixels at all — see
+    /// [`Gpu::set_render_pixels`]. `true` in every ordinary build and for every
+    /// frontend; `false` only when a caller has *declared* it will not read the
+    /// framebuffer.
+    ///
+    /// **Host declaration, not machine state**, so it is not serialised — the
+    /// same call [`Gpu::render_mode`] makes. A save state carries no claim
+    /// about whether whoever produced it was looking at the picture.
+    render_pixels: bool,
     /// State of the per-dot pixel pipeline. Only [`RenderMode::Accurate`]
     /// touches it; the fast renderer leaves it at its default and pays nothing
     /// for its presence beyond the struct itself.
@@ -355,6 +364,7 @@ impl Gpu {
             skip_first_oam: false,
             stop_fill: None,
             render_mode: RenderMode::from_env(),
+            render_pixels: true,
             pipe: Pipeline::default(),
         }
     }
@@ -381,6 +391,65 @@ impl Gpu {
     /// the next line onward rather than corrupting the current one.
     pub fn set_render_mode(&mut self, mode: RenderMode) {
         self.render_mode = mode;
+    }
+
+    /// Whether pixels are being generated — see [`Gpu::set_render_pixels`].
+    pub fn render_pixels(&self) -> bool {
+        self.render_pixels
+    }
+
+    /// Declare whether the caller will read the framebuffer.
+    ///
+    /// `false` lets the whole-scanline renderer skip [`Gpu::renderscan`]
+    /// entirely: no background fetch, no sprite composite, no 92,160 pixel
+    /// stores a frame. On a headless fan-out whose observation comes out of
+    /// memory rather than out of the picture, that is pure waste, and it is the
+    /// single largest saving available to such a caller.
+    ///
+    /// **It is opt-in and it stays opt-in.** Pixels are on for every frontend,
+    /// every harness and every default build, because the picture is the
+    /// product; nothing here makes them *unavailable*, it only lets a caller
+    /// that has said it does not want them stop paying for them.
+    ///
+    /// ## Why this cannot be seen by the cartridge
+    ///
+    /// The framebuffer is emulator *output*. No Game Boy program can read it
+    /// back — [`Gpu::data`] and `bgprio` are reachable from no address — so the
+    /// CPU executes exactly the same instructions either way. The one piece of
+    /// non-output state rendering advances is the window's internal line
+    /// counter (`wy_pos`, incremented by `draw_bg`), and the skip path advances
+    /// it identically, so **every** field of the PPU except the picture itself
+    /// moves exactly as it would have. `gpu::tests::skipping_pixels_changes_
+    /// nothing_the_cartridge_can_see` proves it byte for byte.
+    ///
+    /// ## The per-dot engine ignores it, deliberately
+    ///
+    /// Under [`RenderMode::Accurate`] the fetcher *is* the timing: mode 3 lasts
+    /// exactly as long as producing the pixels takes, so not producing them
+    /// would change what the cartridge observes. That engine therefore renders
+    /// whatever this says, and [`Gpu::pixels_effective`] reports it.
+    ///
+    /// ## Toggling, and what action repetition rests on
+    ///
+    /// **Turn pixels back on at a frame boundary and the next frame is exact** —
+    /// byte-identical to one from a machine that never stopped drawing. That is
+    /// the guarantee a policy acting every *k* frames needs: skip the
+    /// intermediate frames, ask for the one it will look at.
+    /// `gameboy::tests::pixels_turned_back_on_at_a_frame_boundary_give_an_exact_
+    /// frame` proves it on a scrolling picture.
+    ///
+    /// Turning them on *mid*-frame leaves that frame half-drawn — the lines
+    /// already past are not revisited — so toggle between `Gameboy::frame`
+    /// calls, never inside one.
+    pub fn set_render_pixels(&mut self, on: bool) {
+        self.render_pixels = on;
+    }
+
+    /// Whether pixels are *actually* being produced, which is
+    /// [`Gpu::render_pixels`] unless the per-dot engine is running — it always
+    /// produces them. See [`Gpu::set_render_pixels`].
+    pub fn pixels_effective(&self) -> bool {
+        self.render_pixels || self.render_mode == RenderMode::Accurate
     }
 
     /// The current STAT mode (0 HBlank, 1 VBlank, 2 OAM scan, 3 drawing).
@@ -1433,16 +1502,31 @@ impl Gpu {
         // invisible: the framebuffer is emulator output and no cartridge can
         // read it back. See `crate::profile`.
         #[cfg(feature = "profile")]
-        if crate::profile::pixels_skipped() {
+        let measuring = crate::profile::pixels_skipped();
+        #[cfg(not(feature = "profile"))]
+        let measuring = false;
+
+        // STOP mode: the PPU has been cut off from VRAM, so it draws a flat
+        // shade rather than the tile map — see `stop_fill`. It advances no
+        // window line, so the skip below sits *after* it and the two paths
+        // agree on that too.
+        if let Some(shade) = self.stop_fill {
+            if !(measuring || !self.render_pixels) {
+                for x in 0..WIDTH {
+                    self.setcolor(x, shade);
+                    self.bgprio[x] = PrioType::Normal;
+                }
+            }
             return;
         }
-        // STOP mode: the PPU has been cut off from VRAM, so it draws a flat
-        // shade rather than the tile map — see `stop_fill`.
-        if let Some(shade) = self.stop_fill {
-            for x in 0..WIDTH {
-                self.setcolor(x, shade);
-                self.bgprio[x] = PrioType::Normal;
-            }
+        // The caller has declared it will not read the picture — see
+        // [`Gpu::set_render_pixels`] — or the measurement switch has, which is
+        // the same claim made by `crate::profile` and compiled out of every
+        // shipping build. Everything below this line writes only `data` and
+        // `bgprio`, both of which are emulator output, so the one thing that
+        // must still happen is the window's line counter.
+        if measuring || !self.render_pixels {
+            self.advance_window_line();
             return;
         }
         // The white pre-clear exists for the pixels [`Gpu::draw_bg`] declines to
@@ -1620,16 +1704,29 @@ impl Gpu {
     /// serve them all instead of thirty-two. Same picture, and it was measured:
     /// pixel rendering on the PSP fell from 8.29 ms a frame to 5.30 with the
     /// per-tile fetch alone (`docs/portability.md` §3.7).
-    fn draw_bg(&mut self) {
-        let drawbg = self.gbmode == GbMode::Color || self.lcdc0;
-
-        let wx_trigger = self.winx <= 166;
-        let winy = if self.win_on && self.wy_trigger && wx_trigger {
+    /// The window's internal line counter, advanced exactly as [`Gpu::draw_bg`]
+    /// advances it.
+    ///
+    /// This is the *only* thing rendering a scanline changes that is not the
+    /// picture, which is why it is a function: the skip path in
+    /// [`Gpu::renderscan`] calls it and nothing else, so a run with pixels off
+    /// leaves every PPU field byte-identical to a run with them on. The two
+    /// call sites must not drift — see
+    /// `tests::skipping_pixels_changes_nothing_the_cartridge_can_see`.
+    #[inline]
+    fn advance_window_line(&mut self) -> i32 {
+        if self.win_on && self.wy_trigger && self.winx <= 166 {
             self.wy_pos += 1;
             self.wy_pos
         } else {
             -1
-        };
+        }
+    }
+
+    fn draw_bg(&mut self) {
+        let drawbg = self.gbmode == GbMode::Color || self.lcdc0;
+
+        let winy = self.advance_window_line();
 
         if winy < 0 && !drawbg {
             return;
@@ -2433,5 +2530,104 @@ mod tests {
             assert_eq!(gpu.hblank_strobe(), gpu.mode == 0);
             assert_eq!(gpu.lyc_signal(), gpu.lyc_match);
         }
+    }
+
+    /// Serialise a PPU with its framebuffer blanked, so what comes back is
+    /// every field *except* the picture.
+    fn state_without_the_picture(gpu: &mut Gpu) -> Vec<u8> {
+        let picture = std::mem::replace(&mut gpu.data, Box::new([0; HEIGHT * WIDTH * 4]));
+        let mut w = crate::savestate::Writer::new();
+        gpu.save_state(&mut w);
+        gpu.data = picture;
+        w.buf
+    }
+
+    /// **The whole claim behind [`Gpu::set_render_pixels`], made checkable.**
+    ///
+    /// Two PPUs, identical VRAM and registers, driven dot for dot through
+    /// several frames with the window switched on part-way — the case that
+    /// matters, because `draw_bg` advances the window's internal line counter
+    /// as a side effect and that counter is the one piece of non-output state
+    /// rendering touches. After every scanline, everything the machine can
+    /// observe must be byte-identical.
+    ///
+    /// Teeth: delete the `advance_window_line()` call from `renderscan`'s skip
+    /// path and this fails at the first line the window is on.
+    #[test]
+    fn skipping_pixels_changes_nothing_the_cartridge_can_see() {
+        let mut drawn = Gpu::new();
+        let mut skipped = Gpu::new();
+        skipped.set_render_pixels(false);
+        assert!(drawn.render_pixels() && !skipped.render_pixels());
+
+        for gpu in [&mut drawn, &mut skipped] {
+            // Tile data that is not uniform, so a missed fetch would show.
+            for (i, byte) in gpu.vram[..0x1000].iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(37).wrapping_add(11);
+            }
+            // Tile map, sprites, palettes.
+            for (i, byte) in gpu.vram[0x1800..0x1C00].iter_mut().enumerate() {
+                *byte = (i % 97) as u8;
+            }
+            for (i, byte) in gpu.voam.iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(13);
+            }
+            gpu.wb(0xFF47, 0xE4);
+            gpu.wb(0xFF48, 0x1B);
+            gpu.wb(0xFF4B, 7); // WX: window at the left edge
+            gpu.wb(0xFF4A, 40); // WY
+            gpu.wb(0xFF42, 3); // SCY, so the fetch is not tile-aligned
+            gpu.wb(0xFF43, 5); // SCX
+                               // LCD on, background + sprites + window enabled.
+            gpu.wb(0xFF40, 0xE3);
+        }
+
+        for line in 0..(154u32 * 3) {
+            drawn.do_cycle(DOTS_PER_LINE);
+            skipped.do_cycle(DOTS_PER_LINE);
+            // Move the window mid-frame, which is what makes `wy_pos` matter.
+            if line == 60 {
+                drawn.wb(0xFF40, 0xC3); // window off
+                skipped.wb(0xFF40, 0xC3);
+            }
+            if line == 200 {
+                drawn.wb(0xFF40, 0xE3); // and on again
+                skipped.wb(0xFF40, 0xE3);
+            }
+            assert_eq!(
+                state_without_the_picture(&mut drawn),
+                state_without_the_picture(&mut skipped),
+                "line {line}: skipping pixels moved PPU state the cartridge can observe"
+            );
+            assert_eq!(drawn.interrupt, skipped.interrupt, "line {line}: interrupts");
+        }
+
+        // ...and it really was doing different work: the picture is not the same.
+        assert_ne!(
+            drawn.data.iter().filter(|b| **b != 0).count(),
+            0,
+            "the drawn PPU produced no picture, so this test proved nothing"
+        );
+        assert_ne!(
+            &drawn.data[..], &skipped.data[..],
+            "pixels were drawn either way — the skip did nothing"
+        );
+    }
+
+    /// The per-dot engine produces pixels whatever the declaration says,
+    /// because there the fetcher *is* the timing. Reporting otherwise would
+    /// invite a caller to skip a cost it is still paying.
+    #[test]
+    fn the_per_dot_engine_always_produces_pixels() {
+        let mut gpu = Gpu::new();
+        gpu.set_render_pixels(false);
+        assert!(!gpu.pixels_effective());
+        gpu.set_render_mode(RenderMode::Accurate);
+        assert!(
+            gpu.pixels_effective(),
+            "the fetcher drives mode 3's length, so its pixels are not optional"
+        );
+        gpu.set_render_pixels(true);
+        assert!(gpu.pixels_effective());
     }
 }
