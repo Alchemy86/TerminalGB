@@ -1,3 +1,18 @@
+# The emulator is the product; the plugins are optional extras that live in
+# their own crates under `plugins/` and depend only on `gameboy-plugin-api`.
+# See docs/plugins/README.md for the layout and why it is this way round.
+[workspace]
+members = [
+    ".",
+    "crates/gameboy-plugin-api",
+    "plugins/example-hello",
+    "plugins/gen1-agent",
+    "plugins/gen1-battle",
+    "plugins/gen1-link",
+    "plugins/gen1-trainer",
+]
+resolver = "2"
+
 [package]
 name = "gameboy"
 version = "0.2.0"
