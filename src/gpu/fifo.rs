@@ -100,7 +100,7 @@ pub(super) struct Pipeline {
     // --- the background / window fetcher ---
     /// Dots spent in the current tile fetch. `>= FETCH_DOTS` means the data is
     /// ready and the fetcher is waiting for room in the FIFO.
-    fetch_t: u8,
+    pub(super) fetch_t: u8,
     /// Which tile along the line is being fetched, counting from the left edge
     /// of the visible area (so `SCX / 8` is added for the background, and the
     /// window counts from its own left edge).
@@ -110,10 +110,10 @@ pub(super) struct Pipeline {
     lo: u8,
     hi: u8,
     /// The first fetch of a scanline is thrown away. See the module docs.
-    first_fetch: bool,
+    pub(super) first_fetch: bool,
     bg: [Pixel; 8],
     bg_head: u8,
-    bg_len: u8,
+    pub(super) bg_len: u8,
 
     // --- sprites ---
     /// Aligned to the output position: index 0 is the pixel that goes out next.
@@ -138,9 +138,9 @@ pub(super) struct Pipeline {
 
     // --- output ---
     /// Pixels painted on this line so far; mode 3 ends when it reaches 160.
-    lx: u8,
+    pub(super) lx: u8,
     /// `SCX & 7` pixels are shifted out and dropped at the head of the line.
-    discard: u8,
+    pub(super) discard: u8,
     /// The fetcher is drawing the window rather than the background.
     window: bool,
     /// The window was drawn somewhere on this line — which is what advances the
@@ -389,10 +389,16 @@ impl Gpu {
             if self.mode != 3 {
                 self.skip_first_oam = false;
                 self.change_mode(3);
+                if std::env::var_os("GB_TRACE_PIPE").is_some() {
+                    eprintln!("mode3 start line={} modeclock={}", self.line, self.modeclock);
+                }
             }
             self.pipeline_dot();
             if self.pipe.lx as usize >= WIDTH {
                 self.change_mode(0);
+                if std::env::var_os("GB_TRACE_PIPE").is_some() {
+                    eprintln!("mode3 end line={} modeclock={}", self.line, self.modeclock);
+                }
             }
         }
 
@@ -491,6 +497,13 @@ impl Gpu {
     /// fetcher then gets its dot. That ordering is what makes the first pixel
     /// appear on dot 12 and mode 3 come out at 172 dots for `SCX & 7 == 0`.
     fn pipeline_dot(&mut self) {
+        if self.line == 2 && self.modeclock < 106 && std::env::var_os("GB_TRACE_DOTS").is_some() {
+            eprintln!(
+                "dot mc={} lx={} fetch_t={} first={} bg_len={} obj_t={} discard={}",
+                self.modeclock, self.pipe.lx, self.pipe.fetch_t, self.pipe.first_fetch,
+                self.pipe.bg_len, self.pipe.obj_t, self.pipe.discard
+            );
+        }
         self.check_window_start();
 
         // A sprite fetch in progress owns the dot outright.
@@ -571,10 +584,21 @@ impl Gpu {
     fn bg_fetch_dot(&mut self) {
         if self.pipe.fetch_t < FETCH_DOTS {
             self.pipe.fetch_t += 1;
-            match self.pipe.fetch_t {
-                2 => self.fetch_tile_number(),
-                4 => self.lo_hi(false),
-                6 => self.lo_hi(true),
+            // Each 2-dot stage does its VRAM read on the stage's FIRST dot on
+            // DMG silicon and its SECOND on colour silicon — the same one-dot
+            // difference docboy documents from the register side ("CGB is not
+            // affected — it sees LCDC delayed by 2 T-Cycles by default",
+            // `src/docboy/docboy/ppu/ppu.cpp`; their fetcher reads at phase 0
+            // of each stage). Measured here: moving the DMG sample to the
+            // first dot takes `m3_scy_change` 2,130 → 248 px, `m3_scx_high_5_bits`
+            // 86 → 12 and `m3_lcdc_tile_sel_change` 22,316 → 802, while the
+            // same move on the colour machine loses ground on every affected
+            // CGB row.
+            let late = u8::from(!self.gbmode.is_dmg());
+            match self.pipe.fetch_t - late {
+                1 => self.fetch_tile_number(),
+                3 => self.lo_hi(false),
+                5 => self.lo_hi(true),
                 _ => {}
             }
         }
@@ -713,6 +737,10 @@ impl Gpu {
     /// both came out at 66 dots where hardware wants 65 and 60. See
     /// `the_obj_penalty_matches_mooneyes_table`.
     fn start_obj_fetch(&mut self, i: usize) {
+        if std::env::var_os("GB_TRACE_DOTS").is_some() && self.line == 2 {
+            let s = self.pipe.scan[i];
+            eprintln!("obj fetch line=2 mc={} i={} y={} x={} oam={}", self.modeclock, i, s.y, s.x, s.oam);
+        }
         let x = self.pipe.scan[i].x as i16 + self.scx as i16;
         let tile = (x >> 3) as u8;
         let penalty = if tile == self.pipe.obj_tile_paid {
@@ -744,8 +772,8 @@ impl Gpu {
         }
         self.pipe.obj_t += 1;
         match self.pipe.obj_t {
-            3 => self.obj_plane(false),
-            5 => self.obj_plane(true),
+            4 => self.obj_plane(false),
+            6 => self.obj_plane(true),
             _ => {}
         }
         if self.pipe.obj_t >= OBJ_FETCH_DOTS {
@@ -840,6 +868,9 @@ impl Gpu {
             return;
         }
         let x = self.pipe.lx as usize;
+        if x == 0 && std::env::var_os("GB_TRACE_PIPE").is_some() {
+            eprintln!("first paint line={} modeclock={}", self.line, self.modeclock);
+        }
         self.pipe.lx += 1;
         if x >= WIDTH || self.line as usize >= HEIGHT {
             return;

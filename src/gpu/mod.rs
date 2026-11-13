@@ -104,10 +104,10 @@ enum PrioType {
 #[derive(Debug)]
 pub struct Gpu {
     mode: u8,
-    modeclock: u32,
+    pub(crate) modeclock: u32,
     line: u8,
     lyc: u8,
-    lcd_on: bool,
+    pub(crate) lcd_on: bool,
     win_tilemap: u16,
     win_on: bool,
     tilebase: u16,
@@ -936,6 +936,14 @@ impl Gpu {
             // $FF46 is OAM DMA and never reaches here — the MMU claims it.
             0xFF46 => {}
             0xFF47 => {
+                if std::env::var_os("GB_TRACE_BGP").is_some() {
+                    eprintln!(
+                        "BGP={:02X} line={} modeclock={} lx={} mode={} scx={} discard={} bg_len={} fetch_t={} first={}",
+                        v, self.line, self.modeclock, self.pipe.lx, self.mode,
+                        self.scx, self.pipe.discard, self.pipe.bg_len,
+                        self.pipe.fetch_t, self.pipe.first_fetch
+                    );
+                }
                 self.palbr = v;
                 self.update_pal();
             }
