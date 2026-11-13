@@ -330,6 +330,17 @@ pub struct MoveSlot {
     pub pp: u8,
     pub pp_max: u8,
     pub pp_ups: u8,
+    /// Base power, `0` for a status move — the `Moves` entry's third byte
+    /// (`data/moves/moves.asm`: `move ANIMATION, EFFECT, POWER, TYPE,
+    /// ACCURACY, PP`).
+    pub power: u8,
+    /// Accuracy as a **percentage**. Gen 1 stores it as a fraction of 255
+    /// (`percent EQUS "* $ff / 100"`), so this is the byte converted back;
+    /// `0` for a move whose accuracy is not checked.
+    pub accuracy: u8,
+    /// The move's own type, which is what decides STAB and effectiveness and
+    /// is therefore the column a player reads before choosing.
+    pub type_name: String,
 }
 
 /// A Pokémon as the panel shows it, decoded from either struct form.

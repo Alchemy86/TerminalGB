@@ -846,24 +846,27 @@ struct Session {
     /// Legacy path: `ratatui-image` protocol state, rebuilt only when the frame
     /// actually changes (it used to be rebuilt every frame).
     image: Option<StatefulProtocol>,
-    /// A **second** terminal image slot, for the trainer view's Pokémon sprite.
-    /// Its own id, because Kitty images are addressed by id and reusing the
-    /// game's would replace the picture (see `crate::termimage`).
+    /// A **second** terminal image slot, for the trainer view's party strip —
+    /// all six Pokémon composed into one picture. Its own id, because Kitty
+    /// images are addressed by id and reusing the game's would replace the
+    /// picture (see `crate::termimage`).
     sprite_image: Option<TermImage>,
-    /// Species currently encoded into `sprite_image`, so an unchanged party
-    /// re-encodes nothing.
-    sprite_key: Option<(u8, Palette)>,
+    /// The slots currently encoded into `sprite_image`, so an unchanged party
+    /// re-encodes nothing. Deliberately **not** keyed on which slot has focus:
+    /// the rail marks that, and keeping focus out of the key means walking the
+    /// party with `Tab` costs no encodes at all.
+    sprite_key: Option<(Vec<StripSlot>, Palette)>,
     /// RGBA scratch for the sprite, reused so drawing it allocates nothing.
     sprite_rgba: Vec<u8>,
     sprite_dims: (u32, u32),
-    /// The opposing trainer's roster, composed into ONE wide strip rather than
-    /// six images. Six images means six ids, six placements and six PNGs a
-    /// frame; one strip with transparent gutters looks identical and costs what
-    /// a single sprite costs. See `compose_team_strip`.
+    /// The **other side** of a fight, composed into ONE wide strip: a trainer's
+    /// whole roster, or the single Pokémon of a wild encounter. Six images would
+    /// mean six ids, six placements and six PNGs a frame; one strip with
+    /// transparent gutters looks identical and costs what a single sprite costs.
+    /// See `compose_strip`.
     team_image: Option<TermImage>,
-    /// Species + fainted flags + palette, so an unchanged roster is not
-    /// recomposed.
-    team_key: Option<(Vec<(u8, bool)>, Palette)>,
+    /// The slots + palette, so an unchanged roster is not recomposed.
+    team_key: Option<(Vec<StripSlot>, Palette)>,
     team_rgba: Vec<u8>,
     team_dims: (u32, u32),
     /// Whether each panel picture was on screen last frame, so one that has
@@ -4309,21 +4312,25 @@ impl App {
         let st = p.state();
         let focus = tv::focus_at(st, self.trainer_sel);
         let lines = tv::body_lines(st, focus, self.trainer_detail, inner).len() as u16;
-        // The pictures are *asked for* here rather than decided: `layout_with_team`
-        // still refuses either if the block turns out too short, and asking for
-        // them cannot make the block shorter than the text needs.
-        let sprite = u16::from(
+        // The pictures are *asked for* here rather than decided:
+        // `layout_with_foe` still refuses either if the block turns out too
+        // short, and asking for them cannot make the block shorter than the
+        // text needs.
+        //
+        // The party strip is asked for **whatever the mode**, detail included:
+        // the captain's ask was to always be able to see the whole team, and
+        // opening one Pokémon's numbers is not a reason to stop showing the
+        // other five. It costs three rows and its rail, against the eleven the
+        // old single portrait took.
+        let party = u16::from(!st.party.is_empty())
+            * (tv::strip_rows(panel_w.saturating_sub(2)) + 1);
+        let foe = u16::from(
             !self.trainer_detail
-                && focus
-                    .and_then(|fo| tv::focused_mon(st, fo))
-                    .is_some_and(|m| m.species != 0),
-        ) * tv::sprite_rows(panel_w.saturating_sub(2));
-        let team = u16::from(
-            !self.trainer_detail
-                && !st.enemy_team.is_empty()
-                && panel_w.saturating_sub(2) >= tv::TEAM_MIN_W,
-        ) * tv::TEAM_ROWS;
-        2 + tv::HEADER_ROWS + sprite + team + lines
+                && st.opponent.is_some()
+                && st.battle != BattleKind::None
+                && panel_w.saturating_sub(2) >= tv::FOE_MIN_W,
+        ) * tv::FOE_ROWS;
+        2 + tv::HEADER_ROWS + party + foe + lines
     }
 
     #[cfg(not(feature = "plugin-trainer"))]
@@ -4561,29 +4568,26 @@ impl App {
         // Pokémon's face over another's statistics. `Tab` walks the ring, which
         // in a battle starts at the opponent.
         let focus = tv::focus_at(plugin.state(), selected);
-        let species =
-            focus.and_then(|fo| tv::focused_mon(plugin.state(), fo).map(|m| m.species));
 
-        let want_sprite = species.is_some() && session.sprite_image.is_some();
-        // The team strip is progressive: asked for only in a trainer battle
-        // with a roster that read back, and granted only if the panel has the
-        // width and the spare rows. Where it is refused the roster still shows
-        // — as the marker line inside `[ OPPONENT ]`.
-        let team: Vec<terminalgb_plugin_trainer::TeamMon> =
-            if plugin.state().battle == BattleKind::Trainer {
-                plugin.state().enemy_team.clone()
-            } else {
-                Vec::new()
-            };
+        // **The whole team, always.** The party strip is asked for in every
+        // mode, detail included: opening one Pokémon's numbers is not a reason
+        // to stop showing the other five, and at three rows plus its rail it
+        // costs a third of what the single portrait it replaced did.
+        let party = party_slots(plugin.state());
+        let want_party = party.iter().any(|s| s.species != 0)
+            && session.sprite_image.is_some();
+        // The other side's strip is progressive: asked for in a battle, granted
+        // only if the panel has the width and the spare rows. Where it is
+        // refused the roster still shows — as the marker line inside `FOE`.
+        let foe = foe_slots(plugin.state());
         // Not in the detail view: that is a request for a page of numbers, and
-        // three rows of pictures there costs the bottom of the stat block. The
-        // roster is still reported, as a caption under the numbers.
-        let want_team = !team.is_empty() && !detail && session.team_image.is_some();
+        // three rows of pictures there costs the bottom of the stat block.
+        let want_foe = !foe.is_empty() && !detail && session.team_image.is_some();
         // Compose the text FIRST and tell the layout how many rows it wants:
         // the width does not depend on the pictures, and the pictures must only
-        // be granted space the numbers do not need. A battle's `[ OPPONENT ]`
-        // block is a dozen rows on its own, and it must never be the reason the
-        // party falls off the bottom.
+        // be granted space the numbers do not need. A battle's `FOE` block is a
+        // dozen rows on its own, and it must never be the reason the party falls
+        // off the bottom.
         let width = area.width.saturating_sub(2) as usize;
         let mut header = tv::header_lines(plugin.state(), game.label(), width);
         // The cable, where the player is already looking. Same source as the
@@ -4595,57 +4599,60 @@ impl App {
         // Laid out against the whole column, then **centred as a block** so the
         // panel sits at the same height as the picture beside it — which
         // `fit_metrics` has always centred. See `PanelLayout::centre_in`.
-        let l = tv::layout_with_team(area, want_sprite, want_team, lines.len() as u16)
+        let l = tv::layout_with_foe(area, want_party, want_foe, lines.len() as u16)
             .centre_in(area, lines.len() as u16);
         // The panel's own rectangle is the frame it actually drew, not the
         // column it was offered: the "never touches the picture" invariant is
         // about drawn cells, and after centring those are a subset.
         self.trainer_rect = Some(l.frame);
-        let title = if detail {
-            " Trainer · d back · Tab next "
-        } else {
-            " Trainer · d detail · Tab next "
+        // A strip that was asked for and refused is a *silent* loss — the six
+        // faces simply are not there — so the title says which, rather than
+        // leaving the reader to wonder whether the panel is broken.
+        let title = match (detail, want_party && l.party.height == 0) {
+            (false, false) => " Trainer · d detail · Tab next ",
+            (true, false) => " Trainer · d back · Tab next ",
+            (false, true) => " Trainer · d detail · no room for sprites ",
+            (true, true) => " Trainer · d back · no room for sprites ",
         };
 
-        // Encode both pictures before dropping the plugin borrow.
-        let mut sprite_ready = false;
-        if l.sprite.height > 0 {
-            if let Some(species) = species {
-                if session.sprite_key != Some((species, palette)) {
-                    if let Some(img) = plugin.sprite(species) {
-                        encode_sprite(
-                            &img.pixels,
-                            img.width,
-                            img.height,
-                            palette,
-                            &mut session.sprite_rgba,
-                        );
-                        session.sprite_dims = (img.width as u32, img.height as u32);
-                        session.sprite_key = Some((species, palette));
-                    } else {
-                        session.sprite_key = None;
-                        session.sprite_dims = (0, 0);
-                        session.sprite_rgba.clear();
-                    }
-                }
-                sprite_ready = session.sprite_dims.0 > 0;
-            }
+        // Encode both strips before dropping the plugin borrow. Each is keyed
+        // on what it draws, so an unchanged team re-encodes nothing — which is
+        // what keeps six sprites cheaper than the one they replaced.
+        if l.party.height > 0
+            && session.sprite_key.as_ref().map(|(k, p)| (k, *p))
+                != Some((&party, palette))
+        {
+            session.sprite_dims =
+                compose_strip(plugin, &party, palette, &mut session.sprite_rgba)
+                    .unwrap_or((0, 0));
+            session.sprite_key = Some((party.clone(), palette));
         }
-        if l.team.height > 0 {
-            // Keyed on species *and* whether each is standing, so the strip is
-            // recomposed exactly when one of them faints and not once a frame.
-            let key: Vec<(u8, bool)> =
-                team.iter().map(|m| (m.species, m.is_fainted())).collect();
-            if session.team_key.as_ref().map(|(k, p)| (k, *p)) != Some((&key, palette)) {
-                session.team_dims =
-                    compose_team_strip(plugin, &team, palette, &mut session.team_rgba)
-                        .unwrap_or((0, 0));
-                session.team_key = Some((key, palette));
-            }
+        if l.foe.height > 0
+            && session.team_key.as_ref().map(|(k, p)| (k, *p)) != Some((&foe, palette))
+        {
+            session.team_dims =
+                compose_strip(plugin, &foe, palette, &mut session.team_rgba)
+                    .unwrap_or((0, 0));
+            session.team_key = Some((foe.clone(), palette));
         }
+
+        // The rail joins the strip to the list: same six columns, the slot
+        // number under its own face.
+        let rail = tv::rail_line(
+            plugin.state(),
+            match focus {
+                Some(tv::Focus::Party(i)) => Some(i),
+                _ => None,
+            },
+            tv::active_slot(plugin.state()),
+            width,
+        );
 
         f.render_widget(tv::panel_block(title), l.frame);
         f.render_widget(Paragraph::new(header), l.header);
+        if l.rail.height > 0 {
+            f.render_widget(Paragraph::new(vec![rail]), l.rail);
+        }
         f.render_widget(Paragraph::new(lines), l.body);
 
         // The panel is drawn *before* the game picture, so `ui_sig` still holds
@@ -4653,32 +4660,32 @@ impl App {
         // the "something may have painted over the image" test.
         let ui_changed = self.ui_sig != Some(sig);
         // A picture that stops being drawn does not stop being displayed: a
-        // Kitty placement lives until it is deleted. Opening the detail view
-        // retires the team strip and a battle ending retires the sprite, and
-        // without this the retired picture hangs over whatever replaced it.
-        let show_sprite = sprite_ready && l.sprite.height > 0;
-        let show_team = l.team.height > 0 && session.team_dims.0 > 0;
+        // Kitty placement lives until it is deleted. A battle ending retires the
+        // foe strip and a short terminal retires the party strip, and without
+        // this the retired picture hangs over whatever replaced it.
+        let show_party = l.party.height > 0 && session.sprite_dims.0 > 0;
+        let show_foe = l.foe.height > 0 && session.team_dims.0 > 0;
         let mut retired = false;
-        if session.sprite_shown && !show_sprite {
+        if session.sprite_shown && !show_party {
             if let Some(img) = session.sprite_image.as_mut() {
                 let seq = img.erase().to_string();
                 session.pending_wire.push_str(&seq);
                 retired = true;
             }
         }
-        if session.team_shown && !show_team {
+        if session.team_shown && !show_foe {
             if let Some(img) = session.team_image.as_mut() {
                 let seq = img.erase().to_string();
                 session.pending_wire.push_str(&seq);
                 retired = true;
             }
         }
-        session.sprite_shown = show_sprite;
-        session.team_shown = show_team;
+        session.sprite_shown = show_party;
+        session.team_shown = show_foe;
         self.full_redraw |= retired;
-        if show_sprite {
+        if show_party {
             let (sw, sh) = session.sprite_dims;
-            let (rect, _) = fit_metrics(l.sprite, sw, sh, font_w, font_h);
+            let (rect, _) = fit_metrics(l.party, sw, sh, font_w, font_h);
             self.sprite_rect = place_panel_image(
                 f,
                 session.sprite_image.as_mut(),
@@ -4690,9 +4697,9 @@ impl App {
                 &mut session.pending_wire,
             );
         }
-        if show_team {
+        if show_foe {
             let (tw, th) = session.team_dims;
-            let (rect, _) = fit_metrics(l.team, tw, th, font_w, font_h);
+            let (rect, _) = fit_metrics(l.foe, tw, th, font_w, font_h);
             place_panel_image(
                 f,
                 session.team_image.as_mut(),
@@ -5814,35 +5821,6 @@ fn render_quit(f: &mut Frame<'_>) {
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
 
-/// Turn a decoded Gen 1 picture — one palette index per pixel — into the RGBA
-/// the terminal image path takes, **with the page behind the Pokémon made
-/// transparent** so the panel shows through instead of a pasted-on white box.
-///
-/// Which pixels count as the page is
-/// [`sprite::background_mask`](terminalgb_plugin_trainer::sprite::background_mask): a
-/// flood fill from the border, *not* a colour key — Gen 1 art uses the lightest
-/// shade inside the figure too, and keying on it punches holes through the
-/// middle of the Pokémon.
-///
-/// Transparent pixels keep their opaque colour in RGB and only carry `A = 0`.
-/// That is what makes the fallback safe: a transport that drops alpha (the
-/// `GB_TERM_IMAGE=rgb` escape hatch, or a truecolour PNG) renders exactly the
-/// opaque picture it renders today rather than a hole full of undefined colour.
-#[cfg(feature = "plugin-trainer")]
-fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut Vec<u8>) {
-    let bg = terminalgb_plugin_trainer::sprite::background_mask(pixels, w, h);
-    out.clear();
-    out.reserve(pixels.len() * 4);
-    for (i, &px) in pixels.iter().enumerate() {
-        let [r, g, b] = palette.shade(px);
-        let a = if bg.get(i).copied().unwrap_or(false) {
-            0
-        } else {
-            255
-        };
-        out.extend_from_slice(&[r, g, b, a]);
-    }
-}
 
 /// Fit a bar of segments into `width`, shrinking each through **its own ladder
 /// of shorter forms** before any of it is dropped.
@@ -6801,39 +6779,58 @@ const TEAM_CELL_PX: usize = 56;
 #[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 const FAINTED_ALPHA: u8 = 80;
 
-/// Compose the opposing trainer's roster into **one** wide RGBA strip:
-/// `n × 56` by `56`, each Pokémon bottom-centred in its own cell, background
-/// transparent, fainted members ghosted, unreadable slots left empty.
+/// One slot of a composed sprite strip.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct StripSlot {
+    /// Internal species index; `0` leaves the slot empty.
+    species: u8,
+    /// `255` for a Pokémon that is up, [`FAINTED_ALPHA`] for one that is out.
+    /// Both protocols alpha-blend, so a ghost is a real ghost rather than a
+    /// colour we had to guess at.
+    alpha: u8,
+}
+
+/// Compose a row of Pokémon into **one** wide RGBA strip: `n × 56` by `56`,
+/// each bottom-centred in its own cell, background transparent, empty slots
+/// left empty.
 ///
-/// One image rather than six is the whole design. Six would mean six terminal
-/// image ids, six placements and six PNG encodes every time the strip changed,
-/// in a panel that is 38 cells wide — where each would land under six cells
-/// anyway. A single strip is transmitted once, scaled by the terminal to the
-/// team rectangle, and deduplicated by the same whole-image hash the game
-/// picture uses, so a roster that has not changed costs nothing at all.
+/// One image rather than six is the whole design, and it is what makes "show
+/// the whole team, always" affordable. Six images would mean six terminal image
+/// ids, six placements and six PNG encodes every time any of them changed, in a
+/// panel 38 cells wide where each would land under six cells anyway. A single
+/// strip is transmitted once, scaled by the terminal to the band, and
+/// deduplicated by the same whole-image hash the game picture uses — so a team
+/// that has not changed costs nothing at all, and six small sprites cost
+/// strictly less than the one large one they replaced (a 6×56 strip against a
+/// portrait the terminal was asked to composite at panel size).
+///
+/// Bottom-centred because Gen 1 art is drawn standing on the bottom of its own
+/// box: aligning the *feet* is what makes a row of different-sized pictures look
+/// like a line-up rather than a scatter.
 ///
 /// Returns `None` when nothing could be drawn, which the caller reports as the
 /// marker line rather than as an empty band.
 #[cfg(feature = "plugin-trainer")]
-fn compose_team_strip(
+fn compose_strip(
     plugin: &mut TrainerPlugin,
-    team: &[terminalgb_plugin_trainer::TeamMon],
+    slots: &[StripSlot],
     palette: Palette,
     out: &mut Vec<u8>,
 ) -> Option<(u32, u32)> {
-    if team.is_empty() {
+    if slots.is_empty() {
         return None;
     }
-    let w = team.len() * TEAM_CELL_PX;
+    let w = slots.len() * TEAM_CELL_PX;
     let h = TEAM_CELL_PX;
     out.clear();
     out.resize(w * h * 4, 0);
     let mut drew = false;
-    for (slot, m) in team.iter().enumerate() {
-        if !m.known || m.species == 0 {
+    for (slot, s) in slots.iter().enumerate() {
+        if s.species == 0 {
             continue;
         }
-        let Some(img) = plugin.sprite(m.species) else {
+        let Some(img) = plugin.sprite(s.species) else {
             continue;
         };
         let (iw, ih) = (img.width, img.height);
@@ -6841,12 +6838,8 @@ fn compose_team_strip(
             continue;
         }
         let bg = terminalgb_plugin_trainer::sprite::background_mask(&img.pixels, iw, ih);
-        // Bottom-centred: Gen 1 art is drawn standing on the bottom of its own
-        // box, so aligning the *feet* is what makes a row of different-sized
-        // pictures look like a line-up rather than a scatter.
         let ox = slot * TEAM_CELL_PX + (TEAM_CELL_PX - iw) / 2;
         let oy = TEAM_CELL_PX - ih;
-        let alpha = if m.is_fainted() { FAINTED_ALPHA } else { 255 };
         for y in 0..ih {
             for x in 0..iw {
                 let src = y * iw + x;
@@ -6855,7 +6848,7 @@ fn compose_team_strip(
                 }
                 let [r, g, b] = palette.shade(img.pixels[src]);
                 let dst = ((oy + y) * w + ox + x) * 4;
-                out[dst..dst + 4].copy_from_slice(&[r, g, b, alpha]);
+                out[dst..dst + 4].copy_from_slice(&[r, g, b, s.alpha]);
             }
         }
         drew = true;
@@ -6865,6 +6858,62 @@ fn compose_team_strip(
         return None;
     }
     Some((w as u32, h as u32))
+}
+
+/// The six party slots as strip slots. **Always six**, whatever the party
+/// holds, so the columns of the strip and the columns of
+/// [`tv::rail_line`](crate::screen::trainer_view::rail_line) are the same
+/// columns — that alignment is the only thing joining a face to a row of the
+/// list below it.
+#[cfg(feature = "plugin-trainer")]
+fn party_slots(state: &terminalgb_plugin_trainer::TrainerState) -> Vec<StripSlot> {
+    (0..tv::SLOTS)
+        .map(|i| match state.party.get(i) {
+            None => StripSlot {
+                species: 0,
+                alpha: 255,
+            },
+            Some(m) => StripSlot {
+                species: m.species,
+                alpha: if m.is_fainted() { FAINTED_ALPHA } else { 255 },
+            },
+        })
+        .collect()
+}
+
+/// The other side of a fight as strip slots: a trainer's whole roster, or the
+/// single Pokémon of a wild encounter.
+///
+/// One band for "them" against one band for "us" is what makes the two read as
+/// a versus composition rather than as two unrelated pictures. An unreadable
+/// roster slot is left empty here and reported as `?` by
+/// [`tv::team_line`](crate::screen::trainer_view::team_line) — an empty box and
+/// a `?` are the same fact said twice, which is the point.
+#[cfg(feature = "plugin-trainer")]
+fn foe_slots(state: &terminalgb_plugin_trainer::TrainerState) -> Vec<StripSlot> {
+    if state.battle == BattleKind::None {
+        return Vec::new();
+    }
+    if state.battle == BattleKind::Trainer && !state.enemy_team.is_empty() {
+        return state
+            .enemy_team
+            .iter()
+            .map(|m| StripSlot {
+                species: if m.known { m.species } else { 0 },
+                alpha: if m.is_fainted() { FAINTED_ALPHA } else { 255 },
+            })
+            .collect();
+    }
+    state
+        .opponent
+        .as_ref()
+        .map(|o| {
+            vec![StripSlot {
+                species: o.species,
+                alpha: 255,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 /// Largest centred rectangle inside `area` whose footprint matches the game

@@ -41,6 +41,9 @@ fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -
                 pp: 15,
                 pp_max: 15,
                 pp_ups: 0,
+                power: 95,
+                accuracy: 100,
+                type_name: "ELECTRIC".into(),
             },
             MoveSlot {
                 id: 98,
@@ -48,6 +51,9 @@ fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -
                 pp: 0,
                 pp_max: 30,
                 pp_ups: 0,
+                power: 40,
+                accuracy: 100,
+                type_name: "NORMAL".into(),
             },
             MoveSlot {
                 id: 45,
@@ -55,6 +61,11 @@ fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -
                 pp: 40,
                 pp_max: 40,
                 pp_ups: 0,
+                // A status move: no power and no accuracy check, which the
+                // table must render as absent rather than as unknown.
+                power: 0,
+                accuracy: 100,
+                type_name: "NORMAL".into(),
             },
         ],
         dvs: Dvs::from_bytes(0xAB, 0xCD),
@@ -151,11 +162,22 @@ fn draw(
     for l in tv::plain(&tv::header_lines(st, "Pokémon Blue", inner)) {
         println!("│{l:<inner$}│");
     }
-    println!("│{:<inner$}│", "");
-    println!("│{:^inner$}│", "( sprite )");
-    println!("│{:<inner$}│", "");
-    if !st.enemy_team.is_empty() && !detail {
-        println!("│{:^inner$}│", "( team strip )");
+    // The party strip is an image, so it can only be sketched here; the rail
+    // under it is real text and is the thing that has to line up with it.
+    for _ in 0..tv::strip_rows(inner as u16) {
+        println!("│{:^inner$}│", "( six party sprites )");
+    }
+    let selected = match focus {
+        Some(tv::Focus::Party(i)) => Some(i),
+        _ => None,
+    };
+    for l in tv::plain(&[tv::rail_line(st, selected, tv::active_slot(st), inner)]) {
+        println!("│{l:<inner$}│");
+    }
+    if st.opponent.is_some() && !detail {
+        for _ in 0..tv::FOE_ROWS {
+            println!("│{:^inner$}│", "( the other side )");
+        }
     }
     for l in tv::plain(&tv::body_lines(st, focus, detail, inner)) {
         println!("│{l:<inner$}│");

@@ -50,6 +50,13 @@ pub mod tui;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod halfblocks;
 
+/// Semantic colour and the shared panel layout primitives — see
+/// [`panel_theme`]. Deliberately **not** behind `plugin-trainer`: it is the one
+/// place a colour is given a meaning, and every panel this frontend draws reads
+/// it. Requires the `tui` feature only because it speaks in ratatui styles.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub mod panel_theme;
+
 /// Layout of the live Gen 1 trainer panel — see [`trainer_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]

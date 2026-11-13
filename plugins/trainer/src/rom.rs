@@ -41,6 +41,16 @@ const MOVES: usize = flat(0x0E, 0x4000);
 const BASE_DATA_SIZE: usize = 28;
 /// `MOVE_LENGTH` — `constants/battle_constants.asm`.
 const MOVE_LENGTH: usize = 6;
+
+/// Byte offsets inside a `Moves` entry. The `move` macro in
+/// `data/moves/moves.asm` is `move ANIMATION, EFFECT, POWER, TYPE, ACCURACY,
+/// PP`, one `db` each, in that order.
+mod move_entry {
+    pub const POWER: usize = 2;
+    pub const TYPE: usize = 3;
+    pub const ACCURACY: usize = 4;
+    pub const PP: usize = 5;
+}
 /// Fixed width of a `MonsterNames` entry (`MONSTER_NAME_LENGTH`).
 const MONSTER_NAME_LENGTH: usize = 10;
 /// `MEW` — internal index `$15`.
@@ -188,10 +198,46 @@ impl RomTables {
 
     /// Base PP for a move id, from the `Moves` table.
     pub fn move_base_pp(&self, id: u8) -> u8 {
+        self.move_byte(id, move_entry::PP)
+    }
+
+    /// Base power for a move id; `0` is a status move rather than a missing
+    /// value, which is why the panel prints `—` for it rather than the
+    /// unknown glyph.
+    pub fn move_power(&self, id: u8) -> u8 {
+        self.move_byte(id, move_entry::POWER)
+    }
+
+    /// Accuracy for a move id as a **percentage**.
+    ///
+    /// The cartridge stores accuracy as a fraction of 255 — `data/moves/
+    /// moves.asm` writes `100 percent` and `constants/move_constants.asm` has
+    /// `percent EQUS "* $ff / 100"` — so `$FF` is 100 % and `$D8` is 85 %.
+    /// Rounded to nearest, which is what recovers the round numbers the game's
+    /// own data was written with.
+    pub fn move_accuracy(&self, id: u8) -> u8 {
+        let raw = self.move_byte(id, move_entry::ACCURACY) as u16;
+        ((raw * 100 + 127) / 255) as u8
+    }
+
+    /// The move's own type, as a name.
+    pub fn move_type(&self, id: u8) -> String {
+        if id == 0 {
+            return String::new();
+        }
+        self.type_name(self.move_byte(id, move_entry::TYPE))
+    }
+
+    /// One field of a move's `Moves` entry. `id` is 1-based and is the move id,
+    /// **not** a slot index — `NUM_MOVES` is four moves per Pokémon and has
+    /// nothing to say about the range here. An id past the end of the table
+    /// reads `0` from [`RomTables::byte`], which every caller renders as
+    /// "nothing", so a glitch move degrades rather than panicking.
+    fn move_byte(&self, id: u8, field: usize) -> u8 {
         if id == 0 {
             return 0;
         }
-        self.byte(MOVES + (id as usize - 1) * MOVE_LENGTH + 5)
+        self.byte(MOVES + (id as usize - 1) * MOVE_LENGTH + field)
     }
 
     /// Decode a Pokémon's front picture to Game Boy 2bpp tiles.
@@ -234,6 +280,9 @@ impl RomTables {
             pp: raw_pp & 0x3F,
             pp_max: base_pp.saturating_add((base_pp / 5).saturating_mul(ups)),
             pp_ups: ups,
+            power: self.move_power(id),
+            accuracy: self.move_accuracy(id),
+            type_name: self.move_type(id),
         }
     }
 
